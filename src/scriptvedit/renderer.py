@@ -5,11 +5,15 @@ FFmpegを使用したレンダリングモジュール
 import subprocess
 import shutil
 import math
+import warnings
 from pathlib import Path
 from typing import Optional
 
 from .timeline import get_timeline, VideoEntry, AudioEntry
 from .effects import MoveEffect, FadeEffect, RotateToEffect, ScaleEffect, BlurEffect, ShakeEffect
+
+# 画像拡張子（-loop 1 を付与する対象）
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tiff", ".tif"}
 
 
 def _check_ffmpeg() -> str:
@@ -51,7 +55,11 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
         media = entry.media
         tf = media.transform
         input_idx = i
-        inputs.extend(["-loop", "1", "-i", str(media.path)])
+        # 画像ファイルのみ -loop 1 を付与（動画には不要）
+        if media.path.suffix.lower() in IMAGE_EXTENSIONS:
+            inputs.extend(["-loop", "1", "-i", str(media.path)])
+        else:
+            inputs.extend(["-i", str(media.path)])
 
         stream = f"[{input_idx}:v]"
         label_idx = 0
@@ -124,15 +132,17 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
             elif isinstance(effect, ShakeEffect):
                 shake_effect = effect
 
-        t_norm_stream = f"t/{entry.duration}"
-        t_norm_overlay = f"(t-{entry.start_time})/{entry.duration}"
+        # アニメーションの正規化時間（0→1）
+        # ストリームフィルタとオーバーレイで同じ式を使用
+        # t はグローバル時間なので start_time を引く
+        t_norm = f"(t-{entry.start_time})/{entry.duration}"
         enable = f"between(t,{entry.start_time},{entry.start_time + entry.duration})"
 
         # 回転アニメーション
         if rotate_effect:
             start_rad = tf.rotation * math.pi / 180
             end_rad = rotate_effect.angle * math.pi / 180
-            angle_expr = f"{start_rad}+({end_rad}-{start_rad})*({t_norm_stream})"
+            angle_expr = f"{start_rad}+({end_rad}-{start_rad})*({t_norm})"
             new_label = next_label()
             filters.append(
                 f"{out_label}format=rgba,rotate='{angle_expr}':c=0x00000000:ow=rotw({end_rad}):oh=roth({end_rad})"
@@ -148,8 +158,8 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
             start_h = int(timeline.height * start_sy)
             end_w = int(timeline.width * scale_effect.sx)
             end_h = int(timeline.height * scale_effect.sy)
-            w_expr = f"{start_w}+({end_w}-{start_w})*({t_norm_stream})"
-            h_expr = f"{start_h}+({end_h}-{start_h})*({t_norm_stream})"
+            w_expr = f"{start_w}+({end_w}-{start_w})*({t_norm})"
+            h_expr = f"{start_h}+({end_h}-{start_h})*({t_norm})"
             new_label = next_label()
             filters.append(
                 f"{out_label}scale=w='{w_expr}':h='{h_expr}':eval=frame"
@@ -159,7 +169,7 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
 
         # ブラーアニメーション
         if blur_effect:
-            blur_expr = f"{blur_effect.amount}*({t_norm_stream})"
+            blur_expr = f"{blur_effect.amount}*({t_norm})"
             new_label = next_label()
             filters.append(
                 f"{out_label}gblur=sigma='{blur_expr}'"
@@ -171,6 +181,11 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
         if fade_effect:
             new_label = next_label()
             if callable(fade_effect.alpha):
+                warnings.warn(
+                    "fade(alpha=callable) は現在フェードアウトとして処理されます。"
+                    "カスタム関数はサポートされていません。",
+                    UserWarning
+                )
                 filters.append(
                     f"{out_label}format=rgba,"
                     f"fade=t=out:st=0:d={entry.duration}:alpha=1"
@@ -200,8 +215,8 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
         if move_effect:
             end_x = f"{move_effect.x}*{timeline.width}"
             end_y = f"{move_effect.y}*{timeline.height}"
-            x_expr = f"({base_x})+({end_x}-({base_x}))*({t_norm_overlay})+({ax})"
-            y_expr = f"({base_y})+({end_y}-({base_y}))*({t_norm_overlay})+({ay})"
+            x_expr = f"({base_x})+({end_x}-({base_x}))*({t_norm})+({ax})"
+            y_expr = f"({base_y})+({end_y}-({base_y}))*({t_norm})+({ay})"
         else:
             x_expr = f"({base_x})+({ax})"
             y_expr = f"({base_y})+({ay})"

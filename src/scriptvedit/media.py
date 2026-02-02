@@ -60,6 +60,19 @@ def _get_media_dimensions(path: Path) -> tuple[int, int]:
     return stream["width"], stream["height"]
 
 
+def _get_chromakey_crop_positions() -> list[str]:
+    """クロマキー検出用の四隅crop文字列を生成する（テスト用に分離）
+
+    FFmpeg cropフォーマット: crop=out_w:out_h:x:y
+    """
+    return [
+        "1:1:0:0",        # 左上 (w=1, h=1, x=0, y=0)
+        "1:1:iw-1:0",     # 右上 (w=1, h=1, x=iw-1, y=0)
+        "1:1:0:ih-1",     # 左下 (w=1, h=1, x=0, y=ih-1)
+        "1:1:iw-1:ih-1"   # 右下 (w=1, h=1, x=iw-1, y=ih-1)
+    ]
+
+
 def _detect_chromakey_color(path: Path) -> str:
     """画像の四隅から背景色を自動検出する"""
     ffmpeg = shutil.which("ffmpeg")
@@ -68,12 +81,7 @@ def _detect_chromakey_color(path: Path) -> str:
 
     # 四隅のピクセル色を取得（左上、右上、左下、右下の1x1ピクセル）
     corners = []
-    positions = [
-        "0:0:1:1",      # 左上
-        "iw-1:0:1:1",   # 右上
-        "0:ih-1:1:1",   # 左下
-        "iw-1:ih-1:1:1" # 右下
-    ]
+    positions = _get_chromakey_crop_positions()
 
     for pos in positions:
         cmd = [
@@ -92,7 +100,7 @@ def _detect_chromakey_color(path: Path) -> str:
     if not corners:
         return "green"  # デフォルト
 
-    # 最も多い色を選択（または平均）
+    # 最も多い色を選択
     from collections import Counter
     color_counts = Counter(corners)
     most_common = color_counts.most_common(1)[0][0]
