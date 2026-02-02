@@ -323,10 +323,12 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
                         max(2, int(entry.duration * timeline.fps) + 1)
                     )
                     # drawtext では t が使える（秒単位）
-                    u_expr_text = f"clip((t-{entry.start_time})/{entry.duration},0,1)"
+                    # clip() は環境によって使えない場合があるので if でクランプ
+                    u_raw = f"(t-{entry.start_time})/{entry.duration}"
+                    u_expr_text = _clamp_expr_if(u_raw, 0, 1)
                     samples = _sample_callable(fade_effect.alpha, n_samples)
                     alpha_expr = _piecewise_linear_expr(u_expr_text, samples)
-                    alpha_expr = _clamp_expr(alpha_expr, 0, 1)
+                    alpha_expr = _clamp_expr_if(alpha_expr, 0, 1)
                     # base_alpha と乗算
                     if base_alpha < 1.0:
                         final_alpha_expr = f"({base_alpha})*({alpha_expr})"
