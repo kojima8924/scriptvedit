@@ -41,6 +41,7 @@ class Timeline:
         self.height: int = 1080
         self.fps: int = 30
         self.background_color: str = "black"
+        self.curve_samples: int = 60  # callable エフェクトのサンプリング数
 
     def add_video(self, media: "Media", duration: float, effects: list, start: Optional[float] = None) -> None:
         """映像をタイムラインに追加"""
@@ -99,7 +100,8 @@ class Timeline:
         width: int = None,
         height: int = None,
         fps: int = None,
-        background_color: str = None
+        background_color: str = None,
+        curve_samples: int = None
     ) -> None:
         """タイムラインの設定を変更"""
         if width is not None:
@@ -110,6 +112,9 @@ class Timeline:
             self.fps = fps
         if background_color is not None:
             self.background_color = background_color
+        if curve_samples is not None:
+            # 10〜240 でクランプ
+            self.curve_samples = max(10, min(240, curve_samples))
 
 
 # グローバルタイムライン
