@@ -634,13 +634,14 @@ def _build_audio_filter(timeline, audio_entries, video_input_count) -> tuple[lis
     return inputs, filters, final_audio
 
 
-def render(output: str, verbose: bool = False) -> None:
+def render(output: str, verbose: bool = False, dump_graph: Optional[str] = None) -> None:
     """
     タイムラインを動画にレンダリングする
 
     Args:
         output: 出力ファイルパス
         verbose: 詳細出力を表示するか
+        dump_graph: filter_complex を保存するファイルパス（デバッグ用）
     """
     ffmpeg = _check_ffmpeg()
     timeline = get_timeline()
@@ -661,6 +662,15 @@ def render(output: str, verbose: bool = False) -> None:
     # フィルタ結合
     all_filters = video_filters + audio_filters
     filter_complex = ";".join(all_filters)
+
+    # filter_complex をファイルに保存（デバッグ用）
+    if dump_graph:
+        # 読みやすく整形（1フィルタ1行）
+        formatted = ";\n".join(all_filters)
+        with open(dump_graph, "w", encoding="utf-8") as f:
+            f.write(formatted)
+        if verbose:
+            print(f"Filter graph saved to: {dump_graph}")
 
     # コマンド構築
     cmd = [

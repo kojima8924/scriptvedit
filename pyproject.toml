@@ -32,6 +32,9 @@ dev = [
     "pytest-cov>=4.0",
 ]
 
+[project.scripts]
+scriptvedit = "scriptvedit.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/yourusername/scriptvedit"
 Repository = "https://github.com/yourusername/scriptvedit"
