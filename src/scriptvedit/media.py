@@ -13,6 +13,9 @@ import warnings
 # Transform の値の型: float または callable（現在値を受け取り新しい値を返す）
 TransformValue = Union[float, Callable[[float], float], None]
 
+# 未指定を表すセンチネル値（引数が省略されたことを検出するため）
+_UNSET = object()
+
 
 def _chain(prev: TransformValue, new: TransformValue) -> TransformValue:
     """Transform 値を合成する（直前値を保持した callable を作成）
@@ -181,97 +184,125 @@ class Media:
 
     def resize(
         self,
-        sx: TransformValue = None,
-        sy: TransformValue = None
+        sx: Union[TransformValue, object] = _UNSET,
+        sy: Union[TransformValue, object] = _UNSET
     ) -> "Media":
         """
         リサイズする（画面サイズに対する相対値）
 
         Args:
-            sx: 幅（0.0〜1.0、画面幅に対する割合。Noneでアスペクト比維持）
-                callable の場合は直前値を受け取り新しい値を返す
-            sy: 高さ（0.0〜1.0、画面高さに対する割合。Noneでアスペクト比維持）
-                callable の場合は直前値を受け取り新しい値を返す
+            sx: 幅（0.0〜1.0、画面幅に対する割合）
+                - 省略: 変更しない
+                - None: アスペクト比自動計算に戻す
+                - float: 指定値に設定
+                - callable: 直前値を受け取り新しい値を返す
+            sy: 高さ（0.0〜1.0、画面高さに対する割合）
+                - 省略: 変更しない
+                - None: アスペクト比自動計算に戻す
+                - float: 指定値に設定
+                - callable: 直前値を受け取り新しい値を返す
 
         Note:
             両方Noneの場合は元のサイズを維持
-            片方のみ指定でアスペクト比を維持してリサイズ
+            片方のみ指定（もう片方がNone）でアスペクト比を維持してリサイズ
             callable を渡した場合、アスペクト比維持はレンダリング時に解決される
 
         Returns:
             self（メソッドチェーン用）
         """
+        # _UNSET の場合は変更しない
+        if sx is _UNSET and sy is _UNSET:
+            return self
+
+        # 実際に更新する値を決定
+        new_sx = self.transform.scale_x if sx is _UNSET else sx
+        new_sy = self.transform.scale_y if sy is _UNSET else sy
+
         # callable でない場合のみ、ここでアスペクト比を計算
         # callable の場合はレンダリング時に解決
-        if not callable(sx) and not callable(sy):
+        if not callable(new_sx) and not callable(new_sy):
             from .timeline import get_timeline
-            if sx is not None and sy is None:
+            if new_sx is not None and new_sy is None:
                 img_w, img_h = self._ensure_dimensions()
                 timeline = get_timeline()
-                sy = sx * (img_h / img_w) * (timeline.width / timeline.height)
-            elif sy is not None and sx is None:
+                new_sy = new_sx * (img_h / img_w) * (timeline.width / timeline.height)
+            elif new_sy is not None and new_sx is None:
                 img_w, img_h = self._ensure_dimensions()
                 timeline = get_timeline()
-                sx = sy * (img_w / img_h) * (timeline.height / timeline.width)
+                new_sx = new_sy * (img_w / img_h) * (timeline.height / timeline.width)
 
-        # 直前値を保持した callable を合成
-        self.transform.scale_x = _chain(self.transform.scale_x, sx)
-        self.transform.scale_y = _chain(self.transform.scale_y, sy)
+        # 更新（_UNSET でない場合のみ）
+        # None は明示的に「アスペクト比自動」なので _chain せず直接設定
+        if sx is not _UNSET:
+            if sx is None:
+                self.transform.scale_x = new_sx  # アスペクト比計算後の値
+            else:
+                self.transform.scale_x = _chain(self.transform.scale_x, new_sx)
+        if sy is not _UNSET:
+            if sy is None:
+                self.transform.scale_y = new_sy  # アスペクト比計算後の値
+            else:
+                self.transform.scale_y = _chain(self.transform.scale_y, new_sy)
         return self
 
     def pos(
         self,
-        x: TransformValue = 0.0,
-        y: TransformValue = 0.0,
-        anchor: str = "center"
+        x: Union[TransformValue, object] = _UNSET,
+        y: Union[TransformValue, object] = _UNSET,
+        anchor: Union[str, object] = _UNSET
     ) -> "Media":
         """
         位置を設定する
 
         Args:
-            x: X座標（0.0〜1.0、画面の割合）
+            x: X座標（0.0〜1.0、画面の割合）。省略時は変更しない
                callable の場合は直前値を受け取り新しい値を返す
-            y: Y座標（0.0〜1.0、画面の割合）
+            y: Y座標（0.0〜1.0、画面の割合）。省略時は変更しない
                callable の場合は直前値を受け取り新しい値を返す
-            anchor: アンカーポイント（"tl", "center", "br" など）
+            anchor: アンカーポイント（"tl", "center", "br" など）。省略時は変更しない
 
         Returns:
             self（メソッドチェーン用）
         """
-        # 直前値を保持した callable を合成
-        self.transform.pos_x = _chain(self.transform.pos_x, x)
-        self.transform.pos_y = _chain(self.transform.pos_y, y)
-        self.transform.anchor = anchor
+        # 直前値を保持した callable を合成（_UNSET でない場合のみ更新）
+        if x is not _UNSET:
+            self.transform.pos_x = _chain(self.transform.pos_x, x)
+        if y is not _UNSET:
+            self.transform.pos_y = _chain(self.transform.pos_y, y)
+        if anchor is not _UNSET:
+            self.transform.anchor = anchor
         return self
 
-    def rotate(self, angle: TransformValue) -> "Media":
+    def rotate(self, angle: Union[TransformValue, object] = _UNSET) -> "Media":
         """
         回転角度を設定する
 
         Args:
-            angle: 回転角度（度、時計回りが正）
+            angle: 回転角度（度、時計回りが正）。省略時は変更しない
                    callable の場合は直前値を受け取り新しい値を返す
 
         Returns:
             self（メソッドチェーン用）
         """
-        # 直前値を保持した callable を合成
-        self.transform.rotation = _chain(self.transform.rotation, angle)
+        # 直前値を保持した callable を合成（_UNSET でない場合のみ更新）
+        if angle is not _UNSET:
+            self.transform.rotation = _chain(self.transform.rotation, angle)
         return self
 
-    def opacity(self, alpha: TransformValue) -> "Media":
+    def opacity(self, alpha: Union[TransformValue, object] = _UNSET) -> "Media":
         """
         初期透明度を設定する
 
         Args:
-            alpha: 透明度（0.0=完全透明、1.0=不透明）
+            alpha: 透明度（0.0=完全透明、1.0=不透明）。省略時は変更しない
                    callable の場合は直前値を受け取り新しい値を返す
 
         Returns:
             self（メソッドチェーン用）
         """
-        # 直前値を保持した callable を合成
-        self.transform.alpha = _chain(self.transform.alpha, alpha)
+        # 直前値を保持した callable を合成（_UNSET でない場合のみ更新）
+        if alpha is not _UNSET:
+            self.transform.alpha = _chain(self.transform.alpha, alpha)
         return self
 
     def flip(self, horizontal: bool = False, vertical: bool = False) -> "Media":
@@ -291,48 +322,52 @@ class Media:
 
     def crop(
         self,
-        x: TransformValue = 0.0,
-        y: TransformValue = 0.0,
-        w: TransformValue = 1.0,
-        h: TransformValue = 1.0
+        x: Union[TransformValue, object] = _UNSET,
+        y: Union[TransformValue, object] = _UNSET,
+        w: Union[TransformValue, object] = _UNSET,
+        h: Union[TransformValue, object] = _UNSET
     ) -> "Media":
         """
         トリミング領域を設定する（元画像に対する相対値）
 
         Args:
-            x: 左上X（0.0〜1.0）
+            x: 左上X（0.0〜1.0）。省略時は変更しない
                callable の場合は直前値を受け取り新しい値を返す
-            y: 左上Y（0.0〜1.0）
+            y: 左上Y（0.0〜1.0）。省略時は変更しない
                callable の場合は直前値を受け取り新しい値を返す
-            w: 幅（0.0〜1.0）
+            w: 幅（0.0〜1.0）。省略時は変更しない
                callable の場合は直前値を受け取り新しい値を返す
-            h: 高さ（0.0〜1.0）
+            h: 高さ（0.0〜1.0）。省略時は変更しない
                callable の場合は直前値を受け取り新しい値を返す
 
         Returns:
             self（メソッドチェーン用）
         """
-        # 直前値を保持した callable を合成
-        self.transform.crop_x = _chain(self.transform.crop_x, x)
-        self.transform.crop_y = _chain(self.transform.crop_y, y)
-        self.transform.crop_w = _chain(self.transform.crop_w, w)
-        self.transform.crop_h = _chain(self.transform.crop_h, h)
+        # 直前値を保持した callable を合成（_UNSET でない場合のみ更新）
+        if x is not _UNSET:
+            self.transform.crop_x = _chain(self.transform.crop_x, x)
+        if y is not _UNSET:
+            self.transform.crop_y = _chain(self.transform.crop_y, y)
+        if w is not _UNSET:
+            self.transform.crop_w = _chain(self.transform.crop_w, w)
+        if h is not _UNSET:
+            self.transform.crop_h = _chain(self.transform.crop_h, h)
         return self
 
     def chromakey(
         self,
         color: str = None,
-        similarity: TransformValue = 0.1,
-        blend: TransformValue = 0.1
+        similarity: Union[TransformValue, object] = _UNSET,
+        blend: Union[TransformValue, object] = _UNSET
     ) -> "Media":
         """
         クロマキー（カラーキー）を設定する
 
         Args:
             color: 透明にする色（"green", "blue", "0x00FF00"など）。省略時は自動検出
-            similarity: 色の類似度（0.0〜1.0、大きいほど広い範囲を透明化）
+            similarity: 色の類似度（0.0〜1.0、大きいほど広い範囲を透明化）。省略時は変更しない
                         callable の場合は直前値を受け取り新しい値を返す
-            blend: エッジのブレンド（0.0〜1.0、大きいほど滑らか）
+            blend: エッジのブレンド（0.0〜1.0、大きいほど滑らか）。省略時は変更しない
                    callable の場合は直前値を受け取り新しい値を返す
 
         Returns:
@@ -346,13 +381,15 @@ class Media:
                 stacklevel=2
             )
         self.transform.chromakey_color = color
-        # 直前値を保持した callable を合成
-        self.transform.chromakey_similarity = _chain(
-            self.transform.chromakey_similarity, similarity
-        )
-        self.transform.chromakey_blend = _chain(
-            self.transform.chromakey_blend, blend
-        )
+        # 直前値を保持した callable を合成（_UNSET でない場合のみ更新）
+        if similarity is not _UNSET:
+            self.transform.chromakey_similarity = _chain(
+                self.transform.chromakey_similarity, similarity
+            )
+        if blend is not _UNSET:
+            self.transform.chromakey_blend = _chain(
+                self.transform.chromakey_blend, blend
+            )
         return self
 
     def show(self, time: float, effects: Optional[list] = None, start: Optional[float] = None) -> "Media":
