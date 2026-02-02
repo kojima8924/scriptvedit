@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .media import Media, Audio
+    from .text import TextClip
 
 
 @dataclass
@@ -29,6 +30,17 @@ class AudioEntry:
     duration: float
 
 
+@dataclass
+class TextEntry:
+    """テキストタイムライン上のエントリ"""
+    clip: "TextClip"
+    start_time: float
+    duration: float
+    effects: list
+    layer: int = 0       # レイヤー（大きいほど手前に描画）
+    order: int = 0       # 追加順序（同一layer内での重なり順）
+
+
 class Timeline:
     """
     グローバルタイムライン
@@ -39,8 +51,9 @@ class Timeline:
     def __init__(self):
         self.video_entries: list[VideoEntry] = []
         self.audio_entries: list[AudioEntry] = []
+        self.text_entries: list[TextEntry] = []
         self._video_current_time: float = 0.0
-        self._video_order_counter: int = 0  # 追加順序カウンタ
+        self._order_counter: int = 0  # 追加順序カウンタ（video/text共通）
         self.width: int = 1920
         self.height: int = 1080
         self.fps: int = 30
@@ -85,10 +98,10 @@ class Timeline:
             duration=duration,
             effects=effects,
             layer=layer,
-            order=self._video_order_counter,
+            order=self._order_counter,
             offset=offset
         )
-        self._video_order_counter += 1
+        self._order_counter += 1
         self.video_entries.append(entry)
 
     def add_audio(self, audio: "Audio", duration: float, start: Optional[float] = None) -> None:
@@ -102,30 +115,75 @@ class Timeline:
         )
         self.audio_entries.append(entry)
 
+    def add_text(
+        self,
+        clip: "TextClip",
+        duration: float,
+        effects: list,
+        start: Optional[float] = None,
+        layer: int = 0
+    ) -> None:
+        """テキストをタイムラインに追加
+
+        Args:
+            clip: TextClipオブジェクト
+            duration: 表示時間（秒）
+            effects: エフェクトのリスト
+            start: タイムライン上の開始時間（秒）
+            layer: レイヤー（大きいほど手前に描画）
+        """
+        # バリデーション
+        if duration <= 0:
+            raise ValueError(f"duration は正の値である必要があります: {duration}")
+
+        if start is None:
+            start_time = self._video_current_time
+            self._video_current_time += duration
+        else:
+            start_time = start
+
+        entry = TextEntry(
+            clip=clip,
+            start_time=start_time,
+            duration=duration,
+            effects=effects,
+            layer=layer,
+            order=self._order_counter
+        )
+        self._order_counter += 1
+        self.text_entries.append(entry)
+
     def clear(self) -> None:
         """タイムラインをクリア"""
         self.video_entries.clear()
         self.audio_entries.clear()
+        self.text_entries.clear()
         self._video_current_time = 0.0
-        self._video_order_counter = 0
+        self._order_counter = 0
 
     @property
     def total_duration(self) -> float:
-        """総再生時間（映像と音声の最大終了時間）"""
+        """総再生時間（映像、テキスト、音声の最大終了時間）"""
         max_video = 0.0
         max_audio = 0.0
+        max_text = 0.0
 
         for entry in self.video_entries:
             end_time = entry.start_time + entry.duration
             if end_time > max_video:
                 max_video = end_time
 
+        for entry in self.text_entries:
+            end_time = entry.start_time + entry.duration
+            if end_time > max_text:
+                max_text = end_time
+
         for entry in self.audio_entries:
             end_time = entry.start_time + entry.duration
             if end_time > max_audio:
                 max_audio = end_time
 
-        return max(max_video, max_audio)
+        return max(max_video, max_text, max_audio)
 
     def configure(
         self,

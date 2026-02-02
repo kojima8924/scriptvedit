@@ -86,6 +86,43 @@ img.show(time=3, start=0, layer=2)
 video.show(time=2, start=1, offset=0.5)  # 動画の0.5秒目から開始
 ```
 
+## テキストオーバーレイ
+
+画像ファイル不要でテキストを画面に表示できます。
+
+```python
+from scriptvedit import *
+
+configure(width=1920, height=1080, fps=30)
+
+# 基本的なテキスト表示
+text("Hello World").pos(x=0.5, y=0.5, anchor="center").show(time=3, start=0)
+
+# スタイル設定
+text("字幕テキスト").pos(x=0.5, y=0.9, anchor="center").font(size=48, color="white").box(color="black@0.7").show(time=2, start=1, layer=10)
+
+# 透明度設定
+text("透明テキスト").opacity(0.5).show(time=2, start=0)
+
+render("output.mp4")
+```
+
+### テキストスタイル
+
+```python
+# フォント設定
+text("Sample").font(file="path/to/font.ttf", size=72, color="yellow")
+
+# 背景ボックス
+text("Sample").box(enable=True, color="black@0.5", borderw=10)
+
+# 縁取り
+text("Sample").border(width=2, color="black")
+
+# 影
+text("Sample").shadow(x=2, y=2, color="gray")
+```
+
 ## Breaking Changes
 
 ### v0.2.0

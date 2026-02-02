@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Optional, Callable, Union
 from dataclasses import dataclass
 
-from .timeline import get_timeline, VideoEntry, AudioEntry
+from .timeline import get_timeline, VideoEntry, AudioEntry, TextEntry
 from .effects import MoveEffect, FadeEffect, RotateToEffect, ScaleEffect, BlurEffect, ShakeEffect
+from .media import Transform
 
 # 画像拡張子（-loop 1 を付与する対象）
 # 注意: .gif は動画として扱われることが多いため除外（将来 ffprobe 判定を入れる予定）
@@ -171,8 +172,58 @@ def _get_anchor_offset(anchor: str) -> tuple[str, str]:
     return "0", "0"
 
 
-def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], str]:
+def _get_text_anchor_offset(anchor: str) -> tuple[str, str]:
+    """テキスト用のアンカーオフセット（text_w, text_h 使用）"""
+    x_offsets = {"l": "0", "c": "-text_w/2", "r": "-text_w"}
+    y_offsets = {"t": "0", "c": "-text_h/2", "b": "-text_h"}
+
+    if anchor == "center":
+        return "-text_w/2", "-text_h/2"
+
+    if len(anchor) == 2:
+        v, h = anchor[0], anchor[1]
+        return x_offsets.get(h, "0"), y_offsets.get(v, "0")
+
+    return "0", "0"
+
+
+def _resolve_text_transform(clip, timeline) -> ResolvedTransform:
+    """TextClip の Transform を解決する"""
+    tf = clip.transform
+    return ResolvedTransform(
+        scale_x=None,
+        scale_y=None,
+        pos_x=_resolve_transform_value(tf.pos_x, 0.5),
+        pos_y=_resolve_transform_value(tf.pos_y, 0.5),
+        anchor=tf.anchor,
+        rotation=_resolve_transform_value(tf.rotation, 0.0),
+        alpha=_resolve_transform_value(tf.alpha, 1.0),
+        crop_x=0.0,
+        crop_y=0.0,
+        crop_w=1.0,
+        crop_h=1.0,
+        chromakey_color=None,
+        chromakey_similarity=0.0,
+        chromakey_blend=0.0,
+        flip_h=False,
+        flip_v=False,
+    )
+
+
+def _escape_drawtext(text: str) -> str:
+    """drawtext 用にテキストをエスケープする"""
+    # FFmpeg drawtext のエスケープ: ' -> \\', : -> \\:, \ -> \\\\
+    text = text.replace("\\", "\\\\\\\\")
+    text = text.replace("'", "\\\\'")
+    text = text.replace(":", "\\\\:")
+    return text
+
+
+def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[list[str], list[str], str]:
     """映像用filter_complexを構築する"""
+    if text_entries is None:
+        text_entries = []
+
     inputs = []
     filters = []
     overlay_chain = "[base]"
@@ -183,13 +234,87 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
         f"d={timeline.total_duration}:r={timeline.fps}[base]"
     )
 
-    # レイヤー順にソート（layer昇順、同一layerはorder昇順）
-    # 後段のoverlayほど上に描画されるため、layerが大きいものが後になる
-    sorted_entries = sorted(video_entries, key=lambda e: (e.layer, e.order))
+    # video_entries と text_entries を統合してソート
+    # (entry, type) のタプルで管理
+    all_entries = []
+    for entry in video_entries:
+        all_entries.append((entry, "video"))
+    for entry in text_entries:
+        all_entries.append((entry, "text"))
 
-    for i, entry in enumerate(sorted_entries):
+    # レイヤー順にソート（layer昇順、同一layerはorder昇順）
+    sorted_entries = sorted(all_entries, key=lambda e: (e[0].layer, e[0].order))
+
+    # video 入力のインデックス管理
+    video_input_idx = 0
+    overlay_idx = 0
+
+    for entry, entry_type in sorted_entries:
+        if entry_type == "text":
+            # テキストエントリの処理
+            clip = entry.clip
+            tf = _resolve_text_transform(clip, timeline)
+            style = clip.style
+
+            # enable clause
+            enable = f"between(t,{entry.start_time},{entry.start_time + entry.duration})"
+
+            # 座標計算
+            pos_x = tf.pos_x
+            pos_y = tf.pos_y
+            ax, ay = _get_text_anchor_offset(tf.anchor)
+            base_x = f"{pos_x}*W"
+            base_y = f"{pos_y}*H"
+            x_expr = f"({base_x})+({ax})"
+            y_expr = f"({base_y})+({ay})"
+
+            # drawtext パラメータ構築
+            escaped_text = _escape_drawtext(clip.content)
+            dt_params = [f"text='{escaped_text}'"]
+
+            if style.fontfile:
+                dt_params.append(f"fontfile='{style.fontfile}'")
+            dt_params.append(f"fontsize={style.fontsize}")
+
+            # 透明度をフォント色に含める
+            alpha = tf.alpha
+            if alpha < 1.0:
+                # fontcolor に @ で透明度を付加
+                fontcolor = style.fontcolor
+                if "@" not in fontcolor:
+                    fontcolor = f"{fontcolor}@{alpha}"
+                dt_params.append(f"fontcolor={fontcolor}")
+            else:
+                dt_params.append(f"fontcolor={style.fontcolor}")
+
+            if style.box:
+                dt_params.append("box=1")
+                dt_params.append(f"boxcolor={style.boxcolor}")
+                dt_params.append(f"boxborderw={style.boxborderw}")
+
+            if style.borderw > 0:
+                dt_params.append(f"borderw={style.borderw}")
+                dt_params.append(f"bordercolor={style.bordercolor}")
+
+            if style.shadowx != 0 or style.shadowy != 0:
+                dt_params.append(f"shadowx={style.shadowx}")
+                dt_params.append(f"shadowy={style.shadowy}")
+                dt_params.append(f"shadowcolor={style.shadowcolor}")
+
+            dt_params.append(f"x='{x_expr}'")
+            dt_params.append(f"y='{y_expr}'")
+            dt_params.append(f"enable='{enable}'")
+
+            next_overlay = f"[tmp{overlay_idx}]"
+            drawtext_filter = f"{overlay_chain}drawtext={':'.join(dt_params)}{next_overlay}"
+            filters.append(drawtext_filter)
+            overlay_chain = next_overlay
+            overlay_idx += 1
+            continue
+
+        # video エントリの処理（既存コード）
         media = entry.media
-        input_idx = i
+        input_idx = video_input_idx
 
         # 画像ファイルのみ -loop 1 を付与（動画には不要）
         if media.path.suffix.lower() in IMAGE_EXTENSIONS:
@@ -202,10 +327,11 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
 
         stream = f"[{input_idx}:v]"
         label_idx = 0
+        current_overlay_idx = overlay_idx  # ローカル変数としてキャプチャ
 
         def next_label():
             nonlocal label_idx
-            lbl = f"[m{i}_{label_idx}]"
+            lbl = f"[m{current_overlay_idx}_{label_idx}]"
             label_idx += 1
             return lbl
 
@@ -432,7 +558,7 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
             x_expr = f"({x_expr})+({shake_x})"
             y_expr = f"({y_expr})+({shake_y})"
 
-        next_overlay = f"[tmp{i}]"
+        next_overlay = f"[tmp{overlay_idx}]"
         overlay_filter = (
             f"{overlay_chain}{out_label}overlay="
             f"x='{x_expr}':y='{y_expr}':"
@@ -441,9 +567,11 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
         )
         filters.append(overlay_filter)
         overlay_chain = next_overlay
+        video_input_idx += 1
+        overlay_idx += 1
 
     # 最終出力ラベル
-    if video_entries:
+    if video_entries or text_entries:
         filters[-1] = filters[-1].rsplit("[", 1)[0] + "[vout]"
         final_label = "[vout]"
     else:
@@ -517,11 +645,13 @@ def render(output: str, verbose: bool = False) -> None:
     ffmpeg = _check_ffmpeg()
     timeline = get_timeline()
 
-    if not timeline.video_entries and not timeline.audio_entries:
+    if not timeline.video_entries and not timeline.audio_entries and not timeline.text_entries:
         raise ValueError("タイムラインが空です。show()またはplay()でメディアを追加してください。")
 
     # 映像フィルタ構築
-    video_inputs, video_filters, video_out = _build_video_filter(timeline, timeline.video_entries)
+    video_inputs, video_filters, video_out = _build_video_filter(
+        timeline, timeline.video_entries, timeline.text_entries
+    )
 
     # 音声フィルタ構築
     audio_inputs, audio_filters, audio_out = _build_audio_filter(
