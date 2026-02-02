@@ -366,53 +366,20 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
             )
             out_label = new_label
 
-        # フェード（callable 対応: fade フィルタまたは colorchannelmixer）
+        # フェード（callable 対応: geq または colorchannelmixer）
         # float は固定透明度、callable は時間変化する透明度
         if fade_effect:
             new_label = next_label()
             if callable(fade_effect.alpha):
-                # callable をサンプリングして線形フェードイン/アウトを判定
+                # callable をサンプリングして piecewise_linear_expr で alpha_expr を生成
                 samples = _sample_callable(fade_effect.alpha, n_samples)
-                start_val = samples[0]
-                end_val = samples[-1]
-
-                # 線形性チェック: 全サンプルが線形補間値に近いか
-                def is_linear(samples, tol=0.05):
-                    if len(samples) < 2:
-                        return True
-                    s0, s1 = samples[0], samples[-1]
-                    for i, val in enumerate(samples):
-                        expected = s0 + (s1 - s0) * i / (len(samples) - 1)
-                        if abs(val - expected) > tol:
-                            return False
-                    return True
-
-                is_linear_fade = is_linear(samples)
-
-                # 線形フェードイン (0→1) の判定
-                if is_linear_fade and abs(start_val) < 0.01 and abs(end_val - 1.0) < 0.01:
-                    filters.append(
-                        f"{out_label}format=rgba,"
-                        f"fade=t=in:st={entry.start_time}:d={entry.duration}:alpha=1"
-                        f"{new_label}"
-                    )
-                # 線形フェードアウト (1→0) の判定
-                elif is_linear_fade and abs(start_val - 1.0) < 0.01 and abs(end_val) < 0.01:
-                    filters.append(
-                        f"{out_label}format=rgba,"
-                        f"fade=t=out:st={entry.start_time}:d={entry.duration}:alpha=1"
-                        f"{new_label}"
-                    )
-                else:
-                    # 複雑な callable は警告を出してスキップ
-                    import warnings
-                    warnings.warn(
-                        f"複雑な callable fade は未対応です。線形フェードイン/アウト（lambda u: u または 1-u）を使用してください。",
-                        UserWarning,
-                        stacklevel=6
-                    )
-                    # スキップ（ラベル変更なし）
-                    new_label = out_label
+                alpha_expr = _piecewise_linear_expr(u_expr_geq, samples)
+                alpha_expr = _clamp_expr_if(alpha_expr, 0, 1)
+                filters.append(
+                    f"{out_label}format=rgba,"
+                    f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='a(X,Y)*({alpha_expr})'"
+                    f"{new_label}"
+                )
             else:
                 # 固定透明度（0.0〜1.0 にクランプ）
                 alpha = max(0.0, min(1.0, fade_effect.alpha))
