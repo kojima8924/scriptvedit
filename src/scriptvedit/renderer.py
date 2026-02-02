@@ -3,12 +3,52 @@ FFmpegを使用したレンダリングモジュール
 """
 
 import os
+import sys
+import re
 import subprocess
 import shutil
 import math
 from pathlib import Path
 from typing import Optional, Callable, Union, List
 from dataclasses import dataclass, field
+
+
+def _parse_ffmpeg_progress(line: str) -> Optional[float]:
+    """FFmpeg の出力から現在の時刻（秒）を抽出
+
+    Args:
+        line: FFmpeg stderr の1行
+
+    Returns:
+        現在の処理時刻（秒）、パースできない場合は None
+    """
+    # "time=00:00:03.45" または "time=3.45" 形式
+    match = re.search(r'time=(\d+):(\d+):(\d+(?:\.\d+)?)', line)
+    if match:
+        h, m, s = match.groups()
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    match = re.search(r'time=(\d+(?:\.\d+)?)', line)
+    if match:
+        return float(match.group(1))
+    return None
+
+
+def _print_progress_bar(current: float, total: float, width: int = 40):
+    """CLI 用プログレスバーを表示
+
+    Args:
+        current: 現在値
+        total: 最大値
+        width: バーの幅（文字数）
+    """
+    if total <= 0:
+        return
+    ratio = min(1.0, current / total)
+    filled = int(width * ratio)
+    bar = "█" * filled + "░" * (width - filled)
+    percent = ratio * 100
+    sys.stdout.write(f"\r[{bar}] {percent:5.1f}% ({current:.1f}s / {total:.1f}s)")
+    sys.stdout.flush()
 
 from .timeline import Timeline, VideoEntry, AudioEntry, TextEntry
 from .effects import MoveEffect, FadeEffect, RotateToEffect, ScaleEffect, BlurEffect, ShakeEffect
@@ -682,7 +722,9 @@ def render(
     timeline: Timeline,
     output: str,
     verbose: bool = False,
-    dump_graph: Optional[str] = None
+    dump_graph: Optional[str] = None,
+    show_progress: bool = True,
+    progress_callback: Optional[Callable[[float, float], None]] = None
 ) -> None:
     """
     タイムラインを動画にレンダリングする
@@ -692,6 +734,8 @@ def render(
         output: 出力ファイルパス
         verbose: 詳細出力を表示するか
         dump_graph: filter_complex を保存するファイルパス（デバッグ用）
+        show_progress: CLI プログレスバーを表示するか
+        progress_callback: 進捗コールバック (current_sec, total_sec)
     """
     ffmpeg = _check_ffmpeg()
 
@@ -721,15 +765,22 @@ def render(
         if verbose:
             print(f"Filter graph saved to: {dump_graph}")
 
+    total_duration = timeline.total_duration
+    use_progress = (show_progress or progress_callback is not None) and not verbose
+
     # コマンド構築
     cmd = [
         ffmpeg,
         "-y",
+    ]
+    if use_progress:
+        cmd.extend(["-progress", "pipe:1"])
+    cmd.extend([
         *video_inputs,
         *audio_inputs,
         "-filter_complex", filter_complex,
         "-map", video_out,
-    ]
+    ])
 
     if audio_out:
         cmd.extend(["-map", audio_out, "-c:a", "aac", "-b:a", "192k"])
@@ -737,7 +788,7 @@ def render(
     cmd.extend([
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
-        "-t", str(timeline.total_duration),
+        "-t", str(total_duration),
         output
     ])
 
@@ -746,17 +797,45 @@ def render(
         print(" ".join(cmd))
         print()
 
-    result = subprocess.run(
-        cmd,
-        capture_output=not verbose,
-        text=True
-    )
+    if use_progress:
+        # 進捗表示モード
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+        while True:
+            line = proc.stderr.readline()
+            if not line and proc.poll() is not None:
+                break
+            if line:
+                current_time = _parse_ffmpeg_progress(line)
+                if current_time is not None:
+                    if show_progress:
+                        _print_progress_bar(current_time, total_duration)
+                    if progress_callback:
+                        progress_callback(current_time, total_duration)
 
-    if result.returncode != 0:
-        error_msg = result.stderr if result.stderr else "不明なエラー"
-        raise RuntimeError(f"FFmpegエラー:\n{error_msg}")
+        if show_progress:
+            _print_progress_bar(total_duration, total_duration)
+            print()  # 改行
 
-    print(f"レンダリング完了: {output}")
+        if proc.returncode != 0:
+            raise RuntimeError(f"FFmpegエラー (exit code {proc.returncode})")
+    else:
+        result = subprocess.run(
+            cmd,
+            capture_output=not verbose,
+            text=True
+        )
+
+        if result.returncode != 0:
+            error_msg = result.stderr if result.stderr else "不明なエラー"
+            raise RuntimeError(f"FFmpegエラー:\n{error_msg}")
+
+    print(f"\nレンダリング完了: {output}")
 
 
 # ============================================================
@@ -1339,7 +1418,12 @@ def run_ffmpeg(
     output: str,
     *,
     verbose: bool = False,
-    dump_graph: Optional[str] = None
+    dump_graph: Optional[str] = None,
+    video_preset: Optional[str] = None,
+    crf: Optional[int] = None,
+    tune: Optional[str] = None,
+    progress_callback: Optional[Callable[[float, float], None]] = None,
+    show_progress: bool = False
 ) -> None:
     """
     コンパイル済みフィルタグラフを使ってFFmpegを実行（同期）
@@ -1349,6 +1433,11 @@ def run_ffmpeg(
         output: 出力ファイルパス
         verbose: 詳細出力を表示するか
         dump_graph: filter_complex を保存するファイルパス
+        video_preset: x264 プリセット（例: "ultrafast"）
+        crf: 品質（例: 35）
+        tune: チューニング（例: "zerolatency"）
+        progress_callback: 進捗コールバック (current_sec, total_sec)
+        show_progress: CLI プログレスバーを表示するか
     """
     import tempfile as _tempfile
 
@@ -1377,6 +1466,7 @@ def run_ffmpeg(
     cmd = [
         ffmpeg,
         "-y",
+        "-progress", "pipe:1",  # 進捗を stdout に出力
         *compiled.video_inputs,
         *compiled.audio_inputs,
     ]
@@ -1394,6 +1484,14 @@ def run_ffmpeg(
     cmd.extend([
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
+    ])
+    if video_preset:
+        cmd.extend(["-preset", str(video_preset)])
+    if tune:
+        cmd.extend(["-tune", str(tune)])
+    if crf is not None:
+        cmd.extend(["-crf", str(int(crf))])
+    cmd.extend([
         "-t", str(compiled.duration),
         output
     ])
@@ -1403,12 +1501,45 @@ def run_ffmpeg(
         print(" ".join(cmd))
         print()
 
-    try:
-        result = subprocess.run(cmd, capture_output=not verbose, text=True)
+    total_duration = compiled.duration
+    use_progress = show_progress or progress_callback is not None
 
-        if result.returncode != 0:
-            error_msg = result.stderr if result.stderr else "不明なエラー"
-            raise RuntimeError(f"FFmpegエラー:\n{error_msg}")
+    try:
+        if use_progress and not verbose:
+            # 進捗表示モード: stderr をリアルタイムで読む
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+            last_time = 0.0
+            while True:
+                line = proc.stderr.readline()
+                if not line and proc.poll() is not None:
+                    break
+                if line:
+                    current_time = _parse_ffmpeg_progress(line)
+                    if current_time is not None:
+                        last_time = current_time
+                        if show_progress:
+                            _print_progress_bar(current_time, total_duration)
+                        if progress_callback:
+                            progress_callback(current_time, total_duration)
+
+            if show_progress:
+                _print_progress_bar(total_duration, total_duration)
+                print()  # 改行
+
+            if proc.returncode != 0:
+                raise RuntimeError(f"FFmpegエラー (exit code {proc.returncode})")
+        else:
+            # 従来モード
+            result = subprocess.run(cmd, capture_output=not verbose, text=True)
+            if result.returncode != 0:
+                error_msg = result.stderr if result.stderr else "不明なエラー"
+                raise RuntimeError(f"FFmpegエラー:\n{error_msg}")
     finally:
         # 一時ファイルをクリーンアップ
         if filter_file:
@@ -1423,7 +1554,10 @@ def spawn_ffmpeg(
     output: str,
     *,
     verbose: bool = False,
-    dump_graph: Optional[str] = None
+    dump_graph: Optional[str] = None,
+    video_preset: Optional[str] = None,
+    crf: Optional[int] = None,
+    tune: Optional[str] = None
 ) -> subprocess.Popen:
     """
     コンパイル済みフィルタグラフを使ってFFmpegを起動（非同期、GUI用）
@@ -1433,6 +1567,9 @@ def spawn_ffmpeg(
         output: 出力ファイルパス
         verbose: 詳細出力を表示するか
         dump_graph: filter_complex を保存するファイルパス
+        video_preset: x264 プリセット（例: "ultrafast"）
+        crf: 品質（例: 35）
+        tune: チューニング（例: "zerolatency"）
 
     Returns:
         subprocess.Popen: FFmpegプロセス（kill可能）
@@ -1479,6 +1616,14 @@ def spawn_ffmpeg(
     cmd.extend([
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
+    ])
+    if video_preset:
+        cmd.extend(["-preset", str(video_preset)])
+    if tune:
+        cmd.extend(["-tune", str(tune)])
+    if crf is not None:
+        cmd.extend(["-crf", str(int(crf))])
+    cmd.extend([
         "-t", str(compiled.duration),
         output
     ])
