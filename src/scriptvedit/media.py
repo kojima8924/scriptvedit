@@ -193,19 +193,19 @@ class Media:
         Args:
             sx: 幅（0.0〜1.0、画面幅に対する割合）
                 - 省略: 変更しない
-                - None: アスペクト比自動計算に戻す
+                - None: アスペクト比自動計算に戻す（renderer で補完）
                 - float: 指定値に設定
                 - callable: 直前値を受け取り新しい値を返す
             sy: 高さ（0.0〜1.0、画面高さに対する割合）
                 - 省略: 変更しない
-                - None: アスペクト比自動計算に戻す
+                - None: アスペクト比自動計算に戻す（renderer で補完）
                 - float: 指定値に設定
                 - callable: 直前値を受け取り新しい値を返す
 
         Note:
             両方Noneの場合は元のサイズを維持
             片方のみ指定（もう片方がNone）でアスペクト比を維持してリサイズ
-            callable を渡した場合、アスペクト比維持はレンダリング時に解決される
+            アスペクト比の計算はレンダリング時に renderer で行われる
 
         Returns:
             self（メソッドチェーン用）
@@ -214,35 +214,19 @@ class Media:
         if sx is _UNSET and sy is _UNSET:
             return self
 
-        # 実際に更新する値を決定
-        new_sx = self.transform.scale_x if sx is _UNSET else sx
-        new_sy = self.transform.scale_y if sy is _UNSET else sy
-
-        # callable でない場合のみ、ここでアスペクト比を計算
-        # callable の場合はレンダリング時に解決
-        if not callable(new_sx) and not callable(new_sy):
-            from .timeline import get_timeline
-            if new_sx is not None and new_sy is None:
-                img_w, img_h = self._ensure_dimensions()
-                timeline = get_timeline()
-                new_sy = new_sx * (img_h / img_w) * (timeline.width / timeline.height)
-            elif new_sy is not None and new_sx is None:
-                img_w, img_h = self._ensure_dimensions()
-                timeline = get_timeline()
-                new_sx = new_sy * (img_w / img_h) * (timeline.height / timeline.width)
-
         # 更新（_UNSET でない場合のみ）
-        # None は明示的に「アスペクト比自動」なので _chain せず直接設定
+        # None は明示的に「アスペクト比自動に戻す」なので _chain せず直接 None を設定
+        # アスペクト比の計算は renderer に一本化する
         if sx is not _UNSET:
             if sx is None:
-                self.transform.scale_x = new_sx  # アスペクト比計算後の値
+                self.transform.scale_x = None
             else:
-                self.transform.scale_x = _chain(self.transform.scale_x, new_sx)
+                self.transform.scale_x = _chain(self.transform.scale_x, sx)
         if sy is not _UNSET:
             if sy is None:
-                self.transform.scale_y = new_sy  # アスペクト比計算後の値
+                self.transform.scale_y = None
             else:
-                self.transform.scale_y = _chain(self.transform.scale_y, new_sy)
+                self.transform.scale_y = _chain(self.transform.scale_y, sy)
         return self
 
     def pos(

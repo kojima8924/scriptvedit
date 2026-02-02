@@ -13,7 +13,8 @@ from .timeline import get_timeline, VideoEntry, AudioEntry
 from .effects import MoveEffect, FadeEffect, RotateToEffect, ScaleEffect, BlurEffect, ShakeEffect
 
 # 画像拡張子（-loop 1 を付与する対象）
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tiff", ".tif"}
+# 注意: .gif は動画として扱われることが多いため除外（将来 ffprobe 判定を入れる予定）
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif"}
 
 
 def _check_ffmpeg() -> str:
