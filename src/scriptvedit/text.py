@@ -221,3 +221,27 @@ def text(content: str) -> TextClip:
         TextClipオブジェクト
     """
     return TextClip(content)
+
+
+def subtitle(content: str) -> TextClip:
+    """
+    字幕スタイルのテキストオーバーレイを作成する
+
+    デフォルトで画面下部中央に配置され、視認性の高いスタイルが適用される。
+
+    Args:
+        content: 表示するテキスト
+
+    Returns:
+        TextClipオブジェクト（字幕スタイル適用済み）
+
+    Example:
+        subtitle("字幕テキスト").show(time=3, start=0)
+    """
+    return (
+        text(content)
+        .font(size=48, color="white")
+        .border(width=2, color="black")
+        .shadow(x=2, y=2, color="black@0.6")
+        .pos(x=0.5, y=0.9, anchor="center")
+    )

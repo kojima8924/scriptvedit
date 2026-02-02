@@ -211,11 +211,24 @@ def _resolve_text_transform(clip, timeline) -> ResolvedTransform:
 
 
 def _escape_drawtext(text: str) -> str:
-    """drawtext 用にテキストをエスケープする"""
-    # FFmpeg drawtext のエスケープ: ' -> \\', : -> \\:, \ -> \\\\
+    """drawtext 用にテキストをエスケープする
+
+    FFmpeg drawtext フィルタで安全に表示するためのエスケープ処理。
+    変換順序が重要: バックスラッシュを最初に処理する。
+    """
+    # 1. バックスラッシュを最初にエスケープ（\n 以外）
+    # 改行文字を一時的に保護
+    text = text.replace("\n", "\x00NEWLINE\x00")
     text = text.replace("\\", "\\\\\\\\")
+    # 改行を drawtext 形式に変換
+    text = text.replace("\x00NEWLINE\x00", "\\n")
+
+    # 2. その他の特殊文字をエスケープ
     text = text.replace("'", "\\\\'")
     text = text.replace(":", "\\\\:")
+    text = text.replace("%", "\\\\%")  # 式展開の誤爆防止
+    text = text.replace(",", "\\\\,")  # フィルタ引数区切りの誤爆防止
+
     return text
 
 
@@ -259,14 +272,21 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
             # enable clause
             enable = f"between(t,{entry.start_time},{entry.start_time + entry.duration})"
 
-            # 座標計算
+            # 座標計算（W/H ではなく数値を使用）
             pos_x = tf.pos_x
             pos_y = tf.pos_y
             ax, ay = _get_text_anchor_offset(tf.anchor)
-            base_x = f"{pos_x}*W"
-            base_y = f"{pos_y}*H"
+            base_x = f"{pos_x}*{timeline.width}"
+            base_y = f"{pos_y}*{timeline.height}"
             x_expr = f"({base_x})+({ax})"
             y_expr = f"({base_y})+({ay})"
+
+            # エフェクトから FadeEffect を検出
+            fade_effect = None
+            for effect in entry.effects:
+                if isinstance(effect, FadeEffect):
+                    fade_effect = effect
+                    break
 
             # drawtext パラメータ構築
             escaped_text = _escape_drawtext(clip.content)
@@ -276,16 +296,8 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
                 dt_params.append(f"fontfile='{style.fontfile}'")
             dt_params.append(f"fontsize={style.fontsize}")
 
-            # 透明度をフォント色に含める
-            alpha = tf.alpha
-            if alpha < 1.0:
-                # fontcolor に @ で透明度を付加
-                fontcolor = style.fontcolor
-                if "@" not in fontcolor:
-                    fontcolor = f"{fontcolor}@{alpha}"
-                dt_params.append(f"fontcolor={fontcolor}")
-            else:
-                dt_params.append(f"fontcolor={style.fontcolor}")
+            # fontcolor は透明度なしで設定（透明度は alpha= で統一）
+            dt_params.append(f"fontcolor={style.fontcolor}")
 
             if style.box:
                 dt_params.append("box=1")
@@ -301,11 +313,40 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
                 dt_params.append(f"shadowy={style.shadowy}")
                 dt_params.append(f"shadowcolor={style.shadowcolor}")
 
+            # 透明度処理（base_alpha と fade_effect を統合）
+            base_alpha = tf.alpha
+            if fade_effect:
+                if callable(fade_effect.alpha):
+                    # callable fade: サンプリングして piecewise_linear_expr
+                    n_samples = min(
+                        timeline.curve_samples,
+                        max(2, int(entry.duration * timeline.fps) + 1)
+                    )
+                    # drawtext では t が使える（秒単位）
+                    u_expr_text = f"clip((t-{entry.start_time})/{entry.duration},0,1)"
+                    samples = _sample_callable(fade_effect.alpha, n_samples)
+                    alpha_expr = _piecewise_linear_expr(u_expr_text, samples)
+                    alpha_expr = _clamp_expr(alpha_expr, 0, 1)
+                    # base_alpha と乗算
+                    if base_alpha < 1.0:
+                        final_alpha_expr = f"({base_alpha})*({alpha_expr})"
+                    else:
+                        final_alpha_expr = alpha_expr
+                    dt_params.append(f"alpha='{final_alpha_expr}'")
+                else:
+                    # float fade: base_alpha と乗算
+                    fade_alpha = max(0.0, min(1.0, fade_effect.alpha))
+                    final_alpha = base_alpha * fade_alpha
+                    dt_params.append(f"alpha={final_alpha}")
+            elif base_alpha < 1.0:
+                # fade なしで opacity のみ
+                dt_params.append(f"alpha={base_alpha}")
+
             dt_params.append(f"x='{x_expr}'")
             dt_params.append(f"y='{y_expr}'")
             dt_params.append(f"enable='{enable}'")
 
-            next_overlay = f"[tmp{overlay_idx}]"
+            next_overlay = f"[t{overlay_idx}]"
             drawtext_filter = f"{overlay_chain}drawtext={':'.join(dt_params)}{next_overlay}"
             filters.append(drawtext_filter)
             overlay_chain = next_overlay
@@ -331,7 +372,7 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
 
         def next_label():
             nonlocal label_idx
-            lbl = f"[m{current_overlay_idx}_{label_idx}]"
+            lbl = f"[v{current_overlay_idx}_{label_idx}]"
             label_idx += 1
             return lbl
 
@@ -558,7 +599,7 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
             x_expr = f"({x_expr})+({shake_x})"
             y_expr = f"({y_expr})+({shake_y})"
 
-        next_overlay = f"[tmp{overlay_idx}]"
+        next_overlay = f"[mix{overlay_idx}]"
         overlay_filter = (
             f"{overlay_chain}{out_label}overlay="
             f"x='{x_expr}':y='{y_expr}':"

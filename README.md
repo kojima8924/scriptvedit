@@ -130,6 +130,37 @@ text("Sample").border(width=2, color="black")
 text("Sample").shadow(x=2, y=2, color="gray")
 ```
 
+### subtitle() プリセット
+
+よく使う字幕スタイルを簡単に作成できます。
+
+```python
+# subtitle() は以下と同等:
+# text(...).font(size=48, color="white").border(width=2, color="black")
+#          .shadow(x=2, y=2, color="black@0.6").pos(x=0.5, y=0.9, anchor="center")
+subtitle("字幕テキスト").show(time=3, start=0)
+```
+
+### 改行
+
+`\n` で改行できます。
+
+```python
+text("1行目\n2行目\n3行目").show(time=3, start=0)
+```
+
+### テキストにエフェクトを適用
+
+テキストにも `fade()` エフェクトを適用できます。
+
+```python
+# フェードイン
+text("Hello").show(time=2, start=0, effects=[fade(alpha=lambda u: u)])
+
+# イーズイン付きフェードアウト
+text("Goodbye").show(time=2, start=0, effects=[fade(alpha=ease.lerp(1, 0, ease.out_quad))])
+```
+
 ## イージング
 
 `ease` モジュールでアニメーションカーブを簡単に指定できます。
