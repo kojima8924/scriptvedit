@@ -33,9 +33,13 @@ class MoveEffect:
 class FadeEffect:
     """フェードエフェクト
 
-    alpha が float の場合: 固定の透明度（0で完全フェードアウト）
+    alpha が float の場合: 固定透明度（0.0=完全透明, 1.0=不透明）
     alpha が callable の場合: u (0-1) を引数に取る関数で透明度を指定
-    例: fade(alpha=lambda u: 1-u)  # 線形フェードアウト
+
+    例:
+        fade(alpha=0.5)             # 常に50%透明
+        fade(alpha=lambda u: u)     # フェードイン（0→1）
+        fade(alpha=lambda u: 1-u)   # フェードアウト（1→0）
     """
     alpha: EffectValue
 
@@ -122,14 +126,19 @@ def move(x: EffectValue = 0.0, y: EffectValue = 0.0) -> MoveEffect:
     return MoveEffect(x=x, y=y)
 
 
-def fade(alpha: EffectValue = 0.0) -> FadeEffect:
+def fade(alpha: EffectValue = 1.0) -> FadeEffect:
     """
     フェードエフェクトを作成する
 
     Args:
-        alpha: 透明度（0.0〜1.0）
+        alpha: 透明度（0.0=完全透明, 1.0=不透明）
+               float の場合は固定透明度
                callable の場合は u (0-1) を引数に取る関数
-               例: lambda u: 1-u  # 線形フェードアウト
+
+    Examples:
+        fade(alpha=0.5)             # 常に50%透明
+        fade(alpha=lambda u: u)     # フェードイン（0→1）
+        fade(alpha=lambda u: 1-u)   # フェードアウト（1→0）
 
     Returns:
         FadeEffectオブジェクト
