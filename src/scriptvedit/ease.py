@@ -4,6 +4,7 @@
 fade/move/scale/rotate/blur/shake でよく使うカーブを簡単に指定できる。
 """
 
+import math
 from typing import Callable
 
 
@@ -81,19 +82,16 @@ def in_out_quart(u: float) -> float:
 
 def in_sine(u: float) -> float:
     """サイン（加速）"""
-    import math
     return 1 - math.cos(u * math.pi / 2)
 
 
 def out_sine(u: float) -> float:
     """サイン（減速）"""
-    import math
     return math.sin(u * math.pi / 2)
 
 
 def in_out_sine(u: float) -> float:
     """サイン（加速→減速）"""
-    import math
     return -(math.cos(math.pi * u) - 1) / 2
 
 

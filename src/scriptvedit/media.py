@@ -106,9 +106,19 @@ def _get_media_dimensions(path: Path) -> tuple[int, int]:
     if result.returncode != 0:
         raise RuntimeError(f"ffprobeエラー: {result.stderr}")
 
-    data = json.loads(result.stdout)
-    stream = data["streams"][0]
-    return stream["width"], stream["height"]
+    try:
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        if not streams:
+            raise RuntimeError(f"映像ストリームが見つかりません: {path}")
+        stream = streams[0]
+        width = stream.get("width")
+        height = stream.get("height")
+        if width is None or height is None:
+            raise RuntimeError(f"幅または高さが取得できません: {path}")
+        return int(width), int(height)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"ffprobe出力のパースに失敗: {e}")
 
 
 def _get_media_duration(path: Path) -> Optional[float]:
@@ -384,7 +394,7 @@ class Media:
 
     def chromakey(
         self,
-        color: str = None,
+        color: Optional[str] = None,
         similarity: Union[TransformValue, object] = _UNSET,
         blend: Union[TransformValue, object] = _UNSET
     ) -> "Media":

@@ -192,7 +192,7 @@ class TextClip:
 
         Args:
             time: 表示時間（秒）
-            effects: 適用するエフェクトのリスト（現在は未対応）
+            effects: 適用するエフェクトのリスト（fade のみ対応）
             start: タイムライン上の開始時間（秒）
             layer: レイヤー（大きいほど手前に描画）
 

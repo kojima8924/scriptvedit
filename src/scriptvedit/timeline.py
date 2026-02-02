@@ -222,12 +222,12 @@ class Timeline:
 
     def configure(
         self,
-        width: int = None,
-        height: int = None,
-        fps: int = None,
-        background_color: str = None,
-        curve_samples: int = None,
-        strict: bool = None
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        fps: Optional[int] = None,
+        background_color: Optional[str] = None,
+        curve_samples: Optional[int] = None,
+        strict: Optional[bool] = None
     ) -> None:
         """タイムラインの設定を変更
 
