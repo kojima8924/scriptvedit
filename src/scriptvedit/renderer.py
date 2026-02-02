@@ -1634,10 +1634,11 @@ def spawn_ffmpeg(
         print()
         proc = subprocess.Popen(cmd)
     else:
+        # stderr を DEVNULL にしないとバッファが詰まってブロックする
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE
+            stderr=subprocess.DEVNULL
         )
 
     # フィルタファイルのクリーンアップは呼び出し側で行うか、プロセス終了後に行う
