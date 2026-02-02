@@ -2,6 +2,7 @@
 FFmpegを使用したレンダリングモジュール
 """
 
+import os
 import subprocess
 import shutil
 import math
@@ -1349,6 +1350,8 @@ def run_ffmpeg(
         verbose: 詳細出力を表示するか
         dump_graph: filter_complex を保存するファイルパス
     """
+    import tempfile as _tempfile
+
     ffmpeg = _check_ffmpeg()
 
     if dump_graph:
@@ -1357,14 +1360,33 @@ def run_ffmpeg(
         if verbose:
             print(f"Filter graph saved to: {dump_graph}")
 
+    # Windows のコマンドライン長制限対策: 長いフィルタはファイル経由で渡す
+    filter_file = None
+    use_filter_script = len(compiled.filter_complex) > 4000
+
+    if use_filter_script:
+        filter_file = _tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".txt",
+            delete=False,
+            encoding="utf-8"
+        )
+        filter_file.write(compiled.filter_complex)
+        filter_file.close()
+
     cmd = [
         ffmpeg,
         "-y",
         *compiled.video_inputs,
         *compiled.audio_inputs,
-        "-filter_complex", compiled.filter_complex,
-        "-map", compiled.video_map,
     ]
+
+    if use_filter_script:
+        cmd.extend(["-filter_complex_script", filter_file.name])
+    else:
+        cmd.extend(["-filter_complex", compiled.filter_complex])
+
+    cmd.extend(["-map", compiled.video_map])
 
     if compiled.audio_map:
         cmd.extend(["-map", compiled.audio_map, "-c:a", "aac", "-b:a", "192k"])
@@ -1381,11 +1403,19 @@ def run_ffmpeg(
         print(" ".join(cmd))
         print()
 
-    result = subprocess.run(cmd, capture_output=not verbose, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=not verbose, text=True)
 
-    if result.returncode != 0:
-        error_msg = result.stderr if result.stderr else "不明なエラー"
-        raise RuntimeError(f"FFmpegエラー:\n{error_msg}")
+        if result.returncode != 0:
+            error_msg = result.stderr if result.stderr else "不明なエラー"
+            raise RuntimeError(f"FFmpegエラー:\n{error_msg}")
+    finally:
+        # 一時ファイルをクリーンアップ
+        if filter_file:
+            try:
+                os.remove(filter_file.name)
+            except Exception:
+                pass
 
 
 def spawn_ffmpeg(
@@ -1407,20 +1437,41 @@ def spawn_ffmpeg(
     Returns:
         subprocess.Popen: FFmpegプロセス（kill可能）
     """
+    import tempfile as _tempfile
+
     ffmpeg = _check_ffmpeg()
 
     if dump_graph:
         with open(dump_graph, "w", encoding="utf-8") as f:
             f.write(compiled.filter_complex.replace(";", ";\n"))
 
+    # Windows のコマンドライン長制限対策: 長いフィルタはファイル経由で渡す
+    filter_file = None
+    use_filter_script = len(compiled.filter_complex) > 4000
+
+    if use_filter_script:
+        filter_file = _tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".txt",
+            delete=False,
+            encoding="utf-8"
+        )
+        filter_file.write(compiled.filter_complex)
+        filter_file.close()
+
     cmd = [
         ffmpeg,
         "-y",
         *compiled.video_inputs,
         *compiled.audio_inputs,
-        "-filter_complex", compiled.filter_complex,
-        "-map", compiled.video_map,
     ]
+
+    if use_filter_script:
+        cmd.extend(["-filter_complex_script", filter_file.name])
+    else:
+        cmd.extend(["-filter_complex", compiled.filter_complex])
+
+    cmd.extend(["-map", compiled.video_map])
 
     if compiled.audio_map:
         cmd.extend(["-map", compiled.audio_map, "-c:a", "aac", "-b:a", "192k"])
@@ -1443,6 +1494,10 @@ def spawn_ffmpeg(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE
         )
+
+    # フィルタファイルのクリーンアップは呼び出し側で行うか、プロセス終了後に行う
+    # Popen に filter_file パスを保存しておく
+    proc._filter_script_path = filter_file.name if filter_file else None
 
     return proc
 

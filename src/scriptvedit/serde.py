@@ -238,9 +238,11 @@ def _effect_from_dict(data: Dict[str, Any]) -> Optional[Any]:
             y=_deserialize_value(data.get("y", 0.0)),
         )
     elif effect_type == "fade":
-        return FadeEffect(
-            alpha=_deserialize_value(data.get("alpha", 1.0)),
-        )
+        alpha_val = _deserialize_value(data.get("alpha"))
+        # None の場合はデフォルトで線形フェードイン（0→1）
+        if alpha_val is None:
+            alpha_val = lambda u: u
+        return FadeEffect(alpha=alpha_val)
     elif effect_type == "rotate_to":
         return RotateToEffect(
             angle=_deserialize_value(data.get("angle", 0.0)),
