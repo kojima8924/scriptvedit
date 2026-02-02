@@ -546,7 +546,7 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
                 alpha_expr = _clamp_expr_if(alpha_expr, 0, 1)
                 filters.append(
                     f"{out_label}format=rgba,"
-                    f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='a(X,Y)*({alpha_expr})'"
+                    f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({alpha_expr})'"
                     f"{new_label}"
                 )
             else:
@@ -1109,7 +1109,7 @@ def _build_video_filter_windowed(
                 alpha_expr = _clamp_expr_if(alpha_expr, 0, 1)
                 filters.append(
                     f"{out_label}format=rgba,"
-                    f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='a(X,Y)*({alpha_expr})'"
+                    f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({alpha_expr})'"
                     f"{new_label}"
                 )
             else:
