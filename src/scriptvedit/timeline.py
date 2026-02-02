@@ -16,6 +16,9 @@ class VideoEntry:
     start_time: float
     duration: float
     effects: list
+    layer: int = 0       # レイヤー（大きいほど手前に描画）
+    order: int = 0       # 追加順序（同一layer内での重なり順）
+    offset: float = 0.0  # 素材内開始位置（秒）
 
 
 @dataclass
@@ -37,14 +40,38 @@ class Timeline:
         self.video_entries: list[VideoEntry] = []
         self.audio_entries: list[AudioEntry] = []
         self._video_current_time: float = 0.0
+        self._video_order_counter: int = 0  # 追加順序カウンタ
         self.width: int = 1920
         self.height: int = 1080
         self.fps: int = 30
         self.background_color: str = "black"
         self.curve_samples: int = 60  # callable エフェクトのサンプリング数
 
-    def add_video(self, media: "Media", duration: float, effects: list, start: Optional[float] = None) -> None:
-        """映像をタイムラインに追加"""
+    def add_video(
+        self,
+        media: "Media",
+        duration: float,
+        effects: list,
+        start: Optional[float] = None,
+        layer: int = 0,
+        offset: float = 0.0
+    ) -> None:
+        """映像をタイムラインに追加
+
+        Args:
+            media: メディアオブジェクト
+            duration: 表示時間（秒）
+            effects: エフェクトのリスト
+            start: タイムライン上の開始時間（秒）。省略時は前のメディアの終了後
+            layer: レイヤー（大きいほど手前に描画）
+            offset: 素材内開始位置（秒）
+        """
+        # バリデーション
+        if duration <= 0:
+            raise ValueError(f"duration は正の値である必要があります: {duration}")
+        if offset < 0:
+            raise ValueError(f"offset は0以上である必要があります: {offset}")
+
         if start is None:
             start_time = self._video_current_time
             self._video_current_time += duration
@@ -56,8 +83,12 @@ class Timeline:
             media=media,
             start_time=start_time,
             duration=duration,
-            effects=effects
+            effects=effects,
+            layer=layer,
+            order=self._video_order_counter,
+            offset=offset
         )
+        self._video_order_counter += 1
         self.video_entries.append(entry)
 
     def add_audio(self, audio: "Audio", duration: float, start: Optional[float] = None) -> None:
@@ -76,6 +107,7 @@ class Timeline:
         self.video_entries.clear()
         self.audio_entries.clear()
         self._video_current_time = 0.0
+        self._video_order_counter = 0
 
     @property
     def total_duration(self) -> float:

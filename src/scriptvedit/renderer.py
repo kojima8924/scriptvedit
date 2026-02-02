@@ -177,7 +177,11 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
         f"d={timeline.total_duration}:r={timeline.fps}[base]"
     )
 
-    for i, entry in enumerate(video_entries):
+    # レイヤー順にソート（layer昇順、同一layerはorder昇順）
+    # 後段のoverlayほど上に描画されるため、layerが大きいものが後になる
+    sorted_entries = sorted(video_entries, key=lambda e: (e.layer, e.order))
+
+    for i, entry in enumerate(sorted_entries):
         media = entry.media
         input_idx = i
 
@@ -256,9 +260,9 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
                 f"colorkey={tf.chromakey_color}:{tf.chromakey_similarity}:{tf.chromakey_blend}"
             )
 
-        # 7. トリムと PTS オフセット（start>0 対応）
-        # ストリームを duration 分だけ切り出し、PTS をタイムライン時刻に合わせる
-        filter_chain.append(f"trim=duration={entry.duration}")
+        # 7. トリムと PTS オフセット（start>0 対応、素材内offset対応）
+        # ストリームを offset 位置から duration 分だけ切り出し、PTS をタイムライン時刻に合わせる
+        filter_chain.append(f"trim=start={entry.offset}:duration={entry.duration}")
         filter_chain.append(f"setpts=PTS-STARTPTS+{entry.start_time}/TB")
 
         out_label = next_label()

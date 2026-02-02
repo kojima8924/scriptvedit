@@ -392,20 +392,36 @@ class Media:
             )
         return self
 
-    def show(self, time: float, effects: Optional[list] = None, start: Optional[float] = None) -> "Media":
+    def show(
+        self,
+        time: float,
+        effects: Optional[list] = None,
+        start: Optional[float] = None,
+        layer: int = 0,
+        offset: float = 0.0
+    ) -> "Media":
         """
         指定時間表示する（グローバルタイムラインに登録）
 
         Args:
             time: 表示時間（秒）
             effects: 適用するエフェクトのリスト
-            start: 開始時間（秒）。省略時は前のメディアの終了後
+            start: タイムライン上の開始時間（秒）。省略時は前のメディアの終了後
+            layer: レイヤー（大きいほど手前に描画）
+            offset: 素材内開始位置（秒）。動画の途中から再生する場合に使用
 
         Returns:
             self（メソッドチェーン用）
         """
         from .timeline import get_timeline
-        get_timeline().add_video(self, duration=time, effects=effects or [], start=start)
+        get_timeline().add_video(
+            self,
+            duration=time,
+            effects=effects or [],
+            start=start,
+            layer=layer,
+            offset=offset
+        )
         return self
 
 
