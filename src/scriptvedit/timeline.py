@@ -2,6 +2,7 @@
 タイムラインを管理するモジュール
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -58,6 +59,7 @@ class Timeline:
         self.height: int = 1080
         self.fps: int = 30
         self.background_color: str = "black"
+        self.strict: bool = False  # 素材尺チェックの厳格モード
         self.curve_samples: int = 60  # callable エフェクトのサンプリング数
 
     def add_video(
@@ -85,6 +87,22 @@ class Timeline:
         if offset < 0:
             raise ValueError(f"offset は0以上である必要があります: {offset}")
 
+        # 素材尺チェック（動画のみ、画像は無限扱い）
+        media_duration = media._get_duration()
+        if media_duration is not None:
+            required = offset + duration
+            eps = 0.01  # 許容誤差
+            if required > media_duration + eps:
+                msg = (
+                    f"素材の長さを超えています: "
+                    f"offset({offset}) + duration({duration}) = {required}秒 > "
+                    f"素材尺 {media_duration:.2f}秒 ({media.path.name})"
+                )
+                if self.strict:
+                    raise ValueError(msg)
+                else:
+                    warnings.warn(msg, UserWarning, stacklevel=3)
+
         if start is None:
             start_time = self._video_current_time
             self._video_current_time += duration
@@ -106,6 +124,23 @@ class Timeline:
 
     def add_audio(self, audio: "Audio", duration: float, start: Optional[float] = None) -> None:
         """音声をタイムラインに追加"""
+        # 素材尺チェック
+        try:
+            audio_duration = audio._get_duration()
+            eps = 0.01
+            if duration > audio_duration + eps:
+                msg = (
+                    f"音声の長さを超えています: "
+                    f"duration({duration}秒) > 素材尺 {audio_duration:.2f}秒 ({audio.path.name})"
+                )
+                if self.strict:
+                    raise ValueError(msg)
+                else:
+                    warnings.warn(msg, UserWarning, stacklevel=3)
+        except RuntimeError:
+            # ffprobe がない場合はスキップ
+            pass
+
         start_time = start if start is not None else 0.0
 
         entry = AudioEntry(
@@ -191,9 +226,19 @@ class Timeline:
         height: int = None,
         fps: int = None,
         background_color: str = None,
-        curve_samples: int = None
+        curve_samples: int = None,
+        strict: bool = None
     ) -> None:
-        """タイムラインの設定を変更"""
+        """タイムラインの設定を変更
+
+        Args:
+            width: 出力幅（ピクセル）
+            height: 出力高さ（ピクセル）
+            fps: フレームレート
+            background_color: 背景色
+            curve_samples: callable エフェクトのサンプリング数
+            strict: True の場合、素材尺超過でエラー（デフォルトは警告のみ）
+        """
         if width is not None:
             self.width = width
         if height is not None:
@@ -205,6 +250,8 @@ class Timeline:
         if curve_samples is not None:
             # 10〜240 でクランプ
             self.curve_samples = max(10, min(240, curve_samples))
+        if strict is not None:
+            self.strict = strict
 
 
 # グローバルタイムライン

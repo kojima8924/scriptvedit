@@ -111,6 +111,37 @@ def _get_media_dimensions(path: Path) -> tuple[int, int]:
     return stream["width"], stream["height"]
 
 
+def _get_media_duration(path: Path) -> Optional[float]:
+    """ffprobeを使ってメディアの長さを取得
+
+    画像の場合は None を返す（無限扱い）
+    動画の場合は秒数を返す
+    """
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RuntimeError("ffprobeが見つかりません")
+
+    cmd = [
+        ffprobe, "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "json",
+        str(path)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        return None  # 取得できない場合は None
+
+    try:
+        data = json.loads(result.stdout)
+        duration_str = data.get("format", {}).get("duration")
+        if duration_str:
+            return float(duration_str)
+    except (json.JSONDecodeError, ValueError, KeyError):
+        pass
+
+    return None
+
+
 def _get_chromakey_crop_positions() -> list[str]:
     """クロマキー検出用の四隅crop文字列を生成する（テスト用に分離）
 
@@ -175,12 +206,25 @@ class Media:
         self._show_commands: list[ShowCommand] = []
         self._width: Optional[int] = None
         self._height: Optional[int] = None
+        self._duration: Optional[float] = None
+        self._duration_fetched: bool = False
 
     def _ensure_dimensions(self) -> tuple[int, int]:
         """画像サイズを取得（キャッシュ）"""
         if self._width is None or self._height is None:
             self._width, self._height = _get_media_dimensions(self.path)
         return self._width, self._height
+
+    def _get_duration(self) -> Optional[float]:
+        """メディアの長さを取得（キャッシュ）
+
+        画像の場合は None を返す（無限扱い）
+        動画の場合は秒数を返す
+        """
+        if not self._duration_fetched:
+            self._duration = _get_media_duration(self.path)
+            self._duration_fetched = True
+        return self._duration
 
     def resize(
         self,
