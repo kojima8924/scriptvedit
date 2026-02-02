@@ -123,6 +123,47 @@ text("Sample").border(width=2, color="black")
 text("Sample").shadow(x=2, y=2, color="gray")
 ```
 
+## イージング
+
+`ease` モジュールでアニメーションカーブを簡単に指定できます。
+
+```python
+from scriptvedit import *
+
+# イーズインフェードイン
+fade(alpha=ease.lerp(0, 1, ease.in_quad))
+
+# イーズインアウト回転
+rotate_to(angle=ease.lerp(0, 360, ease.in_out_cubic))
+
+# イーズアウトフェードアウト
+fade(alpha=ease.lerp(1, 0, ease.out_quad))
+
+# スケールアニメーション
+scale(sx=ease.lerp(0.5, 1.0, ease.in_out_sine))
+```
+
+### 利用可能なイージング関数
+
+| 関数 | 説明 |
+|------|------|
+| `linear` | 線形（デフォルト） |
+| `in_quad` / `out_quad` / `in_out_quad` | 二次関数 |
+| `in_cubic` / `out_cubic` / `in_out_cubic` | 三次関数 |
+| `in_quart` / `out_quart` / `in_out_quart` | 四次関数 |
+| `in_sine` / `out_sine` / `in_out_sine` | サイン |
+| `in_expo` / `out_expo` / `in_out_expo` | 指数関数 |
+
+### ユーティリティ
+
+```python
+# lerp: a から b への補間
+ease.lerp(0, 100, ease.in_quad)  # 0→100 をイーズイン
+
+# inv: in系 → out系 に反転
+ease.inv(ease.in_quad)  # out_quad と同等
+```
+
 ## Breaking Changes
 
 ### v0.2.0
