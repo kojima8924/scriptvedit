@@ -4,11 +4,14 @@
 
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional, Any, Callable, Union
+from typing import Optional, Any, Callable, Union, TYPE_CHECKING
 import subprocess
 import shutil
 import json
 import warnings
+
+if TYPE_CHECKING:
+    from .timeline import Timeline
 
 # Transform の値の型: float または callable（現在値を受け取り新しい値を返す）
 TransformValue = Union[float, Callable[[float], float], None]
@@ -432,6 +435,7 @@ class Media:
 
     def show(
         self,
+        timeline: "Timeline",
         time: float,
         effects: Optional[list] = None,
         start: Optional[float] = None,
@@ -439,9 +443,10 @@ class Media:
         offset: float = 0.0
     ) -> "Media":
         """
-        指定時間表示する（グローバルタイムラインに登録）
+        指定時間表示する（タイムラインに登録）
 
         Args:
+            timeline: 登録先のタイムライン
             time: 表示時間（秒）
             effects: 適用するエフェクトのリスト
             start: タイムライン上の開始時間（秒）。省略時は前のメディアの終了後
@@ -451,8 +456,10 @@ class Media:
         Returns:
             self（メソッドチェーン用）
         """
-        from .timeline import get_timeline
-        get_timeline().add_video(
+        from .timeline import Timeline
+        if not isinstance(timeline, Timeline):
+            raise TypeError("timeline 引数が必要です。Project.timeline を渡してください。")
+        timeline.add_video(
             self,
             duration=time,
             effects=effects or [],
@@ -524,20 +531,28 @@ class Audio:
         self.fade_out = fade_out
         return self
 
-    def play(self, time: Optional[float] = None, start: Optional[float] = None) -> "Audio":
+    def play(
+        self,
+        timeline: "Timeline",
+        time: Optional[float] = None,
+        start: Optional[float] = None
+    ) -> "Audio":
         """
-        音声を再生する（グローバルタイムラインに登録）
+        音声を再生する（タイムラインに登録）
 
         Args:
+            timeline: 登録先のタイムライン
             time: 再生時間（秒）。省略時は音声全体
             start: 開始時間（秒）。省略時は0
 
         Returns:
             self（メソッドチェーン用）
         """
-        from .timeline import get_timeline
+        from .timeline import Timeline
+        if not isinstance(timeline, Timeline):
+            raise TypeError("timeline 引数が必要です。Project.timeline を渡してください。")
         duration = time if time is not None else self._get_duration()
-        get_timeline().add_audio(self, duration=duration, start=start)
+        timeline.add_audio(self, duration=duration, start=start)
         return self
 
 

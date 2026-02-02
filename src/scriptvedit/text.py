@@ -3,9 +3,12 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Union, Callable
+from typing import Optional, Union, Callable, TYPE_CHECKING
 
 from .media import Transform, TransformValue, _chain, _UNSET
+
+if TYPE_CHECKING:
+    from .timeline import Timeline
 
 
 @dataclass
@@ -182,15 +185,17 @@ class TextClip:
 
     def show(
         self,
+        timeline: "Timeline",
         time: float,
         effects: Optional[list] = None,
         start: Optional[float] = None,
         layer: int = 0
     ) -> "TextClip":
         """
-        指定時間表示する（グローバルタイムラインに登録）
+        指定時間表示する（タイムラインに登録）
 
         Args:
+            timeline: 登録先のタイムライン
             time: 表示時間（秒）
             effects: 適用するエフェクトのリスト（fade のみ対応）
             start: タイムライン上の開始時間（秒）
@@ -199,8 +204,10 @@ class TextClip:
         Returns:
             self（メソッドチェーン用）
         """
-        from .timeline import get_timeline
-        get_timeline().add_text(
+        from .timeline import Timeline as TL
+        if not isinstance(timeline, TL):
+            raise TypeError("timeline 引数が必要です。Project.timeline を渡してください。")
+        timeline.add_text(
             self,
             duration=time,
             effects=effects or [],

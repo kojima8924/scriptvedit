@@ -254,20 +254,8 @@ class Timeline:
             self.strict = strict
 
 
-# グローバルタイムライン
-_timeline = Timeline()
-
-
-def get_timeline() -> Timeline:
-    """グローバルタイムラインを取得"""
-    return _timeline
-
-
-def configure(**kwargs) -> None:
-    """タイムラインの設定"""
-    _timeline.configure(**kwargs)
-
-
-def clear() -> None:
-    """タイムラインをクリア"""
-    _timeline.clear()
+# 注意: グローバルタイムラインは廃止されました
+# 代わりに Project クラスを使用してください
+# from scriptvedit import Project
+# p = Project()
+# p.configure(width=1920, height=1080, fps=30)
