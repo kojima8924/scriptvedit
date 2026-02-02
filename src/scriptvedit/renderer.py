@@ -199,50 +199,7 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
             label_idx += 1
             return lbl
 
-        filter_chain = []
-
-        # 1. クロップ
-        if tf.crop_x != 0 or tf.crop_y != 0 or tf.crop_w != 1 or tf.crop_h != 1:
-            filter_chain.append(
-                f"crop=w=iw*{tf.crop_w}:h=ih*{tf.crop_h}:x=iw*{tf.crop_x}:y=ih*{tf.crop_y}"
-            )
-
-        # 2. 反転
-        if tf.flip_h:
-            filter_chain.append("hflip")
-        if tf.flip_v:
-            filter_chain.append("vflip")
-
-        # 3. スケール
-        if tf.scale_x is not None and tf.scale_y is not None:
-            w = int(timeline.width * tf.scale_x)
-            h = int(timeline.height * tf.scale_y)
-            filter_chain.append(f"scale={w}:{h}")
-
-        # 4. 回転（静的）
-        if tf.rotation != 0:
-            angle_rad = tf.rotation * math.pi / 180
-            filter_chain.append(f"format=rgba,rotate={angle_rad}:c=0x00000000:ow=rotw({angle_rad}):oh=roth({angle_rad})")
-
-        # 5. 初期透明度
-        if tf.alpha < 1.0:
-            filter_chain.append(f"format=rgba,colorchannelmixer=aa={tf.alpha}")
-
-        # 6. クロマキー
-        if tf.chromakey_color:
-            filter_chain.append(
-                f"colorkey={tf.chromakey_color}:{tf.chromakey_similarity}:{tf.chromakey_blend}"
-            )
-
-        # 7. トリムと PTS オフセット（start>0 対応）
-        # ストリームを duration 分だけ切り出し、PTS をタイムライン時刻に合わせる
-        filter_chain.append(f"trim=duration={entry.duration}")
-        filter_chain.append(f"setpts=PTS-STARTPTS+{entry.start_time}/TB")
-
-        out_label = next_label()
-        filters.append(f"{stream}{','.join(filter_chain)}{out_label}")
-
-        # エフェクト収集
+        # エフェクト収集（filter_chain 構築前に行い、二重適用を防ぐ）
         move_effect = None
         fade_effect = None
         rotate_effect = None
@@ -264,34 +221,58 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
             elif isinstance(effect, ShakeEffect):
                 shake_effect = effect
 
+        filter_chain = []
+
+        # 1. クロップ
+        if tf.crop_x != 0 or tf.crop_y != 0 or tf.crop_w != 1 or tf.crop_h != 1:
+            filter_chain.append(
+                f"crop=w=iw*{tf.crop_w}:h=ih*{tf.crop_h}:x=iw*{tf.crop_x}:y=ih*{tf.crop_y}"
+            )
+
+        # 2. 反転
+        if tf.flip_h:
+            filter_chain.append("hflip")
+        if tf.flip_v:
+            filter_chain.append("vflip")
+
+        # 3. スケール（scale_effect がある場合はスキップ、動的適用に任せる）
+        if scale_effect is None and tf.scale_x is not None and tf.scale_y is not None:
+            w = int(timeline.width * tf.scale_x)
+            h = int(timeline.height * tf.scale_y)
+            filter_chain.append(f"scale={w}:{h}")
+
+        # 4. 回転（静的）（rotate_effect がある場合はスキップ、動的適用に任せる）
+        if rotate_effect is None and tf.rotation != 0:
+            angle_rad = tf.rotation * math.pi / 180
+            filter_chain.append(f"format=rgba,rotate={angle_rad}:c=0x00000000:ow=rotw({angle_rad}):oh=roth({angle_rad})")
+
+        # 5. 初期透明度
+        if tf.alpha < 1.0:
+            filter_chain.append(f"format=rgba,colorchannelmixer=aa={tf.alpha}")
+
+        # 6. クロマキー
+        if tf.chromakey_color:
+            filter_chain.append(
+                f"colorkey={tf.chromakey_color}:{tf.chromakey_similarity}:{tf.chromakey_blend}"
+            )
+
+        # 7. トリムと PTS オフセット（start>0 対応）
+        # ストリームを duration 分だけ切り出し、PTS をタイムライン時刻に合わせる
+        filter_chain.append(f"trim=duration={entry.duration}")
+        filter_chain.append(f"setpts=PTS-STARTPTS+{entry.start_time}/TB")
+
+        out_label = next_label()
+        filters.append(f"{stream}{','.join(filter_chain)}{out_label}")
+
         # 正規化時間 u = clip((t - start) / duration, 0, 1)
         # setpts で t がタイムライン時刻になっているので、ストリームでも overlay でも同じ式
         u_expr = f"clip((t-{entry.start_time})/{entry.duration},0,1)"
         enable = f"between(t,{entry.start_time},{entry.start_time + entry.duration})"
 
-        n_samples = timeline.curve_samples
+        # サンプル数をクリップ長に合わせる
+        n_samples = min(timeline.curve_samples, max(2, int(entry.duration * timeline.fps) + 1))
 
-        # 回転アニメーション
-        if rotate_effect:
-            if callable(rotate_effect.angle):
-                samples = _sample_callable(rotate_effect.angle, n_samples)
-                angle_deg_expr = _piecewise_linear_expr(u_expr, samples)
-            else:
-                # 線形補間
-                start_deg = tf.rotation
-                end_deg = rotate_effect.angle
-                angle_deg_expr = f"({start_deg}+({end_deg}-{start_deg})*({u_expr}))"
-
-            angle_rad_expr = f"(({angle_deg_expr})*{math.pi}/180)"
-            end_rad = (rotate_effect.angle if not callable(rotate_effect.angle) else 360) * math.pi / 180
-            new_label = next_label()
-            filters.append(
-                f"{out_label}format=rgba,rotate='{angle_rad_expr}':c=0x00000000:ow=rotw({end_rad}):oh=roth({end_rad})"
-                f"{new_label}"
-            )
-            out_label = new_label
-
-        # スケールアニメーション
+        # スケールアニメーション（rotate より前に適用し、適用順序を統一）
         if scale_effect:
             img_w, img_h = media._ensure_dimensions()
             start_sx = tf.scale_x if tf.scale_x is not None else img_w / timeline.width
@@ -332,6 +313,26 @@ def _build_video_filter(timeline, video_entries) -> tuple[list[str], list[str], 
             new_label = next_label()
             filters.append(
                 f"{out_label}scale=w='{w_expr}':h='{h_expr}':eval=frame"
+                f"{new_label}"
+            )
+            out_label = new_label
+
+        # 回転アニメーション（scale の後に適用）
+        if rotate_effect:
+            if callable(rotate_effect.angle):
+                samples = _sample_callable(rotate_effect.angle, n_samples)
+                angle_deg_expr = _piecewise_linear_expr(u_expr, samples)
+            else:
+                # 線形補間
+                start_deg = tf.rotation
+                end_deg = rotate_effect.angle
+                angle_deg_expr = f"({start_deg}+({end_deg}-{start_deg})*({u_expr}))"
+
+            angle_rad_expr = f"(({angle_deg_expr})*{math.pi}/180)"
+            # hypot(iw,ih) を使用して、どの角度でもクロップされないようにする
+            new_label = next_label()
+            filters.append(
+                f"{out_label}format=rgba,rotate='{angle_rad_expr}':c=0x00000000:ow='hypot(iw,ih)':oh='hypot(iw,ih)'"
                 f"{new_label}"
             )
             out_label = new_label
