@@ -22,7 +22,7 @@ from scriptvedit import *
 configure(width=1920, height=1080, fps=30)
 
 # 画像を開いてリサイズ・配置
-img = open("background.jpg")
+img = clip("background.jpg")
 img.resize(sx=1.0, sy=1.0).pos(x=0.5, y=0.5)
 img.show(time=5, start=0)
 

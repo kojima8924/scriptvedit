@@ -487,7 +487,7 @@ class Audio:
         return self
 
 
-def open(path: str) -> Media:
+def clip(path: str) -> Media:
     """
     画像/動画ファイルを開く
 
