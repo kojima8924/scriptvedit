@@ -2,6 +2,10 @@
 
 Python DSL で動画編集スクリプトを記述し、FFmpeg でレンダリングするライブラリ。
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![FFmpeg](https://img.shields.io/badge/FFmpeg-required-green)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
 ## 必要条件
 
 - Python 3.10+
