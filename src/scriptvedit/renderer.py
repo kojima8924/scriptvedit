@@ -100,6 +100,70 @@ class ResolvedTransform:
     flip_v: bool
 
 
+@dataclass
+class RenderContext:
+    """フィルタ構築に必要なレンダリングパラメータ
+
+    _build_video_filter（全体レンダリング）と _build_video_filter_windowed（窓レンダリング）
+    の共通コアで使用するコンテキスト。
+    """
+    out_width: int          # 出力幅
+    out_height: int         # 出力高さ
+    out_fps: int            # 出力FPS
+    out_duration: float     # 背景色の duration
+    background_color: str   # 背景色
+    timeline_width: int     # タイムラインの元幅（aspect比計算用）
+    timeline_height: int    # タイムラインの元高さ（aspect比計算用）
+    curve_samples: int      # エフェクトサンプル数
+    window_start: float = 0.0   # 窓の開始時刻
+    windowed: bool = False      # 窓レンダリングモード
+
+    @property
+    def text_scale_factor(self) -> float:
+        """テキストフォントサイズのスケール係数"""
+        return self.out_height / self.timeline_height
+
+    @staticmethod
+    def from_timeline(timeline: "Timeline") -> "RenderContext":
+        """全体レンダリング用コンテキストを作成"""
+        return RenderContext(
+            out_width=timeline.width,
+            out_height=timeline.height,
+            out_fps=timeline.fps,
+            out_duration=timeline.total_duration,
+            background_color=timeline.background_color,
+            timeline_width=timeline.width,
+            timeline_height=timeline.height,
+            curve_samples=timeline.curve_samples,
+            window_start=0.0,
+            windowed=False,
+        )
+
+    @staticmethod
+    def from_window(
+        timeline: "Timeline",
+        window_start: float,
+        window_duration: float,
+        out_width: int,
+        out_height: int,
+        out_fps: int,
+        curve_samples: int
+    ) -> "RenderContext":
+        """窓レンダリング用コンテキストを作成"""
+        return RenderContext(
+            out_width=out_width,
+            out_height=out_height,
+            out_fps=out_fps,
+            out_duration=window_duration,
+            background_color=timeline.background_color,
+            timeline_width=timeline.width,
+            timeline_height=timeline.height,
+            curve_samples=curve_samples,
+            window_start=window_start,
+            windowed=True,
+        )
+
+
 def _resolve_transform(media, timeline) -> ResolvedTransform:
     """Transform の callable を解決して float に変換する"""
     tf = media.transform
@@ -161,7 +225,7 @@ def _sample_callable(fn: Callable[[float], float], n_samples: int) -> list[float
 
 
 def _piecewise_linear_expr(u_expr: str, values: list[float]) -> str:
-    """区分線形のFFmpeg式を生成する
+    """区分線形のFFmpeg式を生成する（二分探索木でネスト深度O(log n)）
 
     values[0] は u=0 の値、values[-1] は u=1 の値
     """
@@ -173,19 +237,25 @@ def _piecewise_linear_expr(u_expr: str, values: list[float]) -> str:
         v0, v1 = values
         return f"({v0}+({v1}-{v0})*({u_expr}))"
 
-    # 区分線形: if(lte(u,u1), lerp01, if(lte(u,u2), lerp12, ...))
-    # u_i = i / (n-1)
-    expr = str(values[-1])  # 最後の値（デフォルト）
-    for i in range(n - 2, -1, -1):
-        u_i = i / (n - 1)
-        u_next = (i + 1) / (n - 1)
-        v_i = values[i]
-        v_next = values[i + 1]
-        # この区間の線形補間: v_i + (v_next - v_i) * (u - u_i) / (u_next - u_i)
-        slope = (v_next - v_i) / (u_next - u_i) if u_next != u_i else 0
-        lerp = f"({v_i}+{slope}*(({u_expr})-{u_i}))"
-        expr = f"if(lte(({u_expr}),{u_next}),{lerp},{expr})"
-    return expr
+    # 二分探索木で区分線形補間を構築（ネスト深度 O(log n)）
+    # 各セグメント i は [u_i, u_{i+1}] の区間で values[i] → values[i+1] を線形補間
+    def _build_tree(seg_lo: int, seg_hi: int) -> str:
+        if seg_lo == seg_hi:
+            # 葉ノード: 1セグメントの線形補間
+            u_i = seg_lo / (n - 1)
+            u_next = (seg_lo + 1) / (n - 1)
+            v_i = values[seg_lo]
+            v_next = values[seg_lo + 1]
+            slope = (v_next - v_i) / (u_next - u_i) if u_next != u_i else 0
+            return f"({v_i}+{slope}*(({u_expr})-{u_i}))"
+
+        mid = (seg_lo + seg_hi) // 2
+        u_boundary = (mid + 1) / (n - 1)
+        left = _build_tree(seg_lo, mid)
+        right = _build_tree(mid + 1, seg_hi)
+        return f"if(lte(({u_expr}),{u_boundary}),{left},{right})"
+
+    return _build_tree(0, n - 2)
 
 
 def _clamp_expr(expr: str, lo: float, hi: float) -> str:
@@ -273,27 +343,47 @@ def _escape_drawtext(text: str) -> str:
     return text
 
 
-def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[list[str], list[str], str]:
-    """映像用filter_complexを構築する"""
-    if text_entries is None:
-        text_entries = []
+def _build_video_filter_core(
+    timeline: Timeline,
+    video_entries: list,
+    text_entries: list,
+    ctx: RenderContext,
+) -> tuple[list[str], list[str], str]:
+    """映像用filter_complexの共通コア実装
 
+    _build_video_filter と _build_video_filter_windowed の共通ロジック。
+    RenderContext によって全体レンダリングと窓レンダリングを切り替える。
+    """
     inputs = []
     filters = []
     overlay_chain = "[base]"
 
     # 背景を作成
     filters.append(
-        f"color=c={timeline.background_color}:s={timeline.width}x{timeline.height}:"
-        f"d={timeline.total_duration}:r={timeline.fps}[base]"
+        f"color=c={ctx.background_color}:s={ctx.out_width}x{ctx.out_height}:"
+        f"d={ctx.out_duration}:r={ctx.out_fps}[base]"
     )
 
+    # 窓レンダリング時はエントリをフィルタリング
+    if ctx.windowed:
+        window_end = ctx.window_start + ctx.out_duration
+        filtered_video = [
+            e for e in video_entries
+            if e.start_time + e.duration > ctx.window_start and e.start_time < window_end
+        ]
+        filtered_text = [
+            e for e in text_entries
+            if e.start_time + e.duration > ctx.window_start and e.start_time < window_end
+        ]
+    else:
+        filtered_video = list(video_entries)
+        filtered_text = list(text_entries)
+
     # video_entries と text_entries を統合してソート
-    # (entry, type) のタプルで管理
     all_entries = []
-    for entry in video_entries:
+    for entry in filtered_video:
         all_entries.append((entry, "video"))
-    for entry in text_entries:
+    for entry in filtered_text:
         all_entries.append((entry, "text"))
 
     # レイヤー順にソート（layer昇順、同一layerはorder昇順）
@@ -303,22 +393,41 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
     video_input_idx = 0
     overlay_idx = 0
 
+    # テキストフォントスケーリング（プレビュー縮小対応）
+    need_text_scale = ctx.text_scale_factor != 1.0
+
     for entry, entry_type in sorted_entries:
+        # 窓内での相対時刻を計算
+        if ctx.windowed:
+            rel_start = entry.start_time - ctx.window_start
+        else:
+            rel_start = entry.start_time
+        rel_end = rel_start + entry.duration
+
+        # enable clause
+        if ctx.windowed:
+            enable_start = max(0, rel_start)
+            enable_end = min(ctx.out_duration, rel_end)
+        else:
+            enable_start = entry.start_time
+            enable_end = entry.start_time + entry.duration
+        enable = f"between(t,{enable_start},{enable_end})"
+
+        # 正規化時間の基準時刻
+        time_ref = max(0, rel_start) if ctx.windowed else entry.start_time
+
         if entry_type == "text":
             # テキストエントリの処理
             clip = entry.clip
             tf = _resolve_text_transform(clip, timeline)
             style = clip.style
 
-            # enable clause
-            enable = f"between(t,{entry.start_time},{entry.start_time + entry.duration})"
-
-            # 座標計算（W/H ではなく数値を使用）
+            # 座標計算
             pos_x = tf.pos_x
             pos_y = tf.pos_y
             ax, ay = _get_text_anchor_offset(tf.anchor)
-            base_x = f"{pos_x}*{timeline.width}"
-            base_y = f"{pos_y}*{timeline.height}"
+            base_x = f"{pos_x}*{ctx.out_width}"
+            base_y = f"{pos_y}*{ctx.out_height}"
             x_expr = f"({base_x})+({ax})"
             y_expr = f"({base_y})+({ay})"
 
@@ -335,7 +444,13 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
 
             if style.fontfile:
                 dt_params.append(f"fontfile='{style.fontfile}'")
-            dt_params.append(f"fontsize={style.fontsize}")
+
+            # フォントサイズ（プレビュー時はスケーリング）
+            if need_text_scale:
+                scaled_fontsize = max(1, int(style.fontsize * ctx.text_scale_factor))
+                dt_params.append(f"fontsize={scaled_fontsize}")
+            else:
+                dt_params.append(f"fontsize={style.fontsize}")
 
             # fontcolor は透明度なしで設定（透明度は alpha= で統一）
             dt_params.append(f"fontcolor={style.fontcolor}")
@@ -343,15 +458,29 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
             if style.box:
                 dt_params.append("box=1")
                 dt_params.append(f"boxcolor={style.boxcolor}")
-                dt_params.append(f"boxborderw={style.boxborderw}")
+                if need_text_scale:
+                    boxborderw = max(1, int(style.boxborderw * ctx.text_scale_factor))
+                    dt_params.append(f"boxborderw={boxborderw}")
+                else:
+                    dt_params.append(f"boxborderw={style.boxborderw}")
 
             if style.borderw > 0:
-                dt_params.append(f"borderw={style.borderw}")
+                if need_text_scale:
+                    borderw = max(1, int(style.borderw * ctx.text_scale_factor))
+                    dt_params.append(f"borderw={borderw}")
+                else:
+                    dt_params.append(f"borderw={style.borderw}")
                 dt_params.append(f"bordercolor={style.bordercolor}")
 
             if style.shadowx != 0 or style.shadowy != 0:
-                dt_params.append(f"shadowx={style.shadowx}")
-                dt_params.append(f"shadowy={style.shadowy}")
+                if need_text_scale:
+                    shadowx = int(style.shadowx * ctx.text_scale_factor)
+                    shadowy = int(style.shadowy * ctx.text_scale_factor)
+                    dt_params.append(f"shadowx={shadowx}")
+                    dt_params.append(f"shadowy={shadowy}")
+                else:
+                    dt_params.append(f"shadowx={style.shadowx}")
+                    dt_params.append(f"shadowy={style.shadowy}")
                 dt_params.append(f"shadowcolor={style.shadowcolor}")
 
             # 透明度処理（base_alpha と fade_effect を統合）
@@ -360,12 +489,10 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
                 if callable(fade_effect.alpha):
                     # callable fade: サンプリングして piecewise_linear_expr
                     n_samples = min(
-                        timeline.curve_samples,
-                        max(2, int(entry.duration * timeline.fps) + 1)
+                        ctx.curve_samples,
+                        max(2, int(entry.duration * ctx.out_fps) + 1)
                     )
-                    # drawtext では t が使える（秒単位）
-                    # clip() は環境によって使えない場合があるので if でクランプ
-                    u_raw = f"(t-{entry.start_time})/{entry.duration}"
+                    u_raw = f"(t-{time_ref})/{entry.duration}"
                     u_expr_text = _clamp_expr_if(u_raw, 0, 1)
                     samples = _sample_callable(fade_effect.alpha, n_samples)
                     alpha_expr = _piecewise_linear_expr(u_expr_text, samples)
@@ -396,7 +523,7 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
             overlay_idx += 1
             continue
 
-        # video エントリの処理（既存コード）
+        # video エントリの処理
         media = entry.media
         input_idx = video_input_idx
 
@@ -457,8 +584,8 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
 
         # 3. スケール（scale_effect がある場合はスキップ、動的適用に任せる）
         if scale_effect is None and tf.scale_x is not None and tf.scale_y is not None:
-            w = int(timeline.width * tf.scale_x)
-            h = int(timeline.height * tf.scale_y)
+            w = int(ctx.out_width * tf.scale_x)
+            h = int(ctx.out_height * tf.scale_y)
             filter_chain.append(f"scale={w}:{h}")
 
         # 4. 回転（静的）（rotate_effect がある場合はスキップ、動的適用に任せる）
@@ -476,63 +603,71 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
                 f"colorkey={tf.chromakey_color}:{tf.chromakey_similarity}:{tf.chromakey_blend}"
             )
 
-        # 7. トリムと PTS オフセット（start>0 対応、素材内offset対応）
-        # ストリームを offset 位置から duration 分だけ切り出し、PTS をタイムライン時刻に合わせる
+        # 7. トリムと PTS オフセット
         filter_chain.append(f"trim=start={entry.offset}:duration={entry.duration}")
-        filter_chain.append(f"setpts=PTS-STARTPTS+{entry.start_time}/TB")
+        pts_offset = rel_start
+        filter_chain.append(f"setpts=PTS-STARTPTS+{pts_offset}/TB")
 
         out_label = next_label()
         filters.append(f"{stream}{','.join(filter_chain)}{out_label}")
 
-        # 正規化時間 u = clip((t - start) / duration, 0, 1)
-        # setpts で t がタイムライン時刻になっているので、ストリームでも overlay でも同じ式
-        u_expr = f"clip((t-{entry.start_time})/{entry.duration},0,1)"
+        # 正規化時間 u = clip((t - time_ref) / duration, 0, 1)
+        u_expr = f"clip((t-{time_ref})/{entry.duration},0,1)"
         # geq フィルタは clip 関数非対応＋大文字 T を使用
-        u_raw_geq = f"(T-{entry.start_time})/{entry.duration}"
+        u_raw_geq = f"(T-{time_ref})/{entry.duration}"
         u_expr_geq = f"if(lt({u_raw_geq},0),0,if(gt({u_raw_geq},1),1,{u_raw_geq}))"
-        enable = f"between(t,{entry.start_time},{entry.start_time + entry.duration})"
 
         # サンプル数をクリップ長に合わせる
-        n_samples = min(timeline.curve_samples, max(2, int(entry.duration * timeline.fps) + 1))
+        n_samples = min(ctx.curve_samples, max(2, int(entry.duration * ctx.out_fps) + 1))
 
-        # スケールアニメーション（rotate より前に適用し、適用順序を統一）
+        # スケール式の事前計算（scale_effect がある場合）
+        sx_expr = None
+        sy_expr = None
+        max_sx_val = 0.0
+        max_sy_val = 0.0
         if scale_effect:
             img_w, img_h = media._ensure_dimensions()
             start_sx = tf.scale_x if tf.scale_x is not None else img_w / timeline.width
             start_sy = tf.scale_y if tf.scale_y is not None else img_h / timeline.height
+            max_sx_val = abs(start_sx)
+            max_sy_val = abs(start_sy)
 
             # sx の処理
             if callable(scale_effect.sx):
                 sx_samples = _sample_callable(scale_effect.sx, n_samples)
                 sx_expr = _piecewise_linear_expr(u_expr, sx_samples)
+                max_sx_val = max(max_sx_val, max(abs(v) for v in sx_samples))
             elif scale_effect.sx is not None:
                 end_sx = scale_effect.sx
                 sx_expr = f"({start_sx}+({end_sx}-{start_sx})*({u_expr}))"
-            else:
-                sx_expr = None
+                max_sx_val = max(max_sx_val, abs(end_sx))
 
             # sy の処理
             if callable(scale_effect.sy):
                 sy_samples = _sample_callable(scale_effect.sy, n_samples)
                 sy_expr = _piecewise_linear_expr(u_expr, sy_samples)
+                max_sy_val = max(max_sy_val, max(abs(v) for v in sy_samples))
             elif scale_effect.sy is not None:
                 end_sy = scale_effect.sy
                 sy_expr = f"({start_sy}+({end_sy}-{start_sy})*({u_expr}))"
-            else:
-                sy_expr = None
+                max_sy_val = max(max_sy_val, abs(end_sy))
 
             # アスペクト比維持
             aspect = (img_h / img_w) * (timeline.width / timeline.height)
             if sx_expr is not None and sy_expr is None:
                 sy_expr = f"(({sx_expr})*{aspect})"
+                max_sy_val = max(max_sy_val, max_sx_val * aspect)
             elif sy_expr is not None and sx_expr is None:
                 sx_expr = f"(({sy_expr})/{aspect})"
+                max_sx_val = max(max_sx_val, max_sy_val / aspect)
             elif sx_expr is None and sy_expr is None:
                 sx_expr = str(start_sx)
                 sy_expr = str(start_sy)
 
-            w_expr = f"({timeline.width}*({sx_expr}))"
-            h_expr = f"({timeline.height}*({sy_expr}))"
+        # スケールアニメーション
+        if scale_effect:
+            w_expr = f"({ctx.out_width}*({sx_expr}))"
+            h_expr = f"({ctx.out_height}*({sy_expr}))"
             new_label = next_label()
             filters.append(
                 f"{out_label}scale=w='{w_expr}':h='{h_expr}':eval=frame"
@@ -540,19 +675,36 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
             )
             out_label = new_label
 
+            # FFmpeg 8.0 SEGV 回避: scale(eval=frame) + rotate の組み合わせでクラッシュするため
+            # pad(中央配置, eval=frame) + copy でバッファを分離しつつ回転中心を維持
+            if rotate_effect:
+                pad_w = max(2, int(ctx.out_width * max_sx_val) + 2)
+                pad_h = max(2, int(ctx.out_height * max_sy_val) + 2)
+                new_label = next_label()
+                filters.append(
+                    f"{out_label}pad={pad_w}:{pad_h}:({pad_w}-iw)/2:({pad_h}-ih)/2"
+                    f":color=0x00000000:eval=frame"
+                    f"{new_label}"
+                )
+                out_label = new_label
+                new_label = next_label()
+                filters.append(
+                    f"{out_label}copy"
+                    f"{new_label}"
+                )
+                out_label = new_label
+
         # 回転アニメーション（scale の後に適用）
         if rotate_effect:
             if callable(rotate_effect.angle):
                 samples = _sample_callable(rotate_effect.angle, n_samples)
                 angle_deg_expr = _piecewise_linear_expr(u_expr, samples)
             else:
-                # 線形補間
                 start_deg = tf.rotation
                 end_deg = rotate_effect.angle
                 angle_deg_expr = f"({start_deg}+({end_deg}-{start_deg})*({u_expr}))"
 
             angle_rad_expr = f"(({angle_deg_expr})*{math.pi}/180)"
-            # hypot(iw,ih) を使用して、どの角度でもクロップされないようにする
             new_label = next_label()
             filters.append(
                 f"{out_label}format=rgba,rotate='{angle_rad_expr}':c=0x00000000:ow='hypot(iw,ih)':oh='hypot(iw,ih)'"
@@ -604,8 +756,8 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
         pos_x = tf.pos_x
         pos_y = tf.pos_y
         ax, ay = _get_anchor_offset(tf.anchor)
-        base_x = f"{pos_x}*{timeline.width}"
-        base_y = f"{pos_y}*{timeline.height}"
+        base_x = f"{pos_x}*{ctx.out_width}"
+        base_y = f"{pos_y}*{ctx.out_height}"
 
         if move_effect:
             x_callable = callable(move_effect.x)
@@ -614,17 +766,17 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
             if x_callable:
                 x_samples = _sample_callable(move_effect.x, n_samples)
                 x_pos_expr = _piecewise_linear_expr(u_expr, x_samples)
-                x_expr = f"(({x_pos_expr})*{timeline.width})+({ax})"
+                x_expr = f"(({x_pos_expr})*{ctx.out_width})+({ax})"
             else:
-                end_x = f"{move_effect.x}*{timeline.width}"
+                end_x = f"{move_effect.x}*{ctx.out_width}"
                 x_expr = f"({base_x})+({end_x}-({base_x}))*({u_expr})+({ax})"
 
             if y_callable:
                 y_samples = _sample_callable(move_effect.y, n_samples)
                 y_pos_expr = _piecewise_linear_expr(u_expr, y_samples)
-                y_expr = f"(({y_pos_expr})*{timeline.height})+({ay})"
+                y_expr = f"(({y_pos_expr})*{ctx.out_height})+({ay})"
             else:
-                end_y = f"{move_effect.y}*{timeline.height}"
+                end_y = f"{move_effect.y}*{ctx.out_height}"
                 y_expr = f"({base_y})+({end_y}-({base_y}))*({u_expr})+({ay})"
         else:
             x_expr = f"({base_x})+({ax})"
@@ -634,9 +786,9 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
             if callable(shake_effect.intensity):
                 int_samples = _sample_callable(shake_effect.intensity, n_samples)
                 int_expr = _piecewise_linear_expr(u_expr, int_samples)
-                intensity_px = f"({timeline.width}*({int_expr}))"
+                intensity_px = f"({ctx.out_width}*({int_expr}))"
             else:
-                intensity_px = str(shake_effect.intensity * timeline.width)
+                intensity_px = str(shake_effect.intensity * ctx.out_width)
             shake_x = f"({intensity_px})*sin({shake_effect.speed}*2*PI*t)"
             shake_y = f"({intensity_px})*cos({shake_effect.speed}*2*PI*t*1.3)"
             x_expr = f"({x_expr})+({shake_x})"
@@ -655,13 +807,21 @@ def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[lis
         overlay_idx += 1
 
     # 最終出力ラベル
-    if video_entries or text_entries:
+    if filtered_video or filtered_text:
         filters[-1] = filters[-1].rsplit("[", 1)[0] + "[vout]"
         final_label = "[vout]"
     else:
         final_label = "[base]"
 
     return inputs, filters, final_label
+
+
+def _build_video_filter(timeline, video_entries, text_entries=None) -> tuple[list[str], list[str], str]:
+    """映像用filter_complexを構築する（全体レンダリング用）"""
+    if text_entries is None:
+        text_entries = []
+    ctx = RenderContext.from_timeline(timeline)
+    return _build_video_filter_core(timeline, video_entries, text_entries, ctx)
 
 
 def _build_audio_filter(timeline, audio_entries, video_input_count) -> tuple[list[str], list[str], str]:
@@ -768,17 +928,35 @@ def render(
     total_duration = timeline.total_duration
     use_progress = (show_progress or progress_callback is not None) and not verbose
 
+    # Windows のコマンドライン長制限対策: 長いフィルタはファイル経由で渡す
+    import tempfile as _tempfile
+    filter_file = None
+    use_filter_script = len(filter_complex) > 4000
+
+    if use_filter_script:
+        filter_file = _tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".txt",
+            delete=False,
+            encoding="utf-8"
+        )
+        filter_file.write(filter_complex)
+        filter_file.close()
+
     # コマンド構築
     cmd = [
         ffmpeg,
         "-y",
     ]
-    if use_progress:
-        cmd.extend(["-progress", "pipe:1"])
     cmd.extend([
         *video_inputs,
         *audio_inputs,
-        "-filter_complex", filter_complex,
+    ])
+    if use_filter_script:
+        cmd.extend(["-filter_complex_script", filter_file.name])
+    else:
+        cmd.extend(["-filter_complex", filter_complex])
+    cmd.extend([
         "-map", video_out,
     ])
 
@@ -797,43 +975,50 @@ def render(
         print(" ".join(cmd))
         print()
 
-    if use_progress:
-        # 進捗表示モード
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
-        )
-        while True:
-            line = proc.stderr.readline()
-            if not line and proc.poll() is not None:
-                break
-            if line:
-                current_time = _parse_ffmpeg_progress(line)
-                if current_time is not None:
-                    if show_progress:
-                        _print_progress_bar(current_time, total_duration)
-                    if progress_callback:
-                        progress_callback(current_time, total_duration)
+    try:
+        if use_progress:
+            # 進捗表示モード: stderr の time= パターンで進捗を読み取る
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+            while True:
+                line = proc.stderr.readline()
+                if not line and proc.poll() is not None:
+                    break
+                if line:
+                    current_time = _parse_ffmpeg_progress(line)
+                    if current_time is not None:
+                        if show_progress:
+                            _print_progress_bar(current_time, total_duration)
+                        if progress_callback:
+                            progress_callback(current_time, total_duration)
 
-        if show_progress:
-            _print_progress_bar(total_duration, total_duration)
-            print()  # 改行
+            if show_progress:
+                _print_progress_bar(total_duration, total_duration)
+                print()  # 改行
 
-        if proc.returncode != 0:
-            raise RuntimeError(f"FFmpegエラー (exit code {proc.returncode})")
-    else:
-        result = subprocess.run(
-            cmd,
-            capture_output=not verbose,
-            text=True
-        )
+            if proc.returncode != 0:
+                raise RuntimeError(f"FFmpegエラー (exit code {proc.returncode})")
+        else:
+            result = subprocess.run(
+                cmd,
+                capture_output=not verbose,
+                text=True
+            )
 
-        if result.returncode != 0:
-            error_msg = result.stderr if result.stderr else "不明なエラー"
-            raise RuntimeError(f"FFmpegエラー:\n{error_msg}")
+            if result.returncode != 0:
+                error_msg = result.stderr if result.stderr else "不明なエラー"
+                raise RuntimeError(f"FFmpegエラー:\n{error_msg}")
+    finally:
+        if filter_file:
+            try:
+                os.remove(filter_file.name)
+            except Exception:
+                pass
 
     print(f"\nレンダリング完了: {output}")
 
@@ -871,392 +1056,12 @@ def _build_video_filter_windowed(
     out_fps: int,
     curve_samples: int
 ) -> tuple[List[str], List[str], str]:
-    """
-    窓レンダリング対応の映像フィルタを構築する
-
-    Args:
-        timeline: タイムライン
-        video_entries: 映像エントリのリスト
-        text_entries: テキストエントリのリスト
-        window_start: 窓の開始時刻（秒）
-        window_duration: 窓の長さ（秒）
-        out_width: 出力幅
-        out_height: 出力高さ
-        out_fps: 出力FPS
-        curve_samples: エフェクトサンプル数
-
-    Returns:
-        (inputs, filters, final_label)
-    """
-    inputs = []
-    filters = []
-    overlay_chain = "[base]"
-
-    # 背景を作成（窓の長さで生成）
-    filters.append(
-        f"color=c={timeline.background_color}:s={out_width}x{out_height}:"
-        f"d={window_duration}:r={out_fps}[base]"
+    """窓レンダリング対応の映像フィルタを構築する"""
+    ctx = RenderContext.from_window(
+        timeline, window_start, window_duration,
+        out_width, out_height, out_fps, curve_samples
     )
-
-    # 窓内に表示されるエントリのみフィルタリング
-    window_end = window_start + window_duration
-
-    filtered_video = []
-    for entry in video_entries:
-        entry_end = entry.start_time + entry.duration
-        if entry_end > window_start and entry.start_time < window_end:
-            filtered_video.append(entry)
-
-    filtered_text = []
-    for entry in text_entries:
-        entry_end = entry.start_time + entry.duration
-        if entry_end > window_start and entry.start_time < window_end:
-            filtered_text.append(entry)
-
-    # 統合してソート
-    all_entries = []
-    for entry in filtered_video:
-        all_entries.append((entry, "video"))
-    for entry in filtered_text:
-        all_entries.append((entry, "text"))
-
-    sorted_entries = sorted(all_entries, key=lambda e: (e[0].layer, e[0].order))
-
-    video_input_idx = 0
-    overlay_idx = 0
-
-    for entry, entry_type in sorted_entries:
-        # 窓内での相対時刻を計算
-        rel_start = entry.start_time - window_start
-        rel_end = rel_start + entry.duration
-
-        if entry_type == "text":
-            clip = entry.clip
-            tf = _resolve_text_transform(clip, timeline)
-            style = clip.style
-
-            # enable clause（窓内相対時刻）
-            enable_start = max(0, rel_start)
-            enable_end = min(window_duration, rel_end)
-            enable = f"between(t,{enable_start},{enable_end})"
-
-            # 座標計算（出力サイズを使用）
-            pos_x = tf.pos_x
-            pos_y = tf.pos_y
-            ax, ay = _get_text_anchor_offset(tf.anchor)
-            base_x = f"{pos_x}*{out_width}"
-            base_y = f"{pos_y}*{out_height}"
-            x_expr = f"({base_x})+({ax})"
-            y_expr = f"({base_y})+({ay})"
-
-            # フォントサイズをスケール
-            scale_factor = out_height / timeline.height
-            scaled_fontsize = max(1, int(style.fontsize * scale_factor))
-
-            fade_effect = None
-            for effect in entry.effects:
-                if isinstance(effect, FadeEffect):
-                    fade_effect = effect
-                    break
-
-            escaped_text = _escape_drawtext(clip.content)
-            dt_params = [f"text='{escaped_text}'"]
-
-            if style.fontfile:
-                dt_params.append(f"fontfile='{style.fontfile}'")
-            dt_params.append(f"fontsize={scaled_fontsize}")
-            dt_params.append(f"fontcolor={style.fontcolor}")
-
-            if style.box:
-                dt_params.append("box=1")
-                dt_params.append(f"boxcolor={style.boxcolor}")
-                boxborderw = max(1, int(style.boxborderw * scale_factor))
-                dt_params.append(f"boxborderw={boxborderw}")
-
-            if style.borderw > 0:
-                borderw = max(1, int(style.borderw * scale_factor))
-                dt_params.append(f"borderw={borderw}")
-                dt_params.append(f"bordercolor={style.bordercolor}")
-
-            if style.shadowx != 0 or style.shadowy != 0:
-                shadowx = int(style.shadowx * scale_factor)
-                shadowy = int(style.shadowy * scale_factor)
-                dt_params.append(f"shadowx={shadowx}")
-                dt_params.append(f"shadowy={shadowy}")
-                dt_params.append(f"shadowcolor={style.shadowcolor}")
-
-            # 透明度処理
-            base_alpha = tf.alpha
-            if fade_effect:
-                if callable(fade_effect.alpha):
-                    n_samples = min(curve_samples, max(2, int(entry.duration * out_fps) + 1))
-                    # 窓内相対時刻でu計算
-                    u_raw = f"(t-{max(0, rel_start)})/{entry.duration}"
-                    u_expr_text = _clamp_expr_if(u_raw, 0, 1)
-                    samples = _sample_callable(fade_effect.alpha, n_samples)
-                    alpha_expr = _piecewise_linear_expr(u_expr_text, samples)
-                    alpha_expr = _clamp_expr_if(alpha_expr, 0, 1)
-                    if base_alpha < 1.0:
-                        final_alpha_expr = f"({base_alpha})*({alpha_expr})"
-                    else:
-                        final_alpha_expr = alpha_expr
-                    dt_params.append(f"alpha='{final_alpha_expr}'")
-                else:
-                    fade_alpha = max(0.0, min(1.0, fade_effect.alpha))
-                    final_alpha = base_alpha * fade_alpha
-                    dt_params.append(f"alpha={final_alpha}")
-            elif base_alpha < 1.0:
-                dt_params.append(f"alpha={base_alpha}")
-
-            dt_params.append(f"x='{x_expr}'")
-            dt_params.append(f"y='{y_expr}'")
-            dt_params.append(f"enable='{enable}'")
-
-            next_overlay = f"[t{overlay_idx}]"
-            drawtext_filter = f"{overlay_chain}drawtext={':'.join(dt_params)}{next_overlay}"
-            filters.append(drawtext_filter)
-            overlay_chain = next_overlay
-            overlay_idx += 1
-            continue
-
-        # video エントリの処理
-        media = entry.media
-        input_idx = video_input_idx
-
-        if media.path.suffix.lower() in IMAGE_EXTENSIONS:
-            inputs.extend(["-loop", "1", "-i", str(media.path)])
-        else:
-            inputs.extend(["-i", str(media.path)])
-
-        tf = _resolve_transform(media, timeline)
-
-        stream = f"[{input_idx}:v]"
-        label_idx = 0
-        current_overlay_idx = overlay_idx
-
-        def next_label():
-            nonlocal label_idx
-            lbl = f"[v{current_overlay_idx}_{label_idx}]"
-            label_idx += 1
-            return lbl
-
-        move_effect = None
-        fade_effect = None
-        rotate_effect = None
-        scale_effect = None
-        blur_effect = None
-        shake_effect = None
-
-        for effect in entry.effects:
-            if isinstance(effect, MoveEffect):
-                move_effect = effect
-            elif isinstance(effect, FadeEffect):
-                fade_effect = effect
-            elif isinstance(effect, RotateToEffect):
-                rotate_effect = effect
-            elif isinstance(effect, ScaleEffect):
-                scale_effect = effect
-            elif isinstance(effect, BlurEffect):
-                blur_effect = effect
-            elif isinstance(effect, ShakeEffect):
-                shake_effect = effect
-
-        filter_chain = []
-
-        # スケール係数（プレビュー縮小対応）
-        scale_x_factor = out_width / timeline.width
-        scale_y_factor = out_height / timeline.height
-
-        if tf.crop_x != 0 or tf.crop_y != 0 or tf.crop_w != 1 or tf.crop_h != 1:
-            filter_chain.append(
-                f"crop=w=iw*{tf.crop_w}:h=ih*{tf.crop_h}:x=iw*{tf.crop_x}:y=ih*{tf.crop_y}"
-            )
-
-        if tf.flip_h:
-            filter_chain.append("hflip")
-        if tf.flip_v:
-            filter_chain.append("vflip")
-
-        if scale_effect is None and tf.scale_x is not None and tf.scale_y is not None:
-            w = int(out_width * tf.scale_x)
-            h = int(out_height * tf.scale_y)
-            filter_chain.append(f"scale={w}:{h}")
-
-        if rotate_effect is None and tf.rotation != 0:
-            angle_rad = tf.rotation * math.pi / 180
-            filter_chain.append(f"format=rgba,rotate={angle_rad}:c=0x00000000:ow=rotw({angle_rad}):oh=roth({angle_rad})")
-
-        if tf.alpha < 1.0:
-            filter_chain.append(f"format=rgba,colorchannelmixer=aa={tf.alpha}")
-
-        if tf.chromakey_color:
-            filter_chain.append(
-                f"colorkey={tf.chromakey_color}:{tf.chromakey_similarity}:{tf.chromakey_blend}"
-            )
-
-        # トリムとPTSオフセット（窓開始を引く）
-        filter_chain.append(f"trim=start={entry.offset}:duration={entry.duration}")
-        pts_offset = rel_start  # 窓内での開始位置
-        filter_chain.append(f"setpts=PTS-STARTPTS+{pts_offset}/TB")
-
-        out_label = next_label()
-        filters.append(f"{stream}{','.join(filter_chain)}{out_label}")
-
-        # 正規化時間（窓内相対）
-        u_expr = f"clip((t-{max(0, rel_start)})/{entry.duration},0,1)"
-        u_raw_geq = f"(T-{max(0, rel_start)})/{entry.duration}"
-        u_expr_geq = f"if(lt({u_raw_geq},0),0,if(gt({u_raw_geq},1),1,{u_raw_geq}))"
-
-        enable_start = max(0, rel_start)
-        enable_end = min(window_duration, rel_end)
-        enable = f"between(t,{enable_start},{enable_end})"
-
-        n_samples = min(curve_samples, max(2, int(entry.duration * out_fps) + 1))
-
-        # スケールアニメーション
-        if scale_effect:
-            img_w, img_h = media._ensure_dimensions()
-            start_sx = tf.scale_x if tf.scale_x is not None else img_w / timeline.width
-            start_sy = tf.scale_y if tf.scale_y is not None else img_h / timeline.height
-
-            if callable(scale_effect.sx):
-                sx_samples = _sample_callable(scale_effect.sx, n_samples)
-                sx_expr = _piecewise_linear_expr(u_expr, sx_samples)
-            elif scale_effect.sx is not None:
-                end_sx = scale_effect.sx
-                sx_expr = f"({start_sx}+({end_sx}-{start_sx})*({u_expr}))"
-            else:
-                sx_expr = None
-
-            if callable(scale_effect.sy):
-                sy_samples = _sample_callable(scale_effect.sy, n_samples)
-                sy_expr = _piecewise_linear_expr(u_expr, sy_samples)
-            elif scale_effect.sy is not None:
-                end_sy = scale_effect.sy
-                sy_expr = f"({start_sy}+({end_sy}-{start_sy})*({u_expr}))"
-            else:
-                sy_expr = None
-
-            aspect = (img_h / img_w) * (timeline.width / timeline.height)
-            if sx_expr is not None and sy_expr is None:
-                sy_expr = f"(({sx_expr})*{aspect})"
-            elif sy_expr is not None and sx_expr is None:
-                sx_expr = f"(({sy_expr})/{aspect})"
-            elif sx_expr is None and sy_expr is None:
-                sx_expr = str(start_sx)
-                sy_expr = str(start_sy)
-
-            w_expr = f"({out_width}*({sx_expr}))"
-            h_expr = f"({out_height}*({sy_expr}))"
-            new_label = next_label()
-            filters.append(
-                f"{out_label}scale=w='{w_expr}':h='{h_expr}':eval=frame{new_label}"
-            )
-            out_label = new_label
-
-        if rotate_effect:
-            if callable(rotate_effect.angle):
-                samples = _sample_callable(rotate_effect.angle, n_samples)
-                angle_deg_expr = _piecewise_linear_expr(u_expr, samples)
-            else:
-                start_deg = tf.rotation
-                end_deg = rotate_effect.angle
-                angle_deg_expr = f"({start_deg}+({end_deg}-{start_deg})*({u_expr}))"
-
-            angle_rad_expr = f"(({angle_deg_expr})*{math.pi}/180)"
-            new_label = next_label()
-            filters.append(
-                f"{out_label}format=rgba,rotate='{angle_rad_expr}':c=0x00000000:ow='hypot(iw,ih)':oh='hypot(iw,ih)'{new_label}"
-            )
-            out_label = new_label
-
-        if blur_effect:
-            if callable(blur_effect.amount):
-                samples = _sample_callable(blur_effect.amount, n_samples)
-                blur_expr = _piecewise_linear_expr(u_expr, samples)
-            else:
-                blur_expr = f"({blur_effect.amount}*({u_expr}))"
-            blur_expr = f"max(0,{blur_expr})"
-            new_label = next_label()
-            filters.append(f"{out_label}gblur=sigma='{blur_expr}'{new_label}")
-            out_label = new_label
-
-        if fade_effect:
-            new_label = next_label()
-            if callable(fade_effect.alpha):
-                samples = _sample_callable(fade_effect.alpha, n_samples)
-                alpha_expr = _piecewise_linear_expr(u_expr_geq, samples)
-                alpha_expr = _clamp_expr_if(alpha_expr, 0, 1)
-                filters.append(
-                    f"{out_label}format=rgba,"
-                    f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({alpha_expr})'"
-                    f"{new_label}"
-                )
-            else:
-                alpha = max(0.0, min(1.0, fade_effect.alpha))
-                filters.append(
-                    f"{out_label}format=rgba,colorchannelmixer=aa={alpha}{new_label}"
-                )
-            out_label = new_label
-
-        # オーバーレイ位置（出力サイズ基準）
-        pos_x = tf.pos_x
-        pos_y = tf.pos_y
-        ax, ay = _get_anchor_offset(tf.anchor)
-        base_x = f"{pos_x}*{out_width}"
-        base_y = f"{pos_y}*{out_height}"
-
-        if move_effect:
-            if callable(move_effect.x):
-                x_samples = _sample_callable(move_effect.x, n_samples)
-                x_pos_expr = _piecewise_linear_expr(u_expr, x_samples)
-                x_expr = f"(({x_pos_expr})*{out_width})+({ax})"
-            else:
-                end_x = f"{move_effect.x}*{out_width}"
-                x_expr = f"({base_x})+({end_x}-({base_x}))*({u_expr})+({ax})"
-
-            if callable(move_effect.y):
-                y_samples = _sample_callable(move_effect.y, n_samples)
-                y_pos_expr = _piecewise_linear_expr(u_expr, y_samples)
-                y_expr = f"(({y_pos_expr})*{out_height})+({ay})"
-            else:
-                end_y = f"{move_effect.y}*{out_height}"
-                y_expr = f"({base_y})+({end_y}-({base_y}))*({u_expr})+({ay})"
-        else:
-            x_expr = f"({base_x})+({ax})"
-            y_expr = f"({base_y})+({ay})"
-
-        if shake_effect:
-            if callable(shake_effect.intensity):
-                int_samples = _sample_callable(shake_effect.intensity, n_samples)
-                int_expr = _piecewise_linear_expr(u_expr, int_samples)
-                intensity_px = f"({out_width}*({int_expr}))"
-            else:
-                intensity_px = str(shake_effect.intensity * out_width)
-            shake_x = f"({intensity_px})*sin({shake_effect.speed}*2*PI*t)"
-            shake_y = f"({intensity_px})*cos({shake_effect.speed}*2*PI*t*1.3)"
-            x_expr = f"({x_expr})+({shake_x})"
-            y_expr = f"({y_expr})+({shake_y})"
-
-        next_overlay = f"[mix{overlay_idx}]"
-        overlay_filter = (
-            f"{overlay_chain}{out_label}overlay="
-            f"x='{x_expr}':y='{y_expr}':"
-            f"enable='{enable}'"
-            f"{next_overlay}"
-        )
-        filters.append(overlay_filter)
-        overlay_chain = next_overlay
-        video_input_idx += 1
-        overlay_idx += 1
-
-    if filtered_video or filtered_text:
-        filters[-1] = filters[-1].rsplit("[", 1)[0] + "[vout]"
-        final_label = "[vout]"
-    else:
-        final_label = "[base]"
-
-    return inputs, filters, final_label
+    return _build_video_filter_core(timeline, video_entries, text_entries, ctx)
 
 
 def _build_audio_filter_windowed(
@@ -1466,7 +1271,6 @@ def run_ffmpeg(
     cmd = [
         ffmpeg,
         "-y",
-        "-progress", "pipe:1",  # 進捗を stdout に出力
         *compiled.video_inputs,
         *compiled.audio_inputs,
     ]
@@ -1506,15 +1310,14 @@ def run_ffmpeg(
 
     try:
         if use_progress and not verbose:
-            # 進捗表示モード: stderr をリアルタイムで読む
+            # 進捗表示モード: stderr の time= パターンで進捗を読み取る
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1
             )
-            last_time = 0.0
             while True:
                 line = proc.stderr.readline()
                 if not line and proc.poll() is not None:
@@ -1522,7 +1325,6 @@ def run_ffmpeg(
                 if line:
                     current_time = _parse_ffmpeg_progress(line)
                     if current_time is not None:
-                        last_time = current_time
                         if show_progress:
                             _print_progress_bar(current_time, total_duration)
                         if progress_callback:

@@ -760,9 +760,10 @@ class TestNSamplesAdjustment:
         _, filters, _ = _build_video_filter(timeline, [entry])
         filter_str = ";".join(filters)
 
-        # min(60, 301) = 60 サンプル → if(lte が 59回
+        # min(60, 301) = 60 サンプル → 59 セグメント
+        # 二分探索木: 内部ノード数 = 葉数 - 1 = 59 - 1 = 58 回の if(lte
         lte_count = filter_str.count("if(lte")
-        assert lte_count == 59, f"curve_samples=60 のとき if(lte は 59 回のはずが {lte_count} 回"
+        assert lte_count == 58, f"curve_samples=60 のとき if(lte は 58 回のはずが {lte_count} 回"
 
 
 class TestUnsetSentinel:
