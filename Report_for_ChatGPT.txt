@@ -1,0 +1,232 @@
+============================================================
+  scriptvedit2 プロジェクト状況レポート (Claude Code → ChatGPT)
+  作成日: 2026-02-09
+============================================================
+
+■ プロジェクト概要
+  Python DSL で動画を構成し ffmpeg でレンダリングするツール。
+  「1ファイル = 1レイヤー」アーキテクチャを採用。
+  main.py がオーケストレータ、各レイヤーは独立した .py ファイル。
+
+■ ファイル構成
+  scriptvedit2/
+  ├── scriptvedit.py   ← コアライブラリ (561行)
+  ├── main.py          ← オーケストレータ (デモ用)
+  ├── bg.py            ← 背景レイヤー (デモ用)
+  ├── onigiri.py       ← おにぎりレイヤー (デモ用)
+  ├── test/            ← テスト01〜11 (各test##_main.py + レイヤーファイル群)
+  └── *.png, *.jpg     ← 素材画像 (変更禁止)
+
+■ コミット履歴 (古い順)
+  9ea9b69 初期コミット: DSLベースの動画構成ツール
+  161ee8f プリセット記法の追加とTransform関数からtarget引数を除去
+  84750c6 DSLを <= 演算子に統一（破壊的変更）
+  129c334 レイヤー記法を obj.time(6) <= effect_chain の1行形式に統一
+  0c12e42 pos廃止→move Effect統合、media_type導入、cache機能追加
+  72a91bf 画像キャッシュの透過対応と1ファイル1レイヤーテスト10件追加
+  ★未コミット: anchor/pause/until/2パス機能 + test11
+
+============================================================
+■ DSL記法 (現在の最新仕様)
+============================================================
+
+  ◆ オーケストレータ (main.py)
+    from scriptvedit import *
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("bg.py", priority=0)
+    p.layer("onigiri.py", priority=1)
+    p.render("output.mp4")
+
+  ◆ レイヤーファイル (1ファイル=1レイヤー)
+    from scriptvedit import *
+    obj = Object("image.png")
+    obj <= resize(sx=0.3, sy=0.3)                    # Transform適用
+    obj.time(6) <= move(x=0.5, y=0.5, anchor="center") & scale(0.5) & fade(alpha=0)
+
+  ◆ 演算子
+    obj <= Transform/TransformChain     ... Transform適用 (resize等)
+    obj.time(N) <= Effect/EffectChain   ... 時間+Effect適用 (move, scale, fade)
+    Transform | Transform               ... TransformChain
+    Effect & Effect                      ... EffectChain
+
+  ◆ Transform関数
+    resize(sx=倍率, sy=倍率)
+
+  ◆ Effect関数
+    move(x=0.5, y=0.5, anchor="center")             ... 固定位置
+    move(from_x=0.1, from_y=0.9, to_x=0.5, to_y=0.5, anchor="center") ... アニメーション
+    scale(value)    ... value → 1.0 にアニメーション (0.5なら小→大)
+    fade(alpha=0)   ... alpha → 1.0 にアニメーション (0なら透明→不透明)
+
+  ◆ キャッシュ機能
+    cached = obj.cache("cache.png")         ... 透過PNG出力 (背景なし)
+    cached = obj.cache("cache.mp4")         ... 動画出力 (背景あり)
+    cached.time(5) <= move(...) & scale(...)
+
+============================================================
+■ 【最新】 anchor/pause/until 機能 (未コミット)
+============================================================
+
+  ファイル跨ぎのタイムライン同期機能。2パス(plan→render)アーキテクチャ。
+
+  ◆ anchor(name)
+    レイヤー内の現在の累積時刻を名前付きアンカーとして登録。
+    レンダリングには影響しない（マーカーのみ）。
+
+    例: obj.time(3) <= move(...)
+        anchor("scene1_done")     # ← この時点 t=3 を記録
+
+  ◆ pause.time(N)
+    非描画のタイムラインアイテム。N秒間、何も描画せず時間だけ進む。
+
+    例: pause.time(2)             # 2秒間の空白
+
+  ◆ pause.until(name)
+    アンカー時刻まで待機する非描画アイテム。
+    durationがアンカー解決時に自動計算される。
+
+    例: pause.until("scene1_done")  # anchor("scene1_done")の時刻まで待つ
+
+  ◆ obj.until(name)
+    Objectのdurationをアンカー時刻まで伸長。
+    .time(N) の代わりに使う。
+
+    例: bg.until("sync") <= move(x=0.5, y=0.5, anchor="center")
+
+  ◆ 2パスアーキテクチャ
+    render()呼び出し時:
+    1. Plan pass: _resolve_anchors() で反復走査によりアンカー→until を解決
+       - max_iter = len(layers) + 2 (無限ループ防止)
+       - 収束したら早期break
+       - 未定義アンカー参照はRuntimeError
+    2. Render pass: ffmpegコマンド生成・実行
+
+  ◆ DSL使用例 (test11)
+    --- test11_maku.py (priority=0) ---
+    maku = Object("../pattern_teishiki_maku.png")
+    maku <= resize(sx=1, sy=1)
+    maku.time(3) <= move(x=0.5, y=0.5, anchor="center")
+    anchor("curtain_done")
+
+    --- test11_oni.py (priority=1) ---
+    pause.until("curtain_done")
+    oni = Object("../onigiri_tenmusu.png")
+    oni <= resize(sx=0.4, sy=0.4)
+    oni.time(3) <= move(x=0.5, y=0.5, anchor="center") & scale(0.5) & fade(alpha=0)
+
+    結果: 定式幕が0〜3秒表示 → おにぎりが3〜6秒表示（同期動作）
+
+============================================================
+■ クラス構成 (scriptvedit.py 561行)
+============================================================
+
+  Project           ... オーケストレータ。layer(), render(), cache系, _resolve_anchors()
+  Object            ... 画像/動画オブジェクト。transforms[], effects[], .time(), .until(), .cache()
+  Pause             ... 非描画タイムラインアイテム。.time(), .until()
+  _AnchorMarker     ... アンカー位置マーカー（内部クラス）
+  _PauseFactory     ... pause.time()/pause.until() のファクトリ
+  Transform         ... resize等の変形。__or__ で TransformChain 生成
+  TransformChain    ... 複数Transformのチェーン
+  Effect            ... move/scale/fade等のエフェクト。__and__ で EffectChain 生成
+  EffectChain       ... 複数Effectのチェーン
+
+  グローバル:
+  pause = _PauseFactory()   ... DSLで pause.time(N) / pause.until(name) として使用
+
+============================================================
+■ レンダリングパイプライン
+============================================================
+
+  1. Project.layer(file, priority)
+     → exec() でレイヤーファイルを実行
+     → Object/Pause/_AnchorMarker が Project.objects に自動登録
+     → priority を付与
+
+  2. Project.render(output)
+     → _resolve_anchors() [plan pass]
+       - 全レイヤーの objects を反復走査
+       - _AnchorMarker → anchors dict に時刻を記録
+       - until 付きアイテム → anchor時刻から duration を自動計算
+       - start_time を全アイテムに設定
+       - 収束まで繰り返し（max_iter回）
+     → _calc_total_duration()
+       - 各レイヤーの合計durationの最大値
+     → _build_ffmpeg_cmd() [render pass]
+       - Object のみ抽出 (Pause/_AnchorMarker 除外)
+       - priority 昇順でソート (z-order)
+       - 各Object: 入力追加 → フィルタ生成 → overlay
+       - enable='between(t,start,end)' で時間制御
+     → ffmpeg 実行
+
+  ffmpeg filter_complex 構造:
+    [0:v] = 背景色 (color source)
+    [N:v] = 各Object入力 (image: -loop 1, video: そのまま)
+    各Object: scale(resize) → scale(anim) → geq(fade) → overlay
+
+============================================================
+■ テスト一覧 (test/ ディレクトリ)
+============================================================
+
+  test01: bg(石垣)+おにぎり対角移動+fade          5秒 darkred   PASS
+  test02: 定式幕+cafe scale+fade                  4秒 black     PASS
+  test03: 3レイヤーmoveアニメーション               5秒 black     PASS
+  test04: 画像キャッシュ透過テスト                  3秒 white     PASS
+  test05: 静的表示(エフェクトなし)                  2秒 green     PASS
+  test06: 大スケール 3.0→1.0                       3秒 olive     PASS
+  test07: 3レイヤー横並び                           4秒 navy      PASS
+  test08: from/to アニメーション左→右               5秒 darkgreen PASS
+  test09: 4レイヤー四隅→中央                        4秒 gray      PASS
+  test10: 画像キャッシュ+動画合成                    5秒 purple    PASS
+  test11: anchor/pause.until クロスレイヤー同期      6秒 darkblue  PASS
+
+  ※ test10の開始フレーム(t=0)で定式幕が見えない現象あり。
+    ffmpegのフレーム抽出タイミングの問題（enable='between(t,0,5)'が
+    t=0ジャストで未発火）であり、scriptvedit.pyのバグではない。
+
+============================================================
+■ 既知の制約・注意点
+============================================================
+
+  1. Effect のアニメーション方向は「指定値 → 1.0」で固定
+     scale(0.5) = 小→等倍、fade(alpha=0) = 透明→不透明
+     逆方向（大→小、不透明→透明）は未実装
+
+  2. overlay の enable='between()' で t=0 ジャストが拾われない場合がある
+     (ffmpegの浮動小数点精度の問題)
+
+  3. cache() + until() の組み合わせ:
+     cache() は exec 時（render前）に実行されるため、until で duration が
+     未確定の場合、動画キャッシュの長さは fallback の 5秒になる。
+     画像キャッシュ (.png) なら問題なし。
+
+  4. 同一レイヤー内のオブジェクトは順次タイムライン（直列配置）
+     並列配置（同時表示）するには別レイヤーファイルにする
+
+  5. anchor 循環参照の検出は未実装
+     （反復回数上限で無限ループは防止しているが、明示的エラーは出ない）
+
+  6. Windows環境 (Python 3.10, ffmpeg 8.0) でのみテスト済み
+
+============================================================
+■ 素材ファイル (変更禁止)
+============================================================
+
+  bg_pattern_ishigaki.jpg          石垣模様の背景
+  onigiri_tenmusu.png              天むすおにぎり (透過PNG)
+  figure_cafe.png                  カフェの人物 (透過PNG)
+  pattern_teishiki_maku.png        定式幕 (緑/橙/黒の縦縞)
+  pop_shinsyakaijin_ganbare.png    がんばれポップ (透過PNG)
+  virus_message_fuyoufukyu_gaisyutsu.png  ウイルスメッセージ (透過PNG)
+
+============================================================
+■ 開発環境
+============================================================
+
+  OS: Windows 11
+  Python: 3.10
+  ffmpeg: 8.0-full_build
+  Shell: Git Bash / PowerShell
+  Git hooks: pre-push で自動ZIP生成 (scriptvedit2.zip, _N.zip)
+
+============================================================

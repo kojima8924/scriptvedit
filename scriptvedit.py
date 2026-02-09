@@ -28,6 +28,7 @@ class Project:
         self.background_color = "black"
         self.objects = []
         self._layers = []  # [(start_idx, end_idx, priority)]
+        self._anchors = {}  # anchor name → time
         Project._current = self
 
     def configure(self, **kwargs):
@@ -51,13 +52,50 @@ class Project:
         max_dur = 0
         for start_idx, end_idx, _ in self._layers:
             layer_dur = 0
-            for obj in self.objects[start_idx:end_idx]:
-                if obj.duration is not None:
-                    layer_dur += obj.duration
+            for item in self.objects[start_idx:end_idx]:
+                if isinstance(item, _AnchorMarker):
+                    continue
+                if item.duration is not None:
+                    layer_dur += item.duration
             max_dur = max(max_dur, layer_dur)
         return max_dur if max_dur > 0 else 5
 
+    def _resolve_anchors(self):
+        """反復走査でアンカーとuntilを解決（plan pass）"""
+        max_iter = len(self._layers) + 2
+        for iteration in range(max_iter):
+            changed = False
+            for start_idx, end_idx, _ in self._layers:
+                current_time = 0
+                for item in self.objects[start_idx:end_idx]:
+                    if isinstance(item, _AnchorMarker):
+                        old_val = self._anchors.get(item.name)
+                        self._anchors[item.name] = current_time
+                        if old_val != current_time:
+                            changed = True
+                        continue
+                    item.start_time = current_time
+                    # until解決
+                    until_name = getattr(item, '_until_anchor', None)
+                    if until_name:
+                        anchor_time = self._anchors.get(until_name)
+                        if anchor_time is not None:
+                            new_dur = max(0, anchor_time - current_time)
+                            if item.duration != new_dur:
+                                item.duration = new_dur
+                                changed = True
+                    if item.duration is not None:
+                        current_time += item.duration
+            if not changed:
+                break
+        # 未解決のuntilチェック
+        for item in self.objects:
+            until_name = getattr(item, '_until_anchor', None)
+            if until_name and until_name not in self._anchors:
+                raise RuntimeError(f"未定義のアンカー: '{until_name}'")
+
     def render(self, output_path):
+        self._resolve_anchors()
         if self.duration is None:
             self.duration = self._calc_total_duration()
         cmd = self._build_ffmpeg_cmd(output_path)
@@ -181,16 +219,10 @@ class Project:
             "-i", f"color=c={self.background_color}:s={self.width}x{self.height}:d={self.duration}:r={self.fps}",
         ])
 
-        # タイミング計算（レイヤーごとに独立、各レイヤーは0秒から開始）
-        for start_idx, end_idx, _ in self._layers:
-            current_time = 0
-            for obj in self.objects[start_idx:end_idx]:
-                obj.start_time = current_time
-                if obj.duration is not None:
-                    current_time += obj.duration
-
-        # z-order: priorityでソート（小さい=奥、大きい=手前）
-        sorted_objects = sorted(self.objects, key=lambda o: o.priority)
+        # タイミングは_resolve_anchorsで計算済み
+        # z-order: priorityでソート（Pause/_AnchorMarkerを除外）
+        renderable = [o for o in self.objects if isinstance(o, Object)]
+        sorted_objects = sorted(renderable, key=lambda o: o.priority)
 
         current_base = "[0:v]"
 
@@ -383,6 +415,34 @@ class Effect:
         return f"Effect({self.name}, {self.params})"
 
 
+class _AnchorMarker:
+    """アンカー位置マーカー（タイムライン上の位置を記録、レンダリングなし）"""
+    def __init__(self, name):
+        self.name = name
+        self.duration = None
+        self.start_time = 0
+        self.priority = 0
+
+
+class Pause:
+    """非描画タイムラインアイテム（時間のみ占有、レンダリングなし）"""
+    def __init__(self):
+        self.duration = None
+        self.start_time = 0
+        self.priority = 0
+        self._until_anchor = None
+        if Project._current is not None:
+            Project._current.objects.append(self)
+
+    def time(self, duration):
+        self.duration = duration
+        return self
+
+    def until(self, name):
+        self._until_anchor = name
+        return self
+
+
 class Object:
     def __init__(self, source):
         self.source = source
@@ -392,6 +452,7 @@ class Object:
         self.start_time = 0
         self.priority = 0
         self.media_type = _detect_media_type(source)
+        self._until_anchor = None
         # 現在のProjectに自動登録
         if Project._current is not None:
             Project._current.objects.append(self)
@@ -399,6 +460,11 @@ class Object:
     def time(self, duration):
         """表示時間を設定"""
         self.duration = duration
+        return self
+
+    def until(self, name):
+        """durationをアンカー時刻まで伸長"""
+        self._until_anchor = name
         return self
 
     def __le__(self, rhs):
@@ -432,6 +498,7 @@ class Object:
         cached.start_time = self.start_time
         cached.priority = self.priority
         cached.media_type = _detect_media_type(path)
+        cached._until_anchor = self._until_anchor
         # Projectのobjectsリストで自分をcachedに置換
         if proj is not None and self in proj.objects:
             idx = proj.objects.index(self)
@@ -465,3 +532,30 @@ def fade(**kwargs):
 
 def move(**kwargs):
     return Effect("move", **kwargs)
+
+
+# --- アンカー/同期 ---
+
+def anchor(name):
+    """現在のレイヤー位置にアンカーを登録"""
+    proj = Project._current
+    if proj is None:
+        raise RuntimeError("anchor()にはアクティブなProjectが必要です")
+    marker = _AnchorMarker(name)
+    proj.objects.append(marker)
+
+
+class _PauseFactory:
+    """pause.time(N) / pause.until(name) でPauseを生成するファクトリ"""
+    def time(self, duration):
+        p = Pause()
+        p.duration = duration
+        return p
+
+    def until(self, name):
+        p = Pause()
+        p._until_anchor = name
+        return p
+
+
+pause = _PauseFactory()
