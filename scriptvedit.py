@@ -74,6 +74,35 @@ class Project:
         dur = obj.duration or 5
         is_image_out = _detect_media_type(output_path) == "image"
 
+        if is_image_out:
+            # 画像キャッシュ: 背景なし、Transformのみ適用して透過PNG出力
+            cmd = self._build_image_cache_cmd(obj, output_path)
+        else:
+            # 動画キャッシュ: 背景あり、全Effect適用
+            cmd = self._build_video_cache_cmd(obj, output_path, bg=bg, fps=fps, dur=dur)
+
+        print(f"キャッシュ生成: {output_path}")
+        print(f"  ffmpeg {' '.join(cmd[1:])}")
+        subprocess.run(cmd, check=True)
+        print(f"  完了: {output_path}")
+
+    def _build_image_cache_cmd(self, obj, output_path):
+        """画像キャッシュ: 背景なし、Transformのみ適用して透過PNG出力"""
+        filters = []
+        for t in obj.transforms:
+            if t.name == "resize":
+                sx = t.params.get("sx", 1)
+                sy = t.params.get("sy", 1)
+                filters.append(f"scale=iw*{sx}:ih*{sy}")
+
+        cmd = ["ffmpeg", "-y", "-i", obj.source]
+        if filters:
+            cmd.extend(["-vf", ",".join(filters)])
+        cmd.extend(["-frames:v", "1", "-pix_fmt", "rgba", output_path])
+        return cmd
+
+    def _build_video_cache_cmd(self, obj, output_path, *, bg, fps, dur):
+        """動画キャッシュ: 背景あり、全Effect適用"""
         inputs = []
         filter_parts = []
 
@@ -134,20 +163,13 @@ class Project:
             cmd.extend(["-filter_complex", ";".join(filter_parts)])
             cmd.extend(["-map", out_label])
 
-        if is_image_out:
-            cmd.extend(["-frames:v", "1", "-update", "1", output_path])
-        else:
-            cmd.extend([
-                "-c:v", "libx264",
-                "-t", str(dur),
-                "-pix_fmt", "yuv420p",
-                output_path,
-            ])
-
-        print(f"キャッシュ生成: {output_path}")
-        print(f"  ffmpeg {' '.join(cmd[1:])}")
-        subprocess.run(cmd, check=True)
-        print(f"  完了: {output_path}")
+        cmd.extend([
+            "-c:v", "libx264",
+            "-t", str(dur),
+            "-pix_fmt", "yuv420p",
+            output_path,
+        ])
+        return cmd
 
     def _build_ffmpeg_cmd(self, output_path):
         inputs = []
