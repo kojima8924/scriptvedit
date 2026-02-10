@@ -1,5 +1,5 @@
 # スナップショットテスト: dry_runで生成したffmpegコマンドをスナップショットと比較
-import sys, os, json
+import sys, os, json, shutil
 sys.path.insert(0, "..")
 from scriptvedit import *
 
@@ -7,8 +7,16 @@ SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "snapshots")
 
 
 def normalize_cmd(cmd):
-    """コマンドリストをOS非依存に正規化"""
-    return [c.replace("\\", "/") for c in cmd]
+    """コマンドリスト/辞書をOS非依存に正規化"""
+    if isinstance(cmd, dict):
+        result = {}
+        for k, v in cmd.items():
+            nk = k.replace("\\", "/") if isinstance(k, str) else k
+            result[nk] = normalize_cmd(v)
+        return result
+    if isinstance(cmd, list):
+        return [c.replace("\\", "/") for c in cmd]
+    return cmd
 
 
 def load_snapshot(name):
@@ -138,6 +146,48 @@ def setup_test12():
     return p.render("test12.mp4", dry_run=True)
 
 
+def setup_test13():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test13_percent.py", priority=0)
+    return p.render("test13.mp4", dry_run=True)
+
+def setup_test14():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="darkblue")
+    p.layer("test14_maku.py", priority=0, cache="make")
+    p.layer("test14_oni.py", priority=1)
+    result = p.render("test14.mp4", dry_run=True)
+    return result
+
+def setup_test15():
+    """cache='use' テスト: ダミーキャッシュからの読み込み"""
+    cache_dir = os.path.join(os.path.dirname(__file__), "__cache__")
+    os.makedirs(cache_dir, exist_ok=True)
+    # ダミーwebmファイル（空でよい、dry_runなので実行されない）
+    dummy_webm = os.path.join(cache_dir, "test14_maku.webm")
+    with open(dummy_webm, "wb") as f:
+        f.write(b"\x00")
+    # anchors.json
+    dummy_json = os.path.join(cache_dir, "test14_maku.anchors.json")
+    with open(dummy_json, "w", encoding="utf-8") as f:
+        json.dump({"duration": 3.0, "anchors": {"curtain_done": 3.0}}, f)
+    try:
+        p = Project()
+        p.configure(width=1280, height=720, fps=30, background_color="darkblue")
+        p.layer("test14_maku.py", priority=0, cache="use")
+        p.layer("test14_oni.py", priority=1)
+        return p.render("test15.mp4", dry_run=True)
+    finally:
+        # ダミーファイル削除
+        if os.path.exists(dummy_webm):
+            os.unlink(dummy_webm)
+        if os.path.exists(dummy_json):
+            os.unlink(dummy_json)
+        if os.path.exists(cache_dir) and not os.listdir(cache_dir):
+            os.rmdir(cache_dir)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -151,6 +201,9 @@ ALL_TESTS = [
     ("test10", setup_test10),
     ("test11", setup_test11),
     ("test12", setup_test12),
+    ("test13", setup_test13),
+    ("test14", setup_test14),
+    ("test15", setup_test15),
 ]
 
 

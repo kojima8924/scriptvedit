@@ -1,7 +1,7 @@
 # エラーケーステスト: 各種エラー条件の自動検証
 import sys, os, tempfile
 sys.path.insert(0, "..")
-from scriptvedit import _resolve_param, Project
+from scriptvedit import _resolve_param, Project, P
 
 
 def test_math_sin_in_lambda():
@@ -95,11 +95,50 @@ def test_configure_typo():
         return False, f"メッセージが不適切: {msg}"
 
 
+def test_percent_value():
+    """50%P == 0.5 の確認"""
+    result = 50%P
+    if result == 0.5:
+        return True, f"50%P = {result}"
+    return False, f"50%P = {result} (期待: 0.5)"
+
+
+def test_cache_invalid():
+    """cache='invalid' → ValueError"""
+    p = Project()
+    try:
+        p.layer("dummy.py", cache="invalid")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "invalid" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_cache_use_no_file():
+    """cache='use' でファイル不在 → FileNotFoundError"""
+    p = Project()
+    p.configure(width=320, height=240, fps=1, background_color="black")
+    p.layer("nonexistent_layer.py", cache="use")
+    try:
+        p.render("_tmp.mp4", dry_run=True)
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        msg = str(e)
+        if "キャッシュファイルが見つかりません" in msg:
+            return True, msg.split('\n')[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
     ("同名アンカー異ファイル", test_same_anchor_different_files),
     ("configure typo", test_configure_typo),
+    ("50%P == 0.5", test_percent_value),
+    ("cache='invalid'", test_cache_invalid),
+    ("cache='use' ファイル不在", test_cache_use_no_file),
 ]
 
 

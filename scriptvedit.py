@@ -1,5 +1,6 @@
 import subprocess
 import os
+import json
 import warnings
 import builtins as _builtins
 
@@ -22,6 +23,8 @@ __all__ = [
     "abs", "min", "max", "round", "pow",
     # 定数
     "PI", "E",
+    # DSL糖衣
+    "P",
 ]
 
 
@@ -273,6 +276,20 @@ PI = 3.141592653589793
 E = 2.718281828459045
 
 
+# --- DSL糖衣: パーセント記法 ---
+
+class Percent:
+    """パーセント記法: 50%P → 0.5"""
+    def __rmod__(self, other):
+        if isinstance(other, (int, float)):
+            return other / 100.0
+        return NotImplemented
+    def __repr__(self):
+        return "P"
+
+P = Percent()
+
+
 # --- media_type判定 ---
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -292,6 +309,13 @@ def _detect_media_type(path):
 
 _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
 
+_CACHE_DIR = "__cache__"
+
+def _layer_cache_paths(filename):
+    basename = os.path.splitext(os.path.basename(filename))[0]
+    return (os.path.join(_CACHE_DIR, f"{basename}.webm"),
+            os.path.join(_CACHE_DIR, f"{basename}.anchors.json"))
+
 
 class Project:
     _current = None
@@ -307,7 +331,7 @@ class Project:
         self._layers = []  # [(start_idx, end_idx, priority)]
         self._anchors = {}  # anchor name → time
         self._anchor_defined_in = {}  # anchor name → filename（診断用）
-        self._layer_files = []  # [(filename, priority)]
+        self._layer_specs = []  # [{"filename": str, "priority": int, "cache": str}]
         self._mode = "render"  # "plan" or "render"
         self._current_layer_file = None  # 現在実行中のレイヤーファイル
         Project._current = self
@@ -332,9 +356,11 @@ class Project:
         self._anchors = {}
         self._anchor_defined_in = {}
 
-    def layer(self, filename, priority=0):
+    def layer(self, filename, priority=0, cache="off"):
         """レイヤーファイルを登録（実行はrender時に遅延）"""
-        self._layer_files.append((filename, priority))
+        if cache not in ("off", "auto", "use", "make"):
+            raise ValueError(f"cache引数は 'off','auto','use','make' のいずれか: {cache!r}")
+        self._layer_specs.append({"filename": filename, "priority": priority, "cache": cache})
 
     def _exec_layer(self, filename, priority):
         """レイヤーファイルを実行してobjectsに登録"""
@@ -400,37 +426,49 @@ class Project:
 
     def render(self, output_path, *, dry_run=False):
         self._reset_runtime_state()
+        # cache="use" の事前検証
+        self._validate_cache_specs()
         # Plan pass: アンカー解決（cache模擬、objects破棄）
         self._plan_resolve()
         # Render pass: 本実行（anchors確定済み）
         self.objects = []
         self._layers = []
         self._mode = "render"
-        for filename, priority in self._layer_files:
-            self._exec_layer(filename, priority)
+        for spec in self._layer_specs:
+            if self._should_use_cache(spec):
+                self._load_cached_layer(spec)
+            else:
+                self._exec_layer(spec["filename"], spec["priority"])
         self._resolve_anchors()
         if self.duration is None:
             self.duration = self._calc_total_duration()
         cmd = self._build_ffmpeg_cmd(output_path)
         if dry_run:
-            return cmd
+            cache_cmds = self._collect_cache_cmds()
+            if cache_cmds:
+                return {"main": cmd, "cache": cache_cmds}
+            return cmd  # 後方互換: cache不要ならlistのまま
         print(f"実行コマンド:")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
         print()
         subprocess.run(cmd, check=True)
+        self._generate_pending_caches()
         print(f"\n完了: {output_path}")
 
     def _plan_resolve(self):
         """Plan pass: 固定点反復でアンカーを解決"""
         converged = False
-        max_iterations = len(self._layer_files) + 2
+        max_iterations = len(self._layer_specs) + 2
         for iteration in range(max_iterations):
             old_anchors = dict(self._anchors)
             self.objects = []
             self._layers = []
             self._mode = "plan"
-            for filename, priority in self._layer_files:
-                self._exec_layer(filename, priority)
+            for spec in self._layer_specs:
+                if self._should_use_cache(spec):
+                    self._load_cached_layer(spec)
+                else:
+                    self._exec_layer(spec["filename"], spec["priority"])
             self._resolve_anchors(check_unresolved=False)
             if self._anchors == old_anchors and iteration > 0:
                 converged = True
@@ -464,6 +502,183 @@ class Project:
                 f"定義済みアンカー: {defined}\n"
                 f"参照元:\n" + "\n".join(details)
             )
+
+    def _validate_cache_specs(self):
+        """cache='use' のファイル存在チェック"""
+        for spec in self._layer_specs:
+            if spec["cache"] == "use":
+                webm_path, json_path = _layer_cache_paths(spec["filename"])
+                if not os.path.exists(webm_path):
+                    raise FileNotFoundError(
+                        f"キャッシュファイルが見つかりません: {webm_path}\n"
+                        f"レイヤー '{spec['filename']}' に cache='use' が指定されていますが、"
+                        f"先に cache='make' でキャッシュを生成してください。"
+                    )
+
+    def _should_use_cache(self, spec):
+        """キャッシュ利用判定"""
+        cache = spec["cache"]
+        if cache == "use":
+            return True
+        if cache == "auto":
+            webm_path, _ = _layer_cache_paths(spec["filename"])
+            return os.path.exists(webm_path)
+        return False  # off, make
+
+    def _load_cached_layer(self, spec):
+        """キャッシュからObject生成 + anchors.jsonマージ"""
+        webm_path, json_path = _layer_cache_paths(spec["filename"])
+        start_idx = len(self.objects)
+        # キャッシュwebmをObjectとして生成
+        cached_obj = Object.__new__(Object)
+        cached_obj.source = webm_path
+        cached_obj.transforms = []
+        cached_obj.effects = []
+        cached_obj.duration = None
+        cached_obj.start_time = 0
+        cached_obj.priority = spec["priority"]
+        cached_obj.media_type = "video"
+        cached_obj._until_anchor = None
+        # anchors.jsonからduration/anchorsを読み込み
+        if os.path.exists(json_path):
+            with open(json_path, encoding="utf-8") as f:
+                cache_meta = json.load(f)
+            cached_obj.duration = cache_meta.get("duration")
+            for name, time_val in cache_meta.get("anchors", {}).items():
+                self._anchors[name] = time_val
+                self._anchor_defined_in[name] = spec["filename"]
+        self.objects.append(cached_obj)
+        end_idx = len(self.objects)
+        self._layers.append((start_idx, end_idx, spec["priority"]))
+
+    def _get_layer_data(self, spec_index):
+        """指定レイヤーのオブジェクト群とアンカー群を取得"""
+        spec = self._layer_specs[spec_index]
+        # _layersのインデックスはspec_indexに対応
+        if spec_index >= len(self._layers):
+            return [], {}
+        start_idx, end_idx, _ = self._layers[spec_index]
+        objects = self.objects[start_idx:end_idx]
+        anchors = {}
+        current_time = 0
+        for item in objects:
+            if isinstance(item, _AnchorMarker):
+                anchors[item.name] = current_time
+                continue
+            if item.duration is not None:
+                current_time += item.duration
+        return objects, anchors
+
+    def _collect_cache_cmds(self):
+        """dry_run用のキャッシュ生成コマンド辞書構築"""
+        cache_cmds = {}
+        for i, spec in enumerate(self._layer_specs):
+            if spec["cache"] in ("make", "auto") and not self._should_use_cache(spec):
+                if spec["cache"] == "make" or spec["cache"] == "auto":
+                    if spec["cache"] == "make":
+                        cmd = self._build_layer_cache_cmd(i)
+                        webm_path, _ = _layer_cache_paths(spec["filename"])
+                        cache_cmds[webm_path] = cmd
+        return cache_cmds
+
+    def _generate_pending_caches(self):
+        """実際のキャッシュ生成実行"""
+        for i, spec in enumerate(self._layer_specs):
+            if spec["cache"] == "make":
+                self._render_layer_to_cache(i)
+
+    def _build_layer_cache_cmd(self, spec_index):
+        """レイヤーキャッシュ用ffmpegコマンド（透明webm VP9 alpha）"""
+        spec = self._layer_specs[spec_index]
+        webm_path, _ = _layer_cache_paths(spec["filename"])
+        objects, anchors = self._get_layer_data(spec_index)
+        renderable = [o for o in objects if isinstance(o, Object)]
+
+        dur = self.duration or self._calc_total_duration()
+
+        inputs = []
+        filter_parts = []
+
+        # 入力0: 透明キャンバス
+        inputs.extend([
+            "-f", "lavfi",
+            "-i", f"color=c=black@0.0:s={self.width}x{self.height}:d={dur}:r={self.fps},format=rgba",
+        ])
+
+        current_base = "[0:v]"
+
+        for i, obj in enumerate(renderable):
+            input_idx = i + 1
+
+            if obj.media_type == "image":
+                inputs.extend(["-loop", "1", "-i", obj.source])
+            else:
+                inputs.extend(["-i", obj.source])
+
+            obj_dur = obj.duration or dur
+            start = obj.start_time
+
+            obj_filters = _build_transform_filters(obj)
+            obj_filters.extend(_build_effect_filters(obj, start, obj_dur))
+
+            obj_label = f"[obj{input_idx}]"
+            if obj_filters:
+                filter_parts.append(
+                    f"[{input_idx}:v]{','.join(obj_filters)}{obj_label}"
+                )
+            else:
+                obj_label = f"[{input_idx}:v]"
+
+            x_expr, y_expr = _build_move_exprs(obj, start, obj_dur)
+
+            enable_str = ""
+            if obj.duration is not None:
+                end = start + obj.duration
+                enable_str = f":enable='between(t\\,{start}\\,{end})'"
+
+            out_label = f"[v{input_idx}]"
+            filter_parts.append(
+                f"{current_base}{obj_label}overlay={x_expr}:{y_expr}{enable_str}{out_label}"
+            )
+            current_base = out_label
+
+        cmd = ["ffmpeg", "-y"]
+        cmd.extend(inputs)
+
+        if filter_parts:
+            cmd.extend(["-filter_complex", ";".join(filter_parts)])
+            cmd.extend(["-map", current_base])
+
+        cmd.extend([
+            "-c:v", "libvpx-vp9",
+            "-pix_fmt", "yuva420p",
+            "-b:v", "0",
+            "-crf", "30",
+            "-auto-alt-ref", "0",
+            "-t", str(dur),
+            webm_path,
+        ])
+        return cmd
+
+    def _render_layer_to_cache(self, spec_index):
+        """レイヤーキャッシュ生成実行"""
+        spec = self._layer_specs[spec_index]
+        webm_path, json_path = _layer_cache_paths(spec["filename"])
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+
+        cmd = self._build_layer_cache_cmd(spec_index)
+        print(f"キャッシュ生成: {webm_path}")
+        print(f"  ffmpeg {' '.join(cmd[1:])}")
+        subprocess.run(cmd, check=True)
+        print(f"  完了: {webm_path}")
+
+        # anchors.json書き出し
+        objects, anchors = self._get_layer_data(spec_index)
+        dur = self.duration or self._calc_total_duration()
+        cache_meta = {"duration": dur, "anchors": anchors}
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(cache_meta, f, indent=2, ensure_ascii=False)
+        print(f"  アンカー保存: {json_path}")
 
     def render_object(self, obj, output_path, *, bg=None, fps=None):
         """単体Objectをレンダリングしてファイル出力"""
@@ -677,7 +892,12 @@ class TransformChain:
             return TransformChain(self.transforms + [other])
         if isinstance(other, TransformChain):
             return TransformChain(self.transforms + other.transforms)
+        if isinstance(other, _DisabledTransform):
+            return TransformChain(self.transforms + [other])
         return NotImplemented
+
+    def __invert__(self):
+        return _DisabledTransform(self)
 
     def __repr__(self):
         return f"TransformChain({self.transforms})"
@@ -694,10 +914,61 @@ class EffectChain:
             return EffectChain(self.effects + [other])
         if isinstance(other, EffectChain):
             return EffectChain(self.effects + other.effects)
+        if isinstance(other, _DisabledEffect):
+            return EffectChain(self.effects + [other])
         return NotImplemented
+
+    def __invert__(self):
+        return _DisabledEffect(self)
 
     def __repr__(self):
         return f"EffectChain({self.effects})"
+
+
+class _DisabledTransform:
+    """無効化Transform（Object.__le__でスキップ）"""
+    def __init__(self, original):
+        self.original = original
+
+    def __or__(self, other):
+        if isinstance(other, (Transform, _DisabledTransform)):
+            return TransformChain([self, other])
+        if isinstance(other, TransformChain):
+            return TransformChain([self] + other.transforms)
+        return NotImplemented
+
+    def __ror__(self, other):
+        if isinstance(other, Transform):
+            return TransformChain([other, self])
+        if isinstance(other, TransformChain):
+            return TransformChain(other.transforms + [self])
+        return NotImplemented
+
+    def __invert__(self):
+        return self.original
+
+
+class _DisabledEffect:
+    """無効化Effect（Object.__le__でスキップ）"""
+    def __init__(self, original):
+        self.original = original
+
+    def __and__(self, other):
+        if isinstance(other, (Effect, _DisabledEffect)):
+            return EffectChain([self, other])
+        if isinstance(other, EffectChain):
+            return EffectChain([self] + other.effects)
+        return NotImplemented
+
+    def __rand__(self, other):
+        if isinstance(other, Effect):
+            return EffectChain([other, self])
+        if isinstance(other, EffectChain):
+            return EffectChain(other.effects + [self])
+        return NotImplemented
+
+    def __invert__(self):
+        return self.original
 
 
 class Transform:
@@ -711,7 +982,12 @@ class Transform:
             return TransformChain([self, other])
         if isinstance(other, TransformChain):
             return TransformChain([self] + other.transforms)
+        if isinstance(other, _DisabledTransform):
+            return TransformChain([self, other])
         return NotImplemented
+
+    def __invert__(self):
+        return _DisabledTransform(self)
 
     def __repr__(self):
         return f"Transform({self.name}, {self.params})"
@@ -728,7 +1004,12 @@ class Effect:
             return EffectChain([self, other])
         if isinstance(other, EffectChain):
             return EffectChain([self] + other.effects)
+        if isinstance(other, _DisabledEffect):
+            return EffectChain([self, other])
         return NotImplemented
+
+    def __invert__(self):
+        return _DisabledEffect(self)
 
     def __repr__(self):
         return f"Effect({self.name}, {self.params})"
@@ -786,14 +1067,18 @@ class Object:
 
     def __le__(self, rhs):
         """<= 演算子: Transform/TransformChain/Effect/EffectChainを適用"""
+        if isinstance(rhs, (_DisabledTransform, _DisabledEffect)):
+            return self  # 無効化→スキップ
         if isinstance(rhs, Transform):
             self.transforms.append(rhs)
         elif isinstance(rhs, TransformChain):
-            self.transforms.extend(rhs.transforms)
+            self.transforms.extend(
+                t for t in rhs.transforms if not isinstance(t, _DisabledTransform))
         elif isinstance(rhs, Effect):
             self.effects.append(rhs)
         elif isinstance(rhs, EffectChain):
-            self.effects.extend(rhs.effects)
+            self.effects.extend(
+                e for e in rhs.effects if not isinstance(e, _DisabledEffect))
         else:
             raise TypeError(f"Object <= に渡せるのは Transform/TransformChain/Effect/EffectChain のみ: {type(rhs)}")
         return self
