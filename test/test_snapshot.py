@@ -220,6 +220,25 @@ def setup_test19():
     return p.render("test19.mp4", dry_run=True)
 
 
+def setup_test20():
+    """字幕/吹き出しテスト: subtitle+bubble+背景合成"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test20_bg.py", priority=0)
+    p.layer("test20_subtitles.py", priority=1)
+    p.layer("test20_bubble.py", priority=2)
+    return p.render("test20.mp4", dry_run=True)
+
+
+def setup_test21():
+    """図解テスト: diagram SVG図形+from/toアニメ+画像合成"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="darkslategray")
+    p.layer("test21_diagram.py", priority=0)
+    p.layer("test21_overlay.py", priority=1)
+    return p.render("test21.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -240,6 +259,8 @@ ALL_TESTS = [
     ("test17", setup_test17),
     ("test18", setup_test18),
     ("test19", setup_test19),
+    ("test20", setup_test20),
+    ("test21", setup_test21),
 ]
 
 

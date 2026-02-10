@@ -1,0 +1,53 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=darkslategray:s=1280x720:d=3.0:r=30",
+    "-i",
+    "__cache__/webclip/diagram_40cf3695.webm",
+    "-loop",
+    "1",
+    "-r",
+    "30",
+    "-i",
+    "../onigiri_tenmusu.png",
+    "-filter_complex",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3.0)'[v1];[2:v]scale=iw*0.25:ih*0.25,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip((0.3+((1.0-0.3)*clip((T-0)/3/,0/,1)))/,0/,1)'[obj2];[v1][obj2]overlay=trunc(0.85*W-w/2):trunc(0.8*H-h/2):enable='between(t/,0/,3)'[v2]",
+    "-map",
+    "[v2]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "3.0",
+    "test21.mp4"
+  ],
+  "cache": {
+    "__cache__/webclip/diagram_40cf3695.webm": [
+      "ffmpeg",
+      "-y",
+      "-framerate",
+      "30",
+      "-i",
+      "__cache__/webclip/diagram_40cf3695_frames/frame_%05d.png",
+      "-c:v",
+      "libvpx-vp9",
+      "-pix_fmt",
+      "yuva420p",
+      "-b:v",
+      "0",
+      "-crf",
+      "30",
+      "-auto-alt-ref",
+      "0",
+      "-t",
+      "3.0",
+      "__cache__/webclip/diagram_40cf3695.webm"
+    ]
+  }
+}

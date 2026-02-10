@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: transparent; overflow: hidden; }
+svg { position: absolute; top: 0; left: 0; }
+</style></head>
+<body>
+<svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+function lerpVal(spec, u) {
+  if (spec === null || spec === undefined) return undefined;
+  if (typeof spec === "object" && "from" in spec && "to" in spec) {
+    return spec.from + (spec.to - spec.from) * u;
+  }
+  return spec;
+}
+
+function renderFrame(state) {
+  var d = state.data || {};
+  var s = d.style || {};
+  var W = state.width;
+  var H = state.height;
+  var u = state.u;
+
+  var svg = document.getElementById("canvas");
+  svg.setAttribute("width", W);
+  svg.setAttribute("height", H);
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+
+  // defs（矢印マーカー等）
+  var defsHtml = '<defs>';
+  defsHtml += '<marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">';
+  defsHtml += '<polygon points="0 0, 10 3.5, 0 7" fill="context-stroke" />';
+  defsHtml += '</marker>';
+  defsHtml += '</defs>';
+
+  var objects = d.objects || [];
+  var html = defsHtml;
+
+  for (var i = 0; i < objects.length; i++) {
+    var obj = objects[i];
+    var type = obj.type;
+    var op = lerpVal(obj.opacity, u);
+    var opStr = (op !== undefined) ? ' opacity="' + op + '"' : '';
+
+    if (type === "circle") {
+      var cx = lerpVal(obj.x, u) * W;
+      var cy = lerpVal(obj.y, u) * H;
+      var r  = lerpVal(obj.r, u) * Math.min(W, H);
+      html += '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'"';
+      html += ' fill="'+(obj.fill||"none")+'"';
+      html += ' stroke="'+(obj.stroke||"none")+'"';
+      html += ' stroke-width="'+(obj.strokeWidth||2)+'"';
+      html += opStr + ' />';
+
+    } else if (type === "rect") {
+      var rx = lerpVal(obj.x, u) * W;
+      var ry = lerpVal(obj.y, u) * H;
+      var rw = lerpVal(obj.w, u) * W;
+      var rh = lerpVal(obj.h, u) * H;
+      var rrx = obj.rx ? (lerpVal(obj.rx, u) * Math.min(W, H)) : 0;
+      html += '<rect x="'+rx+'" y="'+ry+'" width="'+rw+'" height="'+rh+'"';
+      html += ' rx="'+rrx+'"';
+      html += ' fill="'+(obj.fill||"none")+'"';
+      html += ' stroke="'+(obj.stroke||"none")+'"';
+      html += ' stroke-width="'+(obj.strokeWidth||2)+'"';
+      html += opStr + ' />';
+
+    } else if (type === "line") {
+      var lx1 = lerpVal(obj.x1, u) * W;
+      var ly1 = lerpVal(obj.y1, u) * H;
+      var lx2 = lerpVal(obj.x2, u) * W;
+      var ly2 = lerpVal(obj.y2, u) * H;
+      html += '<line x1="'+lx1+'" y1="'+ly1+'" x2="'+lx2+'" y2="'+ly2+'"';
+      html += ' stroke="'+(obj.stroke||"#fff")+'"';
+      html += ' stroke-width="'+(obj.strokeWidth||2)+'"';
+      html += opStr + ' />';
+
+    } else if (type === "arrow") {
+      var ax1 = lerpVal(obj.x1, u) * W;
+      var ay1 = lerpVal(obj.y1, u) * H;
+      var ax2 = lerpVal(obj.x2, u) * W;
+      var ay2 = lerpVal(obj.y2, u) * H;
+      html += '<line x1="'+ax1+'" y1="'+ay1+'" x2="'+ax2+'" y2="'+ay2+'"';
+      html += ' stroke="'+(obj.stroke||"#fff")+'"';
+      html += ' stroke-width="'+(obj.strokeWidth||2)+'"';
+      html += ' marker-end="url(#arrowhead)"';
+      html += opStr + ' />';
+
+    } else if (type === "text") {
+      var tx = lerpVal(obj.x, u) * W;
+      var ty = lerpVal(obj.y, u) * H;
+      var align = obj.align || "middle";
+      var anchor = "middle";
+      if (align === "start" || align === "left") anchor = "start";
+      if (align === "end" || align === "right") anchor = "end";
+      var fs = obj.fontSize || 36;
+      html += '<text x="'+tx+'" y="'+ty+'"';
+      html += ' fill="'+(obj.fill||"#fff")+'"';
+      html += ' font-size="'+fs+'"';
+      html += ' font-family="Noto Sans JP, Yu Gothic, Meiryo, sans-serif"';
+      html += ' text-anchor="'+anchor+'"';
+      html += ' dominant-baseline="middle"';
+      if (obj.stroke) {
+        html += ' stroke="'+obj.stroke+'"';
+        html += ' stroke-width="'+(obj.strokeWidth||1)+'"';
+        html += ' paint-order="stroke"';
+      }
+      html += opStr + '>';
+      html += (obj.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      html += '</text>';
+
+    } else if (type === "spotlight") {
+      var sx = lerpVal(obj.x, u) * W;
+      var sy = lerpVal(obj.y, u) * H;
+      var sr = lerpVal(obj.r, u) * Math.min(W, H);
+      var dim = obj.dim !== undefined ? obj.dim : 0.6;
+      // 全画面暗幕 + 円形くり抜き
+      html += '<mask id="spot-mask-'+i+'">';
+      html += '<rect x="0" y="0" width="'+W+'" height="'+H+'" fill="white" />';
+      html += '<circle cx="'+sx+'" cy="'+sy+'" r="'+sr+'" fill="black" />';
+      html += '</mask>';
+      html += '<rect x="0" y="0" width="'+W+'" height="'+H+'"';
+      html += ' fill="rgba(0,0,0,'+dim+')"';
+      html += ' mask="url(#spot-mask-'+i+')"';
+      html += opStr + ' />';
+    }
+  }
+
+  svg.innerHTML = html;
+}
+</script>
+</body></html>

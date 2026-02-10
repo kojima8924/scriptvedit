@@ -4,6 +4,7 @@ sys.path.insert(0, "..")
 from scriptvedit import (
     _resolve_param, Project, P, Object, VideoView, AudioView,
     again, move, fade, resize, AudioEffect, AudioEffectChain,
+    subtitle, bubble, diagram, circle, label,
 )
 
 
@@ -261,6 +262,51 @@ def test_web_no_duration():
         return False, f"メッセージが不適切: {msg}"
 
 
+def test_subtitle_no_project():
+    """subtitle() でProject未設定 + size省略 → RuntimeError"""
+    old = Project._current
+    Project._current = None
+    try:
+        subtitle("テスト")
+        return False, "例外が発生しませんでした"
+    except RuntimeError as e:
+        msg = str(e)
+        if "アクティブなProject" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+    finally:
+        Project._current = old
+
+
+def test_diagram_no_project():
+    """diagram() でProject未設定 + size省略 → RuntimeError"""
+    old = Project._current
+    Project._current = None
+    try:
+        diagram([circle(0.5, 0.5, 0.1)])
+        return False, "例外が発生しませんでした"
+    except RuntimeError as e:
+        msg = str(e)
+        if "アクティブなProject" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+    finally:
+        Project._current = old
+
+
+def test_subtitle_with_explicit_size():
+    """subtitle() にsize明示 → Project不要で成功"""
+    old = Project._current
+    Project._current = None
+    try:
+        obj = subtitle("テスト", size=(640, 360))
+        if obj.media_type == "web" and obj._web_size == (640, 360):
+            return True, f"size=(640,360) で正常生成"
+        return False, f"属性が不正: type={obj.media_type}, size={obj._web_size}"
+    finally:
+        Project._current = old
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -278,6 +324,9 @@ ALL_TESTS = [
     ("非webにkwargs", test_web_kwargs_on_non_web),
     ("web不明kwarg", test_web_unknown_kwarg),
     ("web duration未指定", test_web_no_duration),
+    ("subtitle Project未設定", test_subtitle_no_project),
+    ("diagram Project未設定", test_diagram_no_project),
+    ("subtitle size明示", test_subtitle_with_explicit_size),
 ]
 
 

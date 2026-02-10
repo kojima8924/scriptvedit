@@ -1,6 +1,7 @@
 import subprocess
 import os
 import json
+import hashlib
 import warnings
 import builtins as _builtins
 
@@ -28,6 +29,10 @@ __all__ = [
     "PI", "E",
     # DSL糖衣
     "P",
+    # テンプレートラッパー
+    "subtitle", "bubble", "diagram",
+    # 図形ビルダー
+    "circle", "rect", "arrow", "label", "spotlight",
 ]
 
 
@@ -36,6 +41,10 @@ __all__ = [
 class Expr:
     """ffmpeg式ビルダー基底クラス"""
     def to_ffmpeg(self, u_expr):
+        raise NotImplementedError
+
+    def eval_at(self, u_value):
+        """u=u_valueでの数値評価"""
         raise NotImplementedError
 
     def __add__(self, other):
@@ -83,6 +92,9 @@ class Const(Expr):
     def to_ffmpeg(self, u_expr):
         return str(self.value)
 
+    def eval_at(self, u_value):
+        return self.value
+
 
 class Var(Expr):
     """変数ノード"""
@@ -93,6 +105,11 @@ class Var(Expr):
         if self.name == "u":
             return u_expr
         return self.name
+
+    def eval_at(self, u_value):
+        if self.name == "u":
+            return u_value
+        raise ValueError(f"変数 '{self.name}' は数値評価できません")
 
 
 class _BinOp(Expr):
@@ -107,6 +124,15 @@ class _BinOp(Expr):
         r = self.right.to_ffmpeg(u_expr)
         return f"({l}{self.op}{r})"
 
+    def eval_at(self, u_value):
+        l = self.left.eval_at(u_value)
+        r = self.right.eval_at(u_value)
+        if self.op == '+': return l + r
+        if self.op == '-': return l - r
+        if self.op == '*': return l * r
+        if self.op == '/': return l / r
+        raise ValueError(f"未対応の演算子: {self.op}")
+
 
 class _UnOp(Expr):
     """単項演算ノード"""
@@ -117,6 +143,11 @@ class _UnOp(Expr):
     def to_ffmpeg(self, u_expr):
         x = self.operand.to_ffmpeg(u_expr)
         return f"({self.op}{x})"
+
+    def eval_at(self, u_value):
+        x = self.operand.eval_at(u_value)
+        if self.op == '-': return -x
+        raise ValueError(f"未対応の単項演算子: {self.op}")
 
 
 class _FuncCall(Expr):
@@ -129,6 +160,34 @@ class _FuncCall(Expr):
         arg_strs = [a.to_ffmpeg(u_expr) for a in self.args]
         sep = "\\,"
         return f"{self.name}({sep.join(arg_strs)})"
+
+    _EVAL_FUNCS = None
+
+    @classmethod
+    def _get_eval_funcs(cls):
+        if cls._EVAL_FUNCS is None:
+            import math as _m
+            cls._EVAL_FUNCS = {
+                'sin': _m.sin, 'cos': _m.cos, 'tan': _m.tan,
+                'asin': _m.asin, 'acos': _m.acos, 'atan': _m.atan,
+                'atan2': _m.atan2, 'sinh': _m.sinh, 'cosh': _m.cosh,
+                'tanh': _m.tanh, 'exp': _m.exp, 'log': _m.log,
+                'sqrt': _m.sqrt, 'floor': _m.floor, 'ceil': _m.ceil,
+                'trunc': _m.trunc, 'round': _builtins.round,
+                'abs': _builtins.abs, 'pow': _builtins.pow,
+                'min': _builtins.min, 'max': _builtins.max,
+                'mod': lambda a, b: a % b,
+                'clip': lambda v, lo, hi: _builtins.max(lo, _builtins.min(hi, v)),
+                'gte': lambda x, e: 1.0 if x >= e else 0.0,
+            }
+        return cls._EVAL_FUNCS
+
+    def eval_at(self, u_value):
+        args = [a.eval_at(u_value) for a in self.args]
+        funcs = self._get_eval_funcs()
+        if self.name not in funcs:
+            raise ValueError(f"eval_at未対応の関数: {self.name}")
+        return funcs[self.name](*args)
 
 
 def _to_expr(x):
@@ -706,15 +765,17 @@ class Project:
             input_idx = i + 1
 
             if obj.media_type == "image":
-                inputs.extend(["-loop", "1", "-i", obj.source])
+                inputs.extend(["-loop", "1", "-r", str(self.fps), "-i", obj.source])
             else:
                 inputs.extend(["-i", obj.source])
 
             obj_dur = obj.duration or dur
             start = obj.start_time
 
+            base_dims = _get_base_dimensions(obj)
             obj_filters = _build_transform_filters(obj)
-            obj_filters.extend(_build_effect_filters(obj, start, obj_dur))
+            eff_filters, pad_size = _build_effect_filters(obj, start, obj_dur, base_dims=base_dims)
+            obj_filters.extend(eff_filters)
 
             obj_label = f"[obj{input_idx}]"
             if obj_filters:
@@ -724,7 +785,7 @@ class Project:
             else:
                 obj_label = f"[{input_idx}:v]"
 
-            x_expr, y_expr = _build_move_exprs(obj, start, obj_dur)
+            x_expr, y_expr = _build_move_exprs(obj, start, obj_dur, pad_size=pad_size)
 
             enable_str = ""
             if obj.duration is not None:
@@ -812,12 +873,14 @@ class Project:
         ])
 
         if obj.media_type == "image":
-            inputs.extend(["-loop", "1", "-i", obj.source])
+            inputs.extend(["-loop", "1", "-r", str(fps), "-i", obj.source])
         else:
             inputs.extend(["-i", obj.source])
 
+        base_dims = _get_base_dimensions(obj)
         obj_filters = _build_transform_filters(obj)
-        obj_filters.extend(_build_effect_filters(obj, 0, dur))
+        eff_filters, pad_size = _build_effect_filters(obj, 0, dur, base_dims=base_dims)
+        obj_filters.extend(eff_filters)
 
         obj_label = "[obj1]"
         if obj_filters:
@@ -825,7 +888,7 @@ class Project:
         else:
             obj_label = "[1:v]"
 
-        x_expr, y_expr = _build_move_exprs(obj, 0, dur)
+        x_expr, y_expr = _build_move_exprs(obj, 0, dur, pad_size=pad_size)
 
         out_label = "[vout]"
         filter_parts.append(f"[0:v]{obj_label}overlay={x_expr}:{y_expr}{out_label}")
@@ -863,7 +926,7 @@ class Project:
             input_idx = i + 1
             input_map[id(obj)] = input_idx
             if obj.media_type == "image":
-                inputs.extend(["-loop", "1", "-i", obj.source])
+                inputs.extend(["-loop", "1", "-r", str(self.fps), "-i", obj.source])
             elif obj.media_type == "audio":
                 inputs.extend(["-i", obj.source])
             else:  # video
@@ -878,9 +941,11 @@ class Project:
             dur = obj.duration or 5
             start = obj.start_time
 
+            base_dims = _get_base_dimensions(obj)
             pre_filters = _build_video_pre_filters(obj)
             obj_filters = pre_filters + _build_transform_filters(obj)
-            obj_filters.extend(_build_effect_filters(obj, start, dur))
+            eff_filters, pad_size = _build_effect_filters(obj, start, dur, base_dims=base_dims)
+            obj_filters.extend(eff_filters)
 
             obj_label = f"[obj{input_idx}]"
             if obj_filters:
@@ -890,7 +955,7 @@ class Project:
             else:
                 obj_label = f"[{input_idx}:v]"
 
-            x_expr, y_expr = _build_move_exprs(obj, start, dur)
+            x_expr, y_expr = _build_move_exprs(obj, start, dur, pad_size=pad_size)
 
             enable_str = ""
             if obj.duration is not None:
@@ -968,6 +1033,35 @@ class Project:
         return cmd
 
 
+# --- メディア情報ヘルパー ---
+
+def _get_media_dimensions(filepath):
+    """メディアの幅・高さを取得 (ffprobe)"""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", filepath],
+            capture_output=True, text=True, check=True)
+        parts = result.stdout.strip().split(',')
+        return int(parts[0]), int(parts[1])
+    except Exception:
+        return None, None
+
+
+def _get_base_dimensions(obj):
+    """オブジェクトのscaleエフェクト適用前の基底サイズを取得"""
+    src_w, src_h = _get_media_dimensions(obj.source)
+    if src_w is None:
+        return None, None
+    for t in obj.transforms:
+        if t.name == "resize":
+            sx = t.params.get("sx", 1)
+            sy = t.params.get("sy", 1)
+            src_w = int(src_w * sx)
+            src_h = int(src_h * sy)
+    return src_w, src_h
+
+
 # --- フィルタ生成ヘルパー ---
 
 def _build_transform_filters(obj):
@@ -981,9 +1075,14 @@ def _build_transform_filters(obj):
     return filters
 
 
-def _build_effect_filters(obj, start, dur):
-    """scale/fade等のeffectフィルタリストを生成（move/trim/delete以外）"""
+def _build_effect_filters(obj, start, dur, base_dims=None):
+    """scale/fade等のeffectフィルタリストを生成（move/trim/delete以外）
+    base_dims指定時、scaleエフェクトにpadを追加して固定サイズ出力にする。
+    Returns: (filters, pad_size) — pad_size は (max_w, max_h) or None
+    """
+    import math as _math
     filters = []
+    pad_size = None
     for e in obj.effects:
         if e.name in ("move", "trim", "delete"):
             continue
@@ -994,6 +1093,19 @@ def _build_effect_filters(obj, start, dur):
             filters.append(
                 f"scale=w='trunc(iw*({ffmpeg_str})/2)*2':h='trunc(ih*({ffmpeg_str})/2)*2':eval=frame"
             )
+            # pad: scaleの出力を最大サイズの固定フレームに収め、overlay位置を安定化
+            if base_dims and base_dims[0] is not None:
+                bw, bh = base_dims
+                s0 = scale_expr.eval_at(0)
+                s1 = scale_expr.eval_at(1)
+                max_s = _builtins.max(s0, s1)
+                max_w = _math.ceil(bw * max_s / 2) * 2
+                max_h = _math.ceil(bh * max_s / 2) * 2
+                filters.append("format=rgba")
+                filters.append(
+                    f"pad={max_w}:{max_h}:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame"
+                )
+                pad_size = (max_w, max_h)
         elif e.name == "fade":
             alpha_expr = e.params.get("alpha", Const(1.0))
             u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
@@ -1002,18 +1114,29 @@ def _build_effect_filters(obj, start, dur):
             filters.append(
                 f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
             )
-    return filters
+    return filters, pad_size
 
 
-def _build_move_exprs(obj, start, dur):
-    """objのeffectsからmoveを探し、overlay用のx_expr/y_exprを返す"""
+def _build_move_exprs(obj, start, dur, pad_size=None):
+    """objのeffectsからmoveを探し、overlay用のx_expr/y_exprを返す
+    pad_size: (max_w, max_h) padで固定サイズ化済みの場合、定数で位置を計算
+    """
     move_effect = None
     for e in obj.effects:
         if e.name == "move":
             move_effect = e
 
+    # pad_size指定時は定数でhalf計算（overlayが完全固定 or move式のみで決まる）
+    if pad_size:
+        half_w = str(pad_size[0] // 2)
+        half_h = str(pad_size[1] // 2)
+    else:
+        half_w = "w/2"
+        half_h = "h/2"
+
     if move_effect is None:
-        return "(W-w)/2", "(H-h)/2"
+        return f"(W-{pad_size[0]})/2" if pad_size else "(W-w)/2", \
+               f"(H-{pad_size[1]})/2" if pad_size else "(H-h)/2"
 
     p = move_effect.params
     anchor_val = p.get("anchor", "center")
@@ -1026,11 +1149,11 @@ def _build_move_exprs(obj, start, dur):
     base_y = f"{y_param.to_ffmpeg(u_expr)}*H"
 
     if anchor_val == "center":
-        x_result = f"{base_x}-w/2"
-        y_result = f"{base_y}-h/2"
+        x_result = f"trunc({base_x}-{half_w})"
+        y_result = f"trunc({base_y}-{half_h})"
     else:
-        x_result = base_x
-        y_result = base_y
+        x_result = f"trunc({base_x})"
+        y_result = f"trunc({base_y})"
 
     return x_result, y_result
 
@@ -1734,3 +1857,103 @@ class _PauseFactory:
 
 
 pause = _PauseFactory()
+
+
+# --- テンプレートラッパー ---
+
+_TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+
+
+def _template_path(name):
+    """テンプレートHTMLの絶対パスを返す（存在チェック付き）"""
+    path = os.path.join(_TEMPLATES_DIR, name)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"テンプレートが見つかりません: {path}\n"
+            f"templates/ ディレクトリにファイルを配置してください。")
+    return path
+
+
+def _data_hash(data):
+    """dataのJSON文字列からsha1先頭8桁のハッシュを返す"""
+    s = json.dumps(data, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()[:8]
+
+
+def _resolve_size(size):
+    """size省略時はProject._currentのwidth/heightを使う"""
+    if size is not None:
+        return size
+    proj = Project._current
+    if proj is None:
+        raise RuntimeError(
+            "size省略時はアクティブなProjectが必要です。"
+            "Project()を作成してからsubtitle/bubble/diagram等を呼んでください。")
+    return (proj.width, proj.height)
+
+
+def subtitle(text, who=None, duration=2.5, *, style=None, size=None,
+             name=None, debug_frames=False):
+    """字幕テンプレートObjectを生成"""
+    size = _resolve_size(size)
+    tpl = _template_path("subtitle.html")
+    data = {"text": text, "who": who, "style": style or {}}
+    if name is None:
+        name = f"subtitle_{_data_hash(data)}"
+    return Object(tpl, duration=duration, size=size, data=data,
+                  name=name, debug_frames=debug_frames)
+
+
+def bubble(text, duration=2.5, *, anchor=None, pos=None, box=None,
+           style=None, size=None, name=None, debug_frames=False):
+    """吹き出しテンプレートObjectを生成"""
+    size = _resolve_size(size)
+    tpl = _template_path("bubble.html")
+    anch = {"x": anchor[0], "y": anchor[1]} if anchor else {"x": 0.2, "y": 0.7}
+    p = {"x": pos[0], "y": pos[1]} if pos else {"x": 0.25, "y": 0.3}
+    sz = {"w": box[0], "h": box[1]} if box else {"w": 0.45, "h": 0.2}
+    data = {"text": text, "anchor": anch, "pos": p, "size": sz,
+            "style": style or {}}
+    if name is None:
+        name = f"bubble_{_data_hash(data)}"
+    return Object(tpl, duration=duration, size=size, data=data,
+                  name=name, debug_frames=debug_frames)
+
+
+def diagram(objects, duration=3.0, *, style=None, size=None,
+            name=None, debug_frames=False):
+    """SVG図解テンプレートObjectを生成"""
+    size = _resolve_size(size)
+    tpl = _template_path("diagram_svg.html")
+    data = {"objects": objects, "style": style or {}}
+    if name is None:
+        name = f"diagram_{_data_hash(data)}"
+    return Object(tpl, duration=duration, size=size, data=data,
+                  name=name, debug_frames=debug_frames)
+
+
+# --- 図形ビルダー ---
+
+def circle(x, y, r, **kw):
+    """円オブジェクト定義を返す"""
+    return {"type": "circle", "x": x, "y": y, "r": r, **kw}
+
+
+def rect(x, y, w, h, **kw):
+    """矩形オブジェクト定義を返す"""
+    return {"type": "rect", "x": x, "y": y, "w": w, "h": h, **kw}
+
+
+def arrow(x1, y1, x2, y2, **kw):
+    """矢印オブジェクト定義を返す"""
+    return {"type": "arrow", "x1": x1, "y1": y1, "x2": x2, "y2": y2, **kw}
+
+
+def label(x, y, text, **kw):
+    """テキストラベルオブジェクト定義を返す"""
+    return {"type": "text", "x": x, "y": y, "text": text, **kw}
+
+
+def spotlight(x, y, r, **kw):
+    """スポットライト（暗幕くり抜き）オブジェクト定義を返す"""
+    return {"type": "spotlight", "x": x, "y": y, "r": r, **kw}

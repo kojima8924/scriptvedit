@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: transparent; overflow: hidden; }
+#bar {
+  position: absolute; bottom: 0; left: 0; width: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  pointer-events: none;
+}
+#name-tag {
+  display: inline-block; padding: 4px 16px;
+  font-weight: bold; border-radius: 6px 6px 0 0;
+  margin-left: 24px; align-self: flex-start;
+}
+#text-area {
+  width: 100%; padding: 16px 24px;
+  font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif;
+  line-height: 1.5; word-break: break-all; white-space: pre-wrap;
+}
+</style></head>
+<body>
+<div id="bar">
+  <div id="name-tag"></div>
+  <div id="text-area"></div>
+</div>
+<script>
+function renderFrame(state) {
+  var d = state.data || {};
+  var s = d.style || {};
+  var fontSize   = s.fontSize   || 44;
+  var nameColor  = s.nameColor  || "#ffccdd";
+  var textColor  = s.textColor  || "#ffffff";
+  var barColor   = s.barColor   || "rgba(0,0,0,0.55)";
+  var maxLines   = s.maxLines   || 3;
+  var padding    = s.padding    || 24;
+  var safeBottom = s.safeBottom || 36;
+  var nameSize   = s.nameSize   || Math.round(fontSize * 0.7);
+
+  var bar = document.getElementById("bar");
+  bar.style.bottom = safeBottom + "px";
+  bar.style.left = "0";
+  bar.style.width = "100%";
+
+  var nameTag = document.getElementById("name-tag");
+  var textArea = document.getElementById("text-area");
+
+  if (d.who) {
+    nameTag.style.display = "inline-block";
+    nameTag.textContent = d.who;
+    nameTag.style.backgroundColor = nameColor;
+    nameTag.style.color = "#000";
+    nameTag.style.fontSize = nameSize + "px";
+    nameTag.style.padding = "4px 16px";
+    nameTag.style.marginLeft = padding + "px";
+  } else {
+    nameTag.style.display = "none";
+  }
+
+  textArea.style.backgroundColor = barColor;
+  textArea.style.color = textColor;
+  textArea.style.fontSize = fontSize + "px";
+  textArea.style.padding = padding + "px";
+  textArea.style.maxHeight = (fontSize * 1.5 * maxLines + padding * 2) + "px";
+  textArea.style.overflow = "hidden";
+  textArea.textContent = d.text || "";
+
+  // アニメーション: u=0でフェードイン、u=1でフェードアウト
+  var fadeIn  = s.fadeIn  !== undefined ? s.fadeIn  : 0.1;
+  var fadeOut = s.fadeOut !== undefined ? s.fadeOut : 0.1;
+  var opacity = 1.0;
+  if (state.u < fadeIn && fadeIn > 0) {
+    opacity = state.u / fadeIn;
+  } else if (state.u > (1.0 - fadeOut) && fadeOut > 0) {
+    opacity = (1.0 - state.u) / fadeOut;
+  }
+  bar.style.opacity = opacity;
+}
+</script>
+</body></html>
