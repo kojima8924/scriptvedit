@@ -298,6 +298,7 @@ P = Percent()
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".gif"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+_WEB_EXTS = {".html", ".htm"}
 
 
 def _detect_media_type(path):
@@ -308,6 +309,8 @@ def _detect_media_type(path):
         return "video"
     if ext in _AUDIO_EXTS:
         return "audio"
+    if ext in _WEB_EXTS:
+        return "web"
     return "image"  # フォールバック
 
 
@@ -471,12 +474,28 @@ class Project:
         self._resolve_anchors()
         if self.duration is None:
             self.duration = self._calc_total_duration()
-        cmd = self._build_ffmpeg_cmd(output_path)
+
         if dry_run:
             cache_cmds = self._collect_cache_cmds()
+            web_cmds = self._collect_web_cmds()
+            # web Objectのsourceを予定webmパスに仮差し替え
+            for obj in self.objects:
+                if isinstance(obj, Object) and obj.media_type == "web":
+                    name = obj._web_name
+                    obj.source = os.path.join(_CACHE_DIR, "webclip", f"{name}.webm")
+                    obj.media_type = "video"
+            cmd = self._build_ffmpeg_cmd(output_path)
+            all_extra = {}
             if cache_cmds:
-                return {"main": cmd, "cache": cache_cmds}
+                all_extra.update(cache_cmds)
+            if web_cmds:
+                all_extra.update(web_cmds)
+            if all_extra:
+                return {"main": cmd, "cache": all_extra}
             return cmd  # 後方互換: cache不要ならlistのまま
+
+        self._ensure_web_objects()
+        cmd = self._build_ffmpeg_cmd(output_path)
         print(f"実行コマンド:")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
         print()
@@ -573,6 +592,12 @@ class Project:
         cached_obj._audio_deleted = False
         cached_obj._has_video = True
         cached_obj._has_audio = False
+        cached_obj._web_source = None
+        cached_obj._web_size = None
+        cached_obj._web_fps = None
+        cached_obj._web_data = {}
+        cached_obj._web_name = None
+        cached_obj._web_debug_frames = False
         # anchors.jsonからduration/anchorsを読み込み
         if os.path.exists(json_path):
             with open(json_path, encoding="utf-8") as f:
@@ -614,6 +639,42 @@ class Project:
                         webm_path, _ = _layer_cache_paths(spec["filename"])
                         cache_cmds[webm_path] = cmd
         return cache_cmds
+
+    def _collect_web_cmds(self):
+        """dry_run用: web Objectのwebmエンコードコマンドを収集"""
+        cmds = {}
+        for obj in self.objects:
+            if isinstance(obj, Object) and obj.media_type == "web":
+                name = obj._web_name
+                webm_path = os.path.join(_CACHE_DIR, "webclip", f"{name}.webm")
+                cmds[webm_path] = obj._build_web_cmd(self)
+        return cmds
+
+    def _ensure_web_objects(self):
+        """web ObjectのPlaywrightレンダ+ffmpegエンコード実行、sourceをwebmに差し替え"""
+        for obj in self.objects:
+            if not isinstance(obj, Object) or obj.media_type != "web":
+                continue
+            name = obj._web_name
+            cache_dir = os.path.join(_CACHE_DIR, "webclip")
+            webm_path = os.path.join(cache_dir, f"{name}.webm")
+            frames_dir = os.path.join(cache_dir, f"{name}_frames")
+
+            if not os.path.exists(webm_path):
+                print(f"Webクリップ生成: {obj.source}")
+                obj._render_web_frames(self)
+                cmd = obj._build_web_cmd(self)
+                os.makedirs(cache_dir, exist_ok=True)
+                print(f"  ffmpeg {' '.join(cmd[1:])}")
+                subprocess.run(cmd, check=True)
+                print(f"  完了: {webm_path}")
+                # フレーム削除
+                if not obj._web_debug_frames and os.path.exists(frames_dir):
+                    import shutil
+                    shutil.rmtree(frames_dir)
+
+            obj.source = webm_path
+            obj.media_type = "video"
 
     def _generate_pending_caches(self):
         """実際のキャッシュ生成実行"""
@@ -1244,8 +1305,11 @@ class Pause:
         return self
 
 
+_WEB_KWARGS = {"duration", "size", "fps", "data", "name", "debug_frames"}
+
+
 class Object:
-    def __init__(self, source):
+    def __init__(self, source, **kwargs):
         self.source = source
         self.transforms = []
         self.effects = []
@@ -1257,6 +1321,37 @@ class Object:
         self._until_anchor = None
         self._video_deleted = False
         self._audio_deleted = False
+        # web専用属性（常に初期化）
+        self._web_source = None
+        self._web_size = None
+        self._web_fps = None
+        self._web_data = {}
+        self._web_name = None
+        self._web_debug_frames = False
+
+        # web Object のバリデーションと属性設定
+        if self.media_type == "web":
+            unknown = set(kwargs.keys()) - _WEB_KWARGS
+            if unknown:
+                raise TypeError(
+                    f"不明なキーワード引数: {', '.join(sorted(unknown))}。"
+                    f"使用可能: {', '.join(sorted(_WEB_KWARGS))}")
+            if "duration" not in kwargs:
+                raise ValueError("web Object には duration が必須です")
+            if "size" not in kwargs:
+                raise ValueError("web Object には size が必須です")
+            self._web_source = source
+            self.duration = kwargs["duration"]
+            self._web_size = kwargs["size"]
+            self._web_fps = kwargs.get("fps")
+            self._web_data = kwargs.get("data", {})
+            self._web_name = kwargs.get("name") or os.path.splitext(os.path.basename(source))[0]
+            self._web_debug_frames = kwargs.get("debug_frames", False)
+        elif kwargs:
+            raise TypeError(
+                f"キーワード引数は web Object (.html/.htm) 専用です: "
+                f"{', '.join(sorted(kwargs.keys()))}")
+
         # has_video / has_audio のデフォルト
         if self.media_type == "image":
             self._has_video = True
@@ -1264,6 +1359,9 @@ class Object:
         elif self.media_type == "audio":
             self._has_video = False
             self._has_audio = True
+        elif self.media_type == "web":
+            self._has_video = True
+            self._has_audio = False
         else:  # video
             self._has_video = True
             self._has_audio = None  # 未判定→ffprobeで解決
@@ -1357,6 +1455,12 @@ class Object:
         cached._audio_deleted = False
         cached._has_video = True if cached.media_type != "audio" else False
         cached._has_audio = True if cached.media_type != "image" else False
+        cached._web_source = None
+        cached._web_size = None
+        cached._web_fps = None
+        cached._web_data = {}
+        cached._web_name = None
+        cached._web_debug_frames = False
         if proj is not None and self in proj.objects:
             idx = proj.objects.index(self)
             proj.objects[idx] = cached
@@ -1383,6 +1487,10 @@ class Object:
         """加工後の再生時間を返す（ffprobe + 時間影響エフェクト反映）"""
         if self.media_type == "image":
             raise TypeError("画像にはlength()を使えません。動画/音声のみ対応です。")
+        if self.media_type == "web":
+            if self.duration is None:
+                raise TypeError("web Objectにはduration引数が必須です")
+            return self.duration
         proj = Project._current
         if proj is None:
             raise RuntimeError("length()にはアクティブなProjectが必要です")
@@ -1409,6 +1517,61 @@ class Object:
                 if rate > 0:
                     result = result / rate
         return result
+
+    def _build_web_cmd(self, project):
+        """webクリップ用ffmpegコマンド"""
+        cache_dir = os.path.join(_CACHE_DIR, "webclip")
+        name = self._web_name
+        webm_path = os.path.join(cache_dir, f"{name}.webm")
+        frames_dir = os.path.join(cache_dir, f"{name}_frames")
+        frames_pattern = os.path.join(frames_dir, "frame_%05d.png")
+        fps = self._web_fps or project.fps
+        dur = self.duration
+        return [
+            "ffmpeg", "-y",
+            "-framerate", str(fps),
+            "-i", frames_pattern,
+            "-c:v", "libvpx-vp9",
+            "-pix_fmt", "yuva420p",
+            "-b:v", "0", "-crf", "30",
+            "-auto-alt-ref", "0",
+            "-t", str(dur),
+            webm_path,
+        ]
+
+    def _render_web_frames(self, project):
+        """Playwrightで HTML を連番PNGにキャプチャ"""
+        from playwright.sync_api import sync_playwright
+        name = self._web_name
+        cache_dir = os.path.join(_CACHE_DIR, "webclip")
+        frames_dir = os.path.join(cache_dir, f"{name}_frames")
+        os.makedirs(frames_dir, exist_ok=True)
+        w, h = self._web_size
+        fps = self._web_fps or project.fps
+        dur = self.duration
+        N = int(dur * fps)
+        html_path = os.path.abspath(self._web_source)
+        url = f"file:///{html_path.replace(os.sep, '/')}"
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            page = browser.new_page(viewport={"width": w, "height": h})
+            page.goto(url)
+            page.wait_for_function("typeof globalThis.renderFrame === 'function'", timeout=5000)
+            for i in range(N):
+                t = i / fps
+                u = 1.0 if N <= 1 else i / (N - 1)
+                state = {
+                    "frame": i, "t": t, "u": u,
+                    "fps": fps, "duration": dur,
+                    "width": w, "height": h,
+                    "data": self._web_data, "seed": 0,
+                }
+                page.evaluate("state => globalThis.renderFrame(state)", state)
+                page.screenshot(
+                    path=os.path.join(frames_dir, f"frame_{i:05d}.png"),
+                    omit_background=True)
+            browser.close()
 
     def split(self):
         """(VideoView or None, AudioView or None) を返す"""

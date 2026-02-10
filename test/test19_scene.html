@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html><head><style>
+body { margin: 0; background: transparent; overflow: hidden; }
+#box { position: absolute; width: 100px; height: 100px; background: red; }
+</style></head>
+<body><div id="box"></div>
+<script>
+function renderFrame(state) {
+  var box = document.getElementById('box');
+  box.style.left = (state.u * (state.width - 100)) + 'px';
+  box.style.top = '50px';
+  box.style.opacity = state.data.opacity || 1;
+}
+</script></body></html>

@@ -212,6 +212,14 @@ def setup_test18():
     return p.render("test18.mp4", dry_run=True)
 
 
+def setup_test19():
+    """webクリップテスト: HTML→透明webm→合成"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test19_web.py", priority=0)
+    return p.render("test19.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -231,6 +239,7 @@ ALL_TESTS = [
     ("test16", setup_test16),
     ("test17", setup_test17),
     ("test18", setup_test18),
+    ("test19", setup_test19),
 ]
 
 

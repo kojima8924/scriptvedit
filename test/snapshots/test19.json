@@ -1,0 +1,47 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=1280x720:d=2.0:r=30",
+    "-i",
+    "__cache__/webclip/test19_scene.webm",
+    "-filter_complex",
+    "[0:v][1:v]overlay=0.5*W-w/2:0.5*H-h/2:enable='between(t/,0/,2.0)'[v1]",
+    "-map",
+    "[v1]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "2.0",
+    "test19.mp4"
+  ],
+  "cache": {
+    "__cache__/webclip/test19_scene.webm": [
+      "ffmpeg",
+      "-y",
+      "-framerate",
+      "30",
+      "-i",
+      "__cache__/webclip/test19_scene_frames/frame_%05d.png",
+      "-c:v",
+      "libvpx-vp9",
+      "-pix_fmt",
+      "yuva420p",
+      "-b:v",
+      "0",
+      "-crf",
+      "30",
+      "-auto-alt-ref",
+      "0",
+      "-t",
+      "2.0",
+      "__cache__/webclip/test19_scene.webm"
+    ]
+  }
+}

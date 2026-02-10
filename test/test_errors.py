@@ -222,6 +222,45 @@ def test_audio_video_effect_mismatch():
         return False, f"メッセージが不適切: {msg}"
 
 
+def test_web_kwargs_on_non_web():
+    """画像にduration/sizeを渡す → TypeError"""
+    p = Project()
+    try:
+        Object("../onigiri_tenmusu.png", duration=2.0, size=(640, 360))
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "web Object" in msg and ".html" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_web_unknown_kwarg():
+    """HTMLに不明なkwarg → TypeError"""
+    p = Project()
+    try:
+        Object("test.html", duration=2.0, size=(640, 360), unknown_param=True)
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        if "不明なキーワード引数" in msg and "unknown_param" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_web_no_duration():
+    """HTMLにdurationなし → ValueError"""
+    p = Project()
+    try:
+        Object("test.html", size=(640, 360))
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "duration" in msg and "必須" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -236,6 +275,9 @@ ALL_TESTS = [
     ("AudioView.until()禁止", test_view_until_forbidden),
     ("VideoView<=音声エフェクト", test_video_audio_effect_mismatch),
     ("AudioView<=映像エフェクト", test_audio_video_effect_mismatch),
+    ("非webにkwargs", test_web_kwargs_on_non_web),
+    ("web不明kwarg", test_web_unknown_kwarg),
+    ("web duration未指定", test_web_no_duration),
 ]
 
 
