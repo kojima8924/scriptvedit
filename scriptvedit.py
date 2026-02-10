@@ -1,5 +1,252 @@
 import subprocess
 import os
+import builtins as _builtins
+
+
+# --- Expr（式ビルダー） ---
+
+class Expr:
+    """ffmpeg式ビルダー基底クラス"""
+    def to_ffmpeg(self, u_expr):
+        raise NotImplementedError
+
+    def __add__(self, other):
+        return _BinOp("+", self, _to_expr(other))
+
+    def __radd__(self, other):
+        return _BinOp("+", _to_expr(other), self)
+
+    def __sub__(self, other):
+        return _BinOp("-", self, _to_expr(other))
+
+    def __rsub__(self, other):
+        return _BinOp("-", _to_expr(other), self)
+
+    def __mul__(self, other):
+        return _BinOp("*", self, _to_expr(other))
+
+    def __rmul__(self, other):
+        return _BinOp("*", _to_expr(other), self)
+
+    def __truediv__(self, other):
+        return _BinOp("/", self, _to_expr(other))
+
+    def __rtruediv__(self, other):
+        return _BinOp("/", _to_expr(other), self)
+
+    def __pow__(self, other):
+        return _FuncCall("pow", [self, _to_expr(other)])
+
+    def __rpow__(self, other):
+        return _FuncCall("pow", [_to_expr(other), self])
+
+    def __neg__(self):
+        return _UnOp("-", self)
+
+    def __abs__(self):
+        return _FuncCall("abs", [self])
+
+
+class Const(Expr):
+    """定数ノード"""
+    def __init__(self, value):
+        self.value = value
+
+    def to_ffmpeg(self, u_expr):
+        return str(self.value)
+
+
+class Var(Expr):
+    """変数ノード"""
+    def __init__(self, name):
+        self.name = name
+
+    def to_ffmpeg(self, u_expr):
+        if self.name == "u":
+            return u_expr
+        return self.name
+
+
+class _BinOp(Expr):
+    """二項演算ノード"""
+    def __init__(self, op, left, right):
+        self.op = op
+        self.left = left
+        self.right = right
+
+    def to_ffmpeg(self, u_expr):
+        l = self.left.to_ffmpeg(u_expr)
+        r = self.right.to_ffmpeg(u_expr)
+        return f"({l}{self.op}{r})"
+
+
+class _UnOp(Expr):
+    """単項演算ノード"""
+    def __init__(self, op, operand):
+        self.op = op
+        self.operand = operand
+
+    def to_ffmpeg(self, u_expr):
+        x = self.operand.to_ffmpeg(u_expr)
+        return f"({self.op}{x})"
+
+
+class _FuncCall(Expr):
+    """関数呼び出しノード"""
+    def __init__(self, name, args):
+        self.name = name
+        self.args = args
+
+    def to_ffmpeg(self, u_expr):
+        arg_strs = [a.to_ffmpeg(u_expr) for a in self.args]
+        sep = "\\,"
+        return f"{self.name}({sep.join(arg_strs)})"
+
+
+def _to_expr(x):
+    """float/int→Const, Expr→そのまま, それ以外→TypeError"""
+    if isinstance(x, Expr):
+        return x
+    if isinstance(x, (int, float)):
+        return Const(x)
+    raise TypeError(f"Exprに変換できません: {type(x)}")
+
+
+def _resolve_param(param):
+    """float→Const, callable→Var('u')で評価してExpr化, Expr→そのまま"""
+    if isinstance(param, Expr):
+        return param
+    if isinstance(param, (int, float)):
+        return Const(param)
+    if callable(param):
+        u = Var("u")
+        try:
+            result = param(u)
+        except TypeError as e:
+            raise TypeError(
+                "lambda内でmath関数は使えません。scriptveditの関数を使ってください。\n"
+                "使用可能: sin, cos, tan, exp, log, sqrt, lerp, clip, abs, min, max, "
+                "floor, ceil, smoothstep, step, mod, frac, PI, E"
+            ) from e
+        return _to_expr(result)
+    raise TypeError(f"Effect引数にはfloat, lambda, Exprのいずれかを渡してください: {type(param)}")
+
+
+# --- 数学関数（Exprラッパー） ---
+
+def sin(x):
+    return _FuncCall("sin", [_to_expr(x)])
+
+def cos(x):
+    return _FuncCall("cos", [_to_expr(x)])
+
+def tan(x):
+    return _FuncCall("tan", [_to_expr(x)])
+
+def asin(x):
+    return _FuncCall("asin", [_to_expr(x)])
+
+def acos(x):
+    return _FuncCall("acos", [_to_expr(x)])
+
+def atan(x):
+    return _FuncCall("atan", [_to_expr(x)])
+
+def atan2(y, x):
+    return _FuncCall("atan2", [_to_expr(y), _to_expr(x)])
+
+def sinh(x):
+    return _FuncCall("sinh", [_to_expr(x)])
+
+def cosh(x):
+    return _FuncCall("cosh", [_to_expr(x)])
+
+def tanh(x):
+    return _FuncCall("tanh", [_to_expr(x)])
+
+def exp(x):
+    return _FuncCall("exp", [_to_expr(x)])
+
+def log(x):
+    return _FuncCall("log", [_to_expr(x)])
+
+def sqrt(x):
+    return _FuncCall("sqrt", [_to_expr(x)])
+
+def floor(x):
+    return _FuncCall("floor", [_to_expr(x)])
+
+def ceil(x):
+    return _FuncCall("ceil", [_to_expr(x)])
+
+def trunc(x):
+    return _FuncCall("trunc", [_to_expr(x)])
+
+def log10(x):
+    return _FuncCall("log", [_to_expr(x)]) / Const(2.302585092994046)
+
+def cbrt(x):
+    return _FuncCall("pow", [_to_expr(x), Const(1/3)])
+
+def lerp(a, b, t):
+    a, b, t = _to_expr(a), _to_expr(b), _to_expr(t)
+    return a + (b - a) * t
+
+def clip(x, lo, hi):
+    return _FuncCall("clip", [_to_expr(x), _to_expr(lo), _to_expr(hi)])
+
+clamp = clip
+
+def step(edge, x):
+    return _FuncCall("gte", [_to_expr(x), _to_expr(edge)])
+
+def smoothstep(edge0, edge1, x):
+    e0, e1, xv = _to_expr(edge0), _to_expr(edge1), _to_expr(x)
+    t = clip((xv - e0) / (e1 - e0), 0, 1)
+    return t * t * (Const(3) - Const(2) * t)
+
+def mod(a, b):
+    return _FuncCall("mod", [_to_expr(a), _to_expr(b)])
+
+def frac(x):
+    xv = _to_expr(x)
+    return xv - floor(xv)
+
+def deg2rad(x):
+    return _to_expr(x) * Const(3.141592653589793 / 180)
+
+def rad2deg(x):
+    return _to_expr(x) * Const(180 / 3.141592653589793)
+
+# Python組み込みと衝突する関数（両方対応）
+def abs(x):
+    if isinstance(x, Expr):
+        return _FuncCall("abs", [x])
+    return _builtins.abs(x)
+
+def min(*args):
+    if any(isinstance(a, Expr) for a in args):
+        return _FuncCall("min", [_to_expr(a) for a in args])
+    return _builtins.min(*args)
+
+def max(*args):
+    if any(isinstance(a, Expr) for a in args):
+        return _FuncCall("max", [_to_expr(a) for a in args])
+    return _builtins.max(*args)
+
+def round(x):
+    if isinstance(x, Expr):
+        return _FuncCall("round", [x])
+    return _builtins.round(x)
+
+def pow(x, y):
+    if isinstance(x, Expr) or isinstance(y, Expr):
+        return _FuncCall("pow", [_to_expr(x), _to_expr(y)])
+    return _builtins.pow(x, y)
+
+# 定数
+PI = 3.141592653589793
+E = 2.718281828459045
 
 
 # --- media_type判定 ---
@@ -169,17 +416,19 @@ class Project:
         start = 0
         for e in obj.effects:
             if e.name == "scale":
-                v = e.params.get("value", 1)
-                expr = f"{v}+(1-{v})*(t-{start})/{dur}"
+                scale_expr = e.params.get("value", Const(1))
+                u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+                ffmpeg_str = scale_expr.to_ffmpeg(u_expr)
                 obj_filters.append(
-                    f"scale=w='trunc(iw*({expr})/2)*2':h='trunc(ih*({expr})/2)*2':eval=frame"
+                    f"scale=w='trunc(iw*({ffmpeg_str})/2)*2':h='trunc(ih*({ffmpeg_str})/2)*2':eval=frame"
                 )
             elif e.name == "fade":
-                alpha = e.params.get("alpha", 1.0)
-                expr = f"{alpha}+(1-{alpha})*(T-{start})/{dur}"
+                alpha_expr = e.params.get("alpha", Const(1.0))
+                u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
+                ffmpeg_str = alpha_expr.to_ffmpeg(u_expr)
                 obj_filters.append("format=rgba")
                 obj_filters.append(
-                    f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({expr}\\,0\\,1)'"
+                    f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
                 )
 
         obj_label = "[obj1]"
@@ -245,22 +494,24 @@ class Project:
                     sy = t.params.get("sy", 1)
                     obj_filters.append(f"scale=iw*{sx}:ih*{sy}")
 
-            # Effect処理（move以外、float引数はstart_time〜start_time+durationで値→1.0にアニメーション）
+            # Effect処理（move以外）
             dur = obj.duration or 5
             start = obj.start_time
             for e in obj.effects:
                 if e.name == "scale":
-                    v = e.params.get("value", 1)
-                    expr = f"{v}+(1-{v})*(t-{start})/{dur}"
+                    scale_expr = e.params.get("value", Const(1))
+                    u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+                    ffmpeg_str = scale_expr.to_ffmpeg(u_expr)
                     obj_filters.append(
-                        f"scale=w='trunc(iw*({expr})/2)*2':h='trunc(ih*({expr})/2)*2':eval=frame"
+                        f"scale=w='trunc(iw*({ffmpeg_str})/2)*2':h='trunc(ih*({ffmpeg_str})/2)*2':eval=frame"
                     )
                 elif e.name == "fade":
-                    alpha = e.params.get("alpha", 1.0)
-                    expr = f"{alpha}+(1-{alpha})*(T-{start})/{dur}"
+                    alpha_expr = e.params.get("alpha", Const(1.0))
+                    u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
+                    ffmpeg_str = alpha_expr.to_ffmpeg(u_expr)
                     obj_filters.append("format=rgba")
                     obj_filters.append(
-                        f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({expr}\\,0\\,1)'"
+                        f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
                     )
 
             # フィルタがあればラベル付きで追加
@@ -317,34 +568,24 @@ def _build_move_exprs(obj, start, dur):
         return "(W-w)/2", "(H-h)/2"  # デフォルト中心
 
     p = move_effect.params
-    anchor = p.get("anchor", "center")
+    anchor_val = p.get("anchor", "center")
 
-    # from/to アニメーション対応
-    has_anim = "from_x" in p or "from_y" in p or "to_x" in p or "to_y" in p
+    # x, y は Expr（_resolve_param済み）
+    x_param = p.get("x", Const(0.5))
+    y_param = p.get("y", Const(0.5))
 
-    if has_anim:
-        fx = p.get("from_x", p.get("x", 0.5))
-        fy = p.get("from_y", p.get("y", 0.5))
-        tx = p.get("to_x", p.get("x", 0.5))
-        ty = p.get("to_y", p.get("y", 0.5))
-        # p_expr = clip((t-start)/dur, 0, 1)
-        p_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
-        base_x = f"({fx}+({tx}-{fx})*{p_expr})*W"
-        base_y = f"({fy}+({ty}-{fy})*{p_expr})*H"
+    u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+    base_x = f"{x_param.to_ffmpeg(u_expr)}*W"
+    base_y = f"{y_param.to_ffmpeg(u_expr)}*H"
+
+    if anchor_val == "center":
+        x_result = f"{base_x}-w/2"
+        y_result = f"{base_y}-h/2"
     else:
-        x = p.get("x", 0.5)
-        y = p.get("y", 0.5)
-        base_x = f"W*{x}"
-        base_y = f"H*{y}"
+        x_result = base_x
+        y_result = base_y
 
-    if anchor == "center":
-        x_expr = f"{base_x}-w/2"
-        y_expr = f"{base_y}-h/2"
-    else:
-        x_expr = base_x
-        y_expr = base_y
-
-    return x_expr, y_expr
+    return x_result, y_result
 
 
 class TransformChain:
@@ -522,16 +763,33 @@ def resize(**kwargs):
 
 # --- Effect関数 ---
 
-def scale(value):
-    return Effect("scale", value=value)
+def scale(value=1):
+    return Effect("scale", value=_resolve_param(value))
 
 
-def fade(**kwargs):
-    return Effect("fade", **kwargs)
+def fade(alpha=1.0):
+    return Effect("fade", alpha=_resolve_param(alpha))
 
 
 def move(**kwargs):
-    return Effect("move", **kwargs)
+    resolved = {}
+    # from/to アニメーション → lerp Exprに自動変換
+    has_anim = "from_x" in kwargs or "from_y" in kwargs or "to_x" in kwargs or "to_y" in kwargs
+    if has_anim:
+        fx = kwargs.get("from_x", kwargs.get("x", 0.5))
+        fy = kwargs.get("from_y", kwargs.get("y", 0.5))
+        tx = kwargs.get("to_x", kwargs.get("x", 0.5))
+        ty = kwargs.get("to_y", kwargs.get("y", 0.5))
+        resolved["x"] = _resolve_param(lambda u: lerp(fx, tx, u))
+        resolved["y"] = _resolve_param(lambda u: lerp(fy, ty, u))
+    else:
+        if "x" in kwargs:
+            resolved["x"] = _resolve_param(kwargs["x"])
+        if "y" in kwargs:
+            resolved["y"] = _resolve_param(kwargs["y"])
+    if "anchor" in kwargs:
+        resolved["anchor"] = kwargs["anchor"]
+    return Effect("move", **resolved)
 
 
 # --- アンカー/同期 ---
