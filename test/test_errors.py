@@ -449,6 +449,80 @@ def test_web_deps_accepted():
         Project._current = old
 
 
+def test_video_no_time_checkpoint_has_duration():
+    """video + transform-only + time未指定 → checkpointコマンドに-tが含まれる"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../fox_noaudio.mp4")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_vid_notime.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=1280, height=720, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        result = p.render("_tmp_vid_notime.mp4", dry_run=True)
+        # resultはdict（cache付き）であるべき
+        if not isinstance(result, dict):
+            return False, f"dictでない: {type(result)}"
+        cache = result.get("cache", {})
+        if not cache:
+            return False, "cacheが空"
+        # cacheの各コマンドに-tが含まれ、値がNoneでないこと
+        for path, cmd in cache.items():
+            if not path.endswith(".webm"):
+                return False, f"拡張子が.webmでない: {path}"
+            if "-t" not in cmd:
+                return False, f"-tがコマンドにない: {cmd}"
+            t_idx = cmd.index("-t")
+            t_val = cmd[t_idx + 1]
+            if t_val == "None":
+                return False, f"-tの値がNone"
+            dur = float(t_val)
+            if dur <= 0:
+                return False, f"-tの値が不正: {dur}"
+        return True, f"checkpoint .webm + -t={t_val}"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_video_with_time_uses_specified_duration():
+    """video + time指定 → obj.time()の値がcheckpointのdurationに使われる"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../fox_noaudio.mp4")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2.5) <= move(x=0.5, y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_vid_time.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=1280, height=720, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        result = p.render("_tmp_vid_time.mp4", dry_run=True)
+        if not isinstance(result, dict):
+            return False, f"dictでない: {type(result)}"
+        cache = result.get("cache", {})
+        if not cache:
+            return False, "cacheが空"
+        for path, cmd in cache.items():
+            if "-t" not in cmd:
+                return False, f"-tがコマンドにない"
+            t_idx = cmd.index("-t")
+            t_val = float(cmd[t_idx + 1])
+            if t_val != 2.5:
+                return False, f"-tの値が2.5でない: {t_val}"
+        return True, f"time指定=2.5が正しく使用される"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -479,6 +553,8 @@ ALL_TESTS = [
     ("FFP変化検出", test_ffp_change_detection),
     ("checkpoint FFP署名", test_checkpoint_signature_uses_ffp),
     ("web deps引数", test_web_deps_accepted),
+    ("video time未指定checkpoint", test_video_no_time_checkpoint_has_duration),
+    ("video time指定checkpoint", test_video_with_time_uses_specified_duration),
 ]
 
 

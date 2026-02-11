@@ -929,6 +929,9 @@ class Project:
         original_source = obj.source
         original_media_type = obj.media_type
         dur = obj.duration
+        # video + duration未指定 → obj.length() で補完
+        if dur is None and _detect_media_type(original_source) in ("video",):
+            dur = obj.length()
         fps = self.fps
 
         # 復元点チェック（bakeable_opsベース）
@@ -1051,6 +1054,9 @@ class Project:
 
             original_source = obj.source
             dur = obj.duration
+            # video + duration未指定 → obj.length() で補完
+            if dur is None and _detect_media_type(original_source) in ("video",):
+                dur = obj.length()
             fps = self.fps
             current_source = original_source
             current_media_type = obj.media_type

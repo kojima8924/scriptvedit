@@ -267,6 +267,14 @@ def setup_test24():
     return p.render("test24.mp4", dry_run=True)
 
 
+def setup_test25():
+    """video + transform-only + time未指定 → obj.length()でduration補完"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test25_video_no_time.py", priority=0)
+    return p.render("test25.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -292,6 +300,7 @@ ALL_TESTS = [
     ("test22", setup_test22),
     ("test23", setup_test23),
     ("test24", setup_test24),
+    ("test25", setup_test25),
 ]
 
 
