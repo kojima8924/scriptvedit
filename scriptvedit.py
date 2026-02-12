@@ -382,7 +382,7 @@ _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
-_ENGINE_VER = "4"
+_ENGINE_VER = "5"
 _BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift"}
 
 
@@ -930,27 +930,12 @@ class Project:
 
     def _build_checkpoint_image_cmd(self, source, transforms, cache_path, quality="final"):
         """画像チェックポイント: Transform適用→透過PNG"""
-        filters = []
-        for t in transforms:
-            if t.name == "resize":
-                sx = t.params.get("sx", 1)
-                sy = t.params.get("sy", 1)
-                filters.append(f"scale=iw*{sx}:ih*{sy}")
-            elif t.name == "rotate":
-                ang = t.params.get("rad")
-                ang_str = ang.to_ffmpeg("u") if isinstance(ang, Expr) else str(ang)
-                expand = t.params.get("expand", False)
-                fill = t.params.get("fill", "0x00000000")
-                filters.append("format=rgba")
-                if expand:
-                    filters.append(
-                        f"rotate=angle='{ang_str}':fillcolor={fill}"
-                        f":ow='rotw({ang_str})':oh='roth({ang_str})'"
-                    )
-                else:
-                    filters.append(
-                        f"rotate=angle='{ang_str}':fillcolor={fill}:ow=iw:oh=ih"
-                    )
+        # 一時Object経由で _build_transform_filters を再利用
+        temp = Object.__new__(Object)
+        temp.source = source
+        temp.transforms = list(transforms)
+        temp.effects = []
+        filters = _build_transform_filters(temp)
         cmd = ["ffmpeg", "-y", "-i", source]
         if filters:
             cmd.extend(["-vf", ",".join(filters)])

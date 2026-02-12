@@ -40,6 +40,10 @@ obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
 - **Transform** (`|` で連結、`<=` で適用): 1回だけ適用される空間変換
   - `resize(sx, sy)` ... サイズ変更
   - `rotate(deg=N)` / `rotate(rad=N)` ... 回転（静的）
+  - `crop(x, y, w, h)` ... 切り抜き
+  - `pad(w, h, x, y, color)` ... パディング
+  - `blur(radius)` ... ぼかし
+  - `eq(brightness, contrast, saturation, gamma)` ... 色調補正
 
 - **Effect** (`&` で連結、`<=` で適用): float で定数、lambda(u) でアニメーション
   - `move(x, y, anchor)` ... 配置位置（固定 or from/toアニメーション）
@@ -48,9 +52,35 @@ obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
   - `fade(0.5)` ... 定数 半透明
   - `fade(lambda u: u)` ... 透明 → 不透明にアニメーション
   - `rotate_to(from_deg, to_deg)` ... 回転アニメーション（bakeable）
+  - `wipe(direction)` ... ワイプ表示（"left"/"right"/"top"/"bottom"）
+  - `color_shift(hue, saturation, brightness)` ... 色相/彩度/明度シフト
+  - `shake(amplitude, frequency)` ... 振動（live、overlay座標変調）
   - `morph_to(target_obj)` ... 画像→画像モーフィング（bakeable、重い。bakeable opsの末尾に配置必須）
 
 `u` は正規化時間（0〜1）。Effectの表示開始から終了まで線形に変化する。
+
+### Effect分類（bakeable / live）
+
+checkpointで焼き込まれるか、レンダリング時にoverlay座標で解釈されるかの分類。
+
+| 種類 | 名前 | 分類 | 備考 |
+|------|------|------|------|
+| Transform | resize, rotate, crop, pad, blur, eq | bakeable | 全Transform は bakeable |
+| Effect | scale (zoom) | bakeable | zoom は scale のエイリアス |
+| Effect | fade | bakeable | |
+| Effect | trim | bakeable | |
+| Effect | rotate_to | bakeable | |
+| Effect | wipe | bakeable | |
+| Effect | color_shift | bakeable | |
+| Effect | morph_to | bakeable | 生成系。bakeable ops の末尾に配置必須 |
+| Effect | move | live | overlay座標で解釈 |
+| Effect | delete | live | overlay除外 |
+| Effect | shake | live | overlay座標にsin/cosオフセット加算 |
+
+**重要**: live Effect は checkpoint で焼かれないため、checkpoint 生成後もレンダリング時に必ず残る。
+
+morph_to は bakeable ops の末尾に配置する必要がある（違反時は ValueError）。
+shake は overlay 座標の変調として実装されており live 分類。将来 bakeable に変更する場合は ENGINE_VER 更新が必要。
 
 ### Expr式ビルダー
 
@@ -257,7 +287,7 @@ cmd = p.render("output.mp4", dry_run=True)
 cd test
 python test_snapshot.py        # スナップショットテスト（30テスト）
 python test_snapshot.py --update  # スナップショット更新
-python test_errors.py          # エラーケーステスト（39テスト）
+python test_errors.py          # エラーケーステスト（54テスト）
 python test01_main.py          # 個別テスト（MP4生成）
 ```
 

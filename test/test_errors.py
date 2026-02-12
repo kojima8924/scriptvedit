@@ -5,9 +5,9 @@ from scriptvedit import (
     _resolve_param, Project, P, Object, VideoView, AudioView,
     again, move, fade, resize, rotate, rotate_to, morph_to, AudioEffect, AudioEffectChain,
     subtitle, subtitle_box, bubble, diagram, circle, label,
-    crop, pad, blur, eq, wipe, zoom, color_shift, shake,
+    crop, pad, blur, eq, wipe, zoom, color_shift, shake, scale,
     Transform, TransformChain, Effect, EffectChain,
-    _checkpoint_cache_path, _file_fingerprint,
+    _checkpoint_cache_path, _file_fingerprint, _web_cache_path,
 )
 
 
@@ -721,6 +721,242 @@ def test_zoom_no_args():
         return False, f"メッセージが不適切: {msg}"
 
 
+def _filter_found_in_cache(cmd_result, filter_str):
+    """dry_run結果のcacheコマンドに指定フィルタ文字列が含まれるか検証"""
+    if not isinstance(cmd_result, dict):
+        return False, f"dictでない: {type(cmd_result)}"
+    cache_cmds = cmd_result.get("cache", {})
+    if not cache_cmds:
+        return False, "cacheが空"
+    for path, cmd in cache_cmds.items():
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if filter_str in cmd_str:
+            return True, f"'{filter_str}' found"
+    return False, f"'{filter_str}' NOT found in any cache cmd"
+
+
+def _make_image_checkpoint_project(transforms_code, effects_code=""):
+    """画像+Transform/Effect→dry_run結果を返すヘルパー"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        f'obj <= {transforms_code}\n'
+        f'obj.time(1) <= move(x=0.5, y=0.5, anchor="center"){" & " + effects_code if effects_code else ""}\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_filter_test.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        return p.render("_tmp_filter.mp4", dry_run=True)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_crop_filter_in_checkpoint():
+    """crop Transformがcheckpointのfiltergraphに出ること"""
+    cmd = _make_image_checkpoint_project('crop(x=10, y=10, w=200, h=150)')
+    return _filter_found_in_cache(cmd, "crop=200:150:10:10")
+
+
+def test_pad_filter_in_checkpoint():
+    """pad Transformがcheckpointのfiltergraphに出ること"""
+    cmd = _make_image_checkpoint_project('pad(w=640, h=480)')
+    return _filter_found_in_cache(cmd, "pad=640:480:")
+
+
+def test_blur_filter_in_checkpoint():
+    """blur Transformがcheckpointのfiltergraphに出ること"""
+    cmd = _make_image_checkpoint_project('blur(radius=10)')
+    return _filter_found_in_cache(cmd, "boxblur=10:10")
+
+
+def test_eq_filter_in_checkpoint():
+    """eq Transformがcheckpointのfiltergraphに出ること"""
+    cmd = _make_image_checkpoint_project('eq(brightness=0.2, contrast=1.2)')
+    return _filter_found_in_cache(cmd, "eq=brightness=0.2:contrast=1.2")
+
+
+def test_wipe_filter_in_checkpoint():
+    """wipe Effectがcheckpointのfiltergraphに出ること"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2) <= wipe("left") & move(x=0.5, y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_wipe_test.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        cmd = p.render("_tmp_wipe.mp4", dry_run=True)
+        ok1, msg1 = _filter_found_in_cache(cmd, "geq=")
+        if not ok1:
+            return ok1, msg1
+        return _filter_found_in_cache(cmd, "lte(X")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_zoom_filter_in_checkpoint():
+    """zoom(scale) Effectがcheckpointのfiltergraphに出ること"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2) <= zoom(lambda u: lerp(1, 2, u)) & move(x=0.5, y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_zoom_test.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        cmd = p.render("_tmp_zoom.mp4", dry_run=True)
+        ok1, msg1 = _filter_found_in_cache(cmd, "scale=w=")
+        if not ok1:
+            return ok1, msg1
+        return _filter_found_in_cache(cmd, "eval=frame")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_color_shift_filter_in_checkpoint():
+    """color_shift Effectがcheckpointのfiltergraphに出ること"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2) <= color_shift(hue=90) & move(x=0.5, y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_cshift_test.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        cmd = p.render("_tmp_cshift.mp4", dry_run=True)
+        return _filter_found_in_cache(cmd, "hue=h=")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_rotate_to_filter_in_checkpoint():
+    """rotate_to Effectがcheckpointのfiltergraphに出ること"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2) <= rotate_to(from_deg=0, to_deg=90) & move(x=0.5, y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_rotto_test.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        cmd = p.render("_tmp_rotto.mp4", dry_run=True)
+        return _filter_found_in_cache(cmd, "rotate=angle=")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_move_survives_bakeable_checkpoint():
+    """move(live) + wipe(bakeable) でcheckpoint後もmoveがoverlayに残ること"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2) <= wipe("left") & move(from_x=0.2, from_y=0.5, to_x=0.8, to_y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_move_surv.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        cmd = p.render("_tmp_move_surv.mp4", dry_run=True)
+        if not isinstance(cmd, dict):
+            return False, f"dictでない: {type(cmd)}"
+        main_str = " ".join(cmd["main"])
+        has_move = "0.2" in main_str and "0.8" in main_str
+        if has_move:
+            return True, "move preserved after bakeable checkpoint"
+        return False, "move lost after checkpoint"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_shake_is_live():
+    """shake(live)がcheckpointに焼かれずoverlayに残ること"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2) <= shake(amplitude=0.05, frequency=8) & move(x=0.5, y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_shake_live.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        cmd = p.render("_tmp_shake_live.mp4", dry_run=True)
+        if isinstance(cmd, dict):
+            main_str = " ".join(cmd["main"])
+        else:
+            main_str = " ".join(cmd)
+        has_shake = "sin(" in main_str and "cos(" in main_str
+        if has_shake:
+            return True, "shake in overlay"
+        return False, "shake NOT in overlay"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_web_deps_invalidation():
+    """depsファイルのmtime変更でweb cache pathが変わること"""
+    import time as _time
+    with tempfile.NamedTemporaryFile(suffix=".css", delete=False, mode="w") as f:
+        f.write("body{}")
+        dep_path = f.name
+    old = Project._current
+    try:
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        obj1 = subtitle_box("test", deps=[dep_path])
+        path1 = _web_cache_path(obj1, p)
+        # mtimeを変更
+        _time.sleep(0.05)
+        os.utime(dep_path, None)
+        obj2 = subtitle_box("test", deps=[dep_path])
+        path2 = _web_cache_path(obj2, p)
+        Project._current = old
+        if path1 != path2:
+            return True, f"cache path changed on dep touch"
+        return False, f"cache path unchanged: {path1}"
+    finally:
+        os.unlink(dep_path)
+        Project._current = old
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -765,6 +1001,17 @@ ALL_TESTS = [
     ("pad w/h未指定", test_pad_no_size),
     ("color_shift引数なし", test_color_shift_no_args),
     ("zoom引数なし", test_zoom_no_args),
+    ("crop filter in checkpoint", test_crop_filter_in_checkpoint),
+    ("pad filter in checkpoint", test_pad_filter_in_checkpoint),
+    ("blur filter in checkpoint", test_blur_filter_in_checkpoint),
+    ("eq filter in checkpoint", test_eq_filter_in_checkpoint),
+    ("wipe filter in checkpoint", test_wipe_filter_in_checkpoint),
+    ("zoom filter in checkpoint", test_zoom_filter_in_checkpoint),
+    ("color_shift filter in checkpoint", test_color_shift_filter_in_checkpoint),
+    ("rotate_to filter in checkpoint", test_rotate_to_filter_in_checkpoint),
+    ("move survives bakeable", test_move_survives_bakeable_checkpoint),
+    ("shake is live", test_shake_is_live),
+    ("web deps invalidation", test_web_deps_invalidation),
 ]
 
 
