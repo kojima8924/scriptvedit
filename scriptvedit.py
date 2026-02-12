@@ -382,7 +382,7 @@ _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
-_ENGINE_VER = "5"
+_ENGINE_VER = "6"
 _BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift"}
 
 
@@ -683,7 +683,8 @@ class Project:
         end_idx = len(self.objects)
         self._layers.append((start_idx, end_idx, priority))
         for obj in self.objects[start_idx:end_idx]:
-            obj.priority = priority
+            override = getattr(obj, '_priority_override', None)
+            obj.priority = override if override is not None else priority
         self._fill_auto_durations(start_idx, end_idx)
         self._current_layer_file = None
 
@@ -697,16 +698,15 @@ class Project:
                 obj.duration = obj.length()
 
     def _calc_total_duration(self):
-        """各レイヤーの最大durationを返す"""
+        """各レイヤーの最大終了時刻を返す（show含む）"""
         max_dur = 0
         for start_idx, end_idx, _ in self._layers:
-            layer_dur = 0
             for item in self.objects[start_idx:end_idx]:
                 if isinstance(item, _AnchorMarker):
                     continue
                 if item.duration is not None:
-                    layer_dur += item.duration
-            max_dur = max(max_dur, layer_dur)
+                    end = item.start_time + item.duration
+                    max_dur = max(max_dur, end)
         return max_dur if max_dur > 0 else 5
 
     def _resolve_anchors(self, check_unresolved=True):
@@ -724,17 +724,38 @@ class Project:
                             changed = True
                         continue
                     item.start_time = current_time
-                    # until解決
+                    # name anchor: X.start 登録
+                    anchor_name = getattr(item, '_anchor_name', None)
+                    if anchor_name:
+                        start_key = f"{anchor_name}.start"
+                        old_val = self._anchors.get(start_key)
+                        self._anchors[start_key] = current_time
+                        if old_val != current_time:
+                            changed = True
+                    # until解決（offset対応）
                     until_name = getattr(item, '_until_anchor', None)
                     if until_name:
                         anchor_time = self._anchors.get(until_name)
                         if anchor_time is not None:
-                            new_dur = max(0, anchor_time - current_time)
+                            offset = getattr(item, '_until_offset', 0.0)
+                            target_time = anchor_time + offset
+                            new_dur = max(0, target_time - current_time)
                             if item.duration != new_dur:
                                 item.duration = new_dur
                                 changed = True
+                    # 時刻進行（advance=False なら進めない）
+                    advance = getattr(item, '_advance', True)
                     if item.duration is not None:
-                        current_time += item.duration
+                        if advance:
+                            current_time += item.duration
+                        # name anchor: X.end 登録
+                        if anchor_name:
+                            end_key = f"{anchor_name}.end"
+                            end_time = item.start_time + item.duration
+                            old_val = self._anchors.get(end_key)
+                            self._anchors[end_key] = end_time
+                            if old_val != end_time:
+                                changed = True
             if not changed:
                 break
         if check_unresolved:
@@ -745,6 +766,8 @@ class Project:
 
     def render(self, output_path, *, dry_run=False):
         self._reset_runtime_state()
+        self._dry_run = dry_run
+        self._pending_compute_cmds = {}
         # cache="use" の事前検証
         self._validate_cache_specs()
         # Plan pass: アンカー解決（cache模擬、objects破棄）
@@ -779,6 +802,8 @@ class Project:
                 all_extra.update(web_cmds)
             if checkpoint_cmds:
                 all_extra.update(checkpoint_cmds)
+            if self._pending_compute_cmds:
+                all_extra.update(self._pending_compute_cmds)
             if all_extra:
                 return {"main": cmd, "cache": all_extra}
             return cmd  # 後方互換: cache不要ならlistのまま
@@ -827,12 +852,14 @@ class Project:
             defined = ", ".join(f"'{n}'" for n in sorted(self._anchors.keys())) or "(なし)"
             details = []
             for name, item in unresolved:
+                offset = getattr(item, '_until_offset', 0.0)
+                offset_str = f", offset={offset}" if offset != 0.0 else ""
                 if isinstance(item, Pause):
-                    details.append(f"  pause.until('{name}')")
+                    details.append(f"  pause.until('{name}'{offset_str})")
                 elif isinstance(item, Object):
-                    details.append(f"  Object('{item.source}').until('{name}')")
+                    details.append(f"  Object('{item.source}').until('{name}'{offset_str})")
                 else:
-                    details.append(f"  {type(item).__name__}.until('{name}')")
+                    details.append(f"  {type(item).__name__}.until('{name}'{offset_str})")
             raise RuntimeError(
                 f"未定義のアンカーが参照されています: {names}\n"
                 f"定義済みアンカー: {defined}\n"
@@ -2022,13 +2049,15 @@ class Pause:
         self.start_time = 0
         self.priority = 0
         self._until_anchor = None
+        self._until_offset = 0.0
 
     def time(self, duration):
         self.duration = duration
         return self
 
-    def until(self, name):
+    def until(self, name, offset=0.0):
         self._until_anchor = name
+        self._until_offset = offset
         return self
 
 
@@ -2047,6 +2076,10 @@ class Object:
         self.priority = 0
         self.media_type = _detect_media_type(source)
         self._until_anchor = None
+        self._until_offset = 0.0
+        self._anchor_name = None
+        self._advance = True
+        self._priority_override = None
         self._video_deleted = False
         self._audio_deleted = False
         # web専用属性（常に初期化）
@@ -2119,7 +2152,7 @@ class Object:
             return False  # probe不可→音声なしと推定（安全側）
         return self._has_audio
 
-    def time(self, duration=None):
+    def time(self, duration=None, *, name=None):
         """表示時間を設定。省略時は加工後長(length())で自動決定（layer exec後に確定）"""
         if duration is None:
             if self.media_type == "image":
@@ -2130,11 +2163,31 @@ class Object:
         else:
             self.duration = duration
             self._duration_auto = False
+        if name is not None:
+            self._anchor_name = name
         return self
 
-    def until(self, name):
+    def until(self, name, offset=0.0):
         """durationをアンカー時刻まで伸長"""
         self._until_anchor = name
+        self._until_offset = offset
+        return self
+
+    def show(self, duration, *, priority=None):
+        """current_timeを進めずに表示。start=current_time, duration=指定値"""
+        self.duration = duration
+        self._advance = False
+        if priority is not None:
+            self._priority_override = priority
+        return self
+
+    def show_until(self, name, offset=0.0, *, priority=None):
+        """current_timeを進めずにアンカーまで表示"""
+        self._until_anchor = name
+        self._until_offset = offset
+        self._advance = False
+        if priority is not None:
+            self._priority_override = priority
         return self
 
     def __le__(self, rhs):
@@ -2172,6 +2225,132 @@ class Object:
         else:
             raise TypeError(f"Object <= に渡せるのは Transform/Effect/AudioEffect 等のみ: {type(rhs)}")
         return self
+
+    def compute(self, duration=None):
+        """タイムライン外で素材を生成。PNG(静止) or WebM(動画)を返す"""
+        # live effects チェック
+        for e in self.effects:
+            if e.name in ("move", "delete", "shake"):
+                raise ValueError(
+                    f"compute() では live Effect '{e.name}' は使用できません。"
+                    f"bakeable Effect のみ使用可能です。")
+        # Project.objects から除外
+        proj = Project._current
+        if proj is not None and self in proj.objects:
+            proj.objects.remove(self)
+        # キャッシュパス計算
+        cache_path = self._compute_cache_path(duration)
+        # plan pass: source差し替えのみ
+        if proj is not None and proj._mode == "plan":
+            self.source = cache_path
+            self.media_type = _detect_media_type(cache_path)
+            self.transforms = []
+            self.effects = []
+            return self
+        # キャッシュ存在チェック
+        if os.path.exists(cache_path):
+            self.source = cache_path
+            self.media_type = _detect_media_type(cache_path)
+            self.transforms = []
+            self.effects = []
+            return self
+        # 生成コマンド構築
+        if duration is None:
+            cmd = self._build_compute_image_cmd(cache_path)
+        else:
+            cmd = self._build_compute_video_cmd(cache_path, duration)
+        # dry_run: コマンドを記録して生成スキップ
+        if proj is not None and getattr(proj, '_dry_run', False):
+            proj._pending_compute_cmds[cache_path] = cmd
+            self.source = cache_path
+            self.media_type = _detect_media_type(cache_path)
+            self.transforms = []
+            self.effects = []
+            return self
+        # 実生成
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        subprocess.run(cmd, check=True, timeout=600)
+        self.source = cache_path
+        self.media_type = _detect_media_type(cache_path)
+        self.transforms = []
+        self.effects = []
+        return self
+
+    def _compute_cache_path(self, duration=None):
+        """compute用キャッシュパスを計算"""
+        ops = _build_unified_ops(self)
+        sigs = []
+        try:
+            sigs.append(f"ffp={_file_fingerprint(self.source)}")
+        except OSError:
+            sigs.append(f"src={self.source.replace(chr(92), '/')}")
+        sigs.append(_op_prefix_fingerprint(ops))
+        quality = "final"
+        for _, op in ops:
+            if getattr(op, 'quality', 'final') == "fast":
+                quality = "fast"
+        sigs.append(f"q={quality}")
+        sigs.append(f"ev={_ENGINE_VER}")
+        if duration is not None:
+            proj = Project._current
+            fps = proj.fps if proj else 30
+            sigs.append(f"dur={duration}")
+            sigs.append(f"fps={fps}")
+        key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+        src_hash = hashlib.sha256(
+            self.source.replace("\\", "/").encode()).hexdigest()[:8]
+        ext = ".webm" if duration is not None else ".png"
+        return os.path.join(_ARTIFACT_DIR, "compute", src_hash, f"{key}{ext}")
+
+    def _build_compute_image_cmd(self, cache_path):
+        """compute静止画: Transform適用→PNG"""
+        temp = Object.__new__(Object)
+        temp.source = self.source
+        temp.transforms = list(self.transforms)
+        temp.effects = []
+        filters = _build_transform_filters(temp)
+        cmd = ["ffmpeg", "-y", "-i", self.source]
+        if filters:
+            cmd.extend(["-vf", ",".join(filters)])
+        cmd.extend(["-frames:v", "1", "-pix_fmt", "rgba", cache_path])
+        return cmd
+
+    def _build_compute_video_cmd(self, cache_path, duration):
+        """compute動画: Transform+Effect適用→WebM VP9 alpha"""
+        proj = Project._current
+        fps = proj.fps if proj else 30
+        temp = Object.__new__(Object)
+        temp.source = self.source
+        temp.transforms = list(self.transforms)
+        temp.effects = list(self.effects)
+        temp.media_type = self.media_type
+        base_dims = _get_base_dimensions(temp)
+        filters = _build_transform_filters(temp)
+        pre_filters = _build_video_pre_filters(temp)
+        filters = pre_filters + filters
+        eff_filters, _ = _build_effect_filters(temp, 0, duration, base_dims=base_dims)
+        filters.extend(eff_filters)
+        cmd = ["ffmpeg", "-y"]
+        if self.media_type == "image":
+            cmd.extend(["-loop", "1", "-r", str(fps), "-i", self.source])
+        else:
+            cmd.extend(["-i", self.source])
+        if filters:
+            cmd.extend(["-vf", ",".join(filters)])
+        quality = "final"
+        for t in self.transforms:
+            if getattr(t, 'quality', 'final') == "fast":
+                quality = "fast"
+        for e in self.effects:
+            if getattr(e, 'quality', 'final') == "fast":
+                quality = "fast"
+        crf = "40" if quality == "fast" else "30"
+        cmd.extend([
+            "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
+            "-b:v", "0", "-crf", crf, "-auto-alt-ref", "0",
+            "-t", str(duration), cache_path,
+        ])
+        return cmd
 
     def length(self):
         """加工後の再生時間を返す（ffprobe + 時間影響エフェクト反映）"""
@@ -2533,9 +2712,10 @@ class _PauseFactory:
             Project._current.objects.append(p)
         return p
 
-    def until(self, name):
+    def until(self, name, offset=0.0):
         p = Pause()
         p._until_anchor = name
+        p._until_offset = offset
         if Project._current is not None:
             Project._current.objects.append(p)
         return p

@@ -9,15 +9,15 @@
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/2fdb2eec/a7a38b15e3fbbfa9.webm",
+    "__cache__/artifacts/checkpoint/2fdb2eec/f0eafdd68045b67a.webm",
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/30924af7/4b764c579cae4e76.webm",
+    "__cache__/artifacts/checkpoint/30924af7/e12c82782afdf9d0.webm",
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/e795964e/e1db85c96ec8f836.webm",
+    "__cache__/artifacts/checkpoint/e795964e/67aff28bb27e3ad8.webm",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.2*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,4)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,4)'[v2];[v2][3:v]overlay=trunc(0.8*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,4)'[v3]",
     "-map",
@@ -32,7 +32,7 @@
     "test07.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/2fdb2eec/a7a38b15e3fbbfa9.webm": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/f0eafdd68045b67a.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -55,9 +55,9 @@
       "0",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/2fdb2eec/a7a38b15e3fbbfa9.webm"
+      "__cache__/artifacts/checkpoint/2fdb2eec/f0eafdd68045b67a.webm"
     ],
-    "__cache__/artifacts/checkpoint/30924af7/4b764c579cae4e76.webm": [
+    "__cache__/artifacts/checkpoint/30924af7/e12c82782afdf9d0.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -80,9 +80,9 @@
       "0",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/30924af7/4b764c579cae4e76.webm"
+      "__cache__/artifacts/checkpoint/30924af7/e12c82782afdf9d0.webm"
     ],
-    "__cache__/artifacts/checkpoint/e795964e/e1db85c96ec8f836.webm": [
+    "__cache__/artifacts/checkpoint/e795964e/67aff28bb27e3ad8.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -105,7 +105,7 @@
       "0",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/e795964e/e1db85c96ec8f836.webm"
+      "__cache__/artifacts/checkpoint/e795964e/67aff28bb27e3ad8.webm"
     ]
   }
 }

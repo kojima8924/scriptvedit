@@ -188,7 +188,62 @@ oni.time(3) <= move(x=0.5, y=0.5, anchor="center")
 - `anchor(name)` ... 現在のタイムライン位置に名前付きマーカーを登録
 - `pause.time(N)` ... N秒間の非描画待機
 - `pause.until(name)` ... アンカー時刻まで非描画待機
+- `pause.until(name, offset=N)` ... アンカー時刻+offset秒まで待機
 - `obj.until(name)` ... durationをアンカー時刻まで伸長
+- `obj.until(name, offset=N)` ... durationをアンカー時刻+offset秒まで伸長
+
+```python
+# offset例: アンカーから0.5秒後まで待機
+pause.until("curtain_done", offset=0.5)
+
+# 負offset: アンカーの0.1秒前まで
+obj.until("curtain_done", offset=-0.1)
+```
+
+### time(name=...)（自動 start/end アンカー）
+
+`time()` に `name` を指定すると `X.start` と `X.end` アンカーが自動生成される。
+
+```python
+obj.time(3, name="scene1")  # scene1.start=開始時刻, scene1.end=終了時刻
+pause.until("scene1.end")    # scene1の終了を待つ
+```
+
+### show / show_until（同時表示）
+
+`show()` と `show_until()` は `current_time` を進めずにオブジェクトを表示する。
+複数素材を同一時刻から重ねて表示したい場合に使用する。
+
+```python
+bg.time(6) <= move(x=0.5, y=0.5, anchor="center")
+overlay_a.show(6) <= move(x=0.3, y=0.3, anchor="center")  # current_time非進行
+overlay_b.show_until("scene1.end") <= move(x=0.7, y=0.7)   # アンカーまで同時表示
+overlay_c.show(3, priority=10) <= move(x=0.5, y=0.5)       # priority指定可
+```
+
+- `obj.show(duration)` ... current_timeを進めずにduration秒表示
+- `obj.show(duration, priority=N)` ... priority指定付き
+- `obj.show_until(name)` ... current_timeを進めずにアンカーまで表示
+- `obj.show_until(name, offset=N)` ... offset秒ずらし
+
+### compute（タイムライン外素材生成）
+
+Transform/bakeable Effectを適用した中間素材をタイムライン外で生成する。
+キャッシュ対応（checkpoint方式）。live Effect（move等）は使用不可。
+
+```python
+processed = Object("source.png")
+processed <= resize(sx=0.5, sy=0.5) | blur(radius=3)
+processed.compute()  # タイムライン外でPNG生成
+
+# 生成した素材を通常通り配置
+processed.time(3) <= move(x=0.5, y=0.5, anchor="center")
+
+# 動画生成（duration指定）
+clip = Object("source.png")
+clip <= resize(sx=0.5, sy=0.5)
+clip.compute(duration=3)  # WebM動画として生成
+```
 
 ### テンプレート機能
 
@@ -287,7 +342,7 @@ cmd = p.render("output.mp4", dry_run=True)
 cd test
 python test_snapshot.py        # スナップショットテスト（30テスト）
 python test_snapshot.py --update  # スナップショット更新
-python test_errors.py          # エラーケーステスト（54テスト）
+python test_errors.py          # エラーケーステスト（66テスト）
 python test01_main.py          # 個別テスト（MP4生成）
 ```
 
