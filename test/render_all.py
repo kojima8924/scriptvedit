@@ -247,6 +247,62 @@ def render_test30():
     p.render(out("test30.mp4"))
 
 
+def render_test31():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test31_crop.py", priority=0)
+    p.render(out("test31.mp4"))
+
+
+def render_test32():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test32_pad.py", priority=0)
+    p.render(out("test32.mp4"))
+
+
+def render_test33():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test33_blur.py", priority=0)
+    p.render(out("test33.mp4"))
+
+
+def render_test34():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test34_eq.py", priority=0)
+    p.render(out("test34.mp4"))
+
+
+def render_test35():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test35_wipe.py", priority=0)
+    p.render(out("test35.mp4"))
+
+
+def render_test36():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test36_zoom.py", priority=0)
+    p.render(out("test36.mp4"))
+
+
+def render_test37():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test37_color_shift.py", priority=0)
+    p.render(out("test37.mp4"))
+
+
+def render_test38():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test38_subtitle_box.py", priority=0)
+    p.render(out("test38.mp4"))
+
+
 ALL_RENDERS = [
     ("test01", render_test01),
     ("test02", render_test02),
@@ -278,6 +334,14 @@ ALL_RENDERS = [
     ("test28", render_test28),
     ("test29", render_test29),
     ("test30", render_test30),
+    ("test31", render_test31),
+    ("test32", render_test32),
+    ("test33", render_test33),
+    ("test34", render_test34),
+    ("test35", render_test35),
+    ("test36", render_test36),
+    ("test37", render_test37),
+    ("test38", render_test38),
 ]
 
 

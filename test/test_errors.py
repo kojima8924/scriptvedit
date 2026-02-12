@@ -4,7 +4,8 @@ sys.path.insert(0, "..")
 from scriptvedit import (
     _resolve_param, Project, P, Object, VideoView, AudioView,
     again, move, fade, resize, rotate, rotate_to, morph_to, AudioEffect, AudioEffectChain,
-    subtitle, bubble, diagram, circle, label,
+    subtitle, subtitle_box, bubble, diagram, circle, label,
+    crop, pad, blur, eq, wipe, zoom, color_shift, shake,
     Transform, TransformChain, Effect, EffectChain,
     _checkpoint_cache_path, _file_fingerprint,
 )
@@ -672,6 +673,54 @@ def test_probe_failure_has_audio_false():
         Project._current = old
 
 
+def test_crop_no_size():
+    """crop w/h未指定 → ValueError"""
+    try:
+        crop(x=0, y=0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "w" in msg and "h" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_pad_no_size():
+    """pad w/h未指定 → ValueError"""
+    try:
+        pad(x=0, y=0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "w" in msg and "h" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_color_shift_no_args():
+    """color_shift引数なし → ValueError"""
+    try:
+        color_shift()
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "hue" in msg or "saturation" in msg or "brightness" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_zoom_no_args():
+    """zoom引数なし → ValueError"""
+    try:
+        zoom()
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "value" in msg or "to_value" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -712,6 +761,10 @@ ALL_TESTS = [
     ("morph_to回避策メッセージ", test_morph_to_hint_message),
     ("probe不可has_audio=False", test_probe_failure_has_audio_false),
     ("画像time()省略", test_image_time_no_args),
+    ("crop w/h未指定", test_crop_no_size),
+    ("pad w/h未指定", test_pad_no_size),
+    ("color_shift引数なし", test_color_shift_no_args),
+    ("zoom引数なし", test_zoom_no_args),
 ]
 
 

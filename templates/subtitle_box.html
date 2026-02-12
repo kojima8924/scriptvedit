@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: transparent; overflow: hidden; }
+#box {
+  position: absolute;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+#text {
+  font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif;
+  line-height: 1.5; text-align: center;
+  word-break: break-all; white-space: pre-wrap;
+}
+</style></head>
+<body>
+<div id="box">
+  <div id="text"></div>
+</div>
+<script>
+function renderFrame(state) {
+  var d = state.data || {};
+  var s = d.style || {};
+  var fontSize   = s.fontSize   || 48;
+  var textColor  = s.textColor  || "#ffffff";
+  var boxColor   = s.boxColor   || "rgba(0,0,0,0.7)";
+  var boxRadius  = s.boxRadius  || 16;
+  var padX       = s.padX       || 48;
+  var padY       = s.padY       || 24;
+  var posY       = s.posY       || 0.5;
+
+  var box = document.getElementById("box");
+  box.style.left = "0";
+  box.style.width = "100%";
+  box.style.top = (posY * 100) + "%";
+  box.style.transform = "translateY(-50%)";
+  box.style.justifyContent = "center";
+
+  var textEl = document.getElementById("text");
+  textEl.textContent = d.text || "";
+  textEl.style.fontSize = fontSize + "px";
+  textEl.style.color = textColor;
+  textEl.style.backgroundColor = boxColor;
+  textEl.style.borderRadius = boxRadius + "px";
+  textEl.style.padding = padY + "px " + padX + "px";
+
+  // アニメーション: フェードイン/アウト
+  var fadeIn  = s.fadeIn  !== undefined ? s.fadeIn  : 0.1;
+  var fadeOut = s.fadeOut !== undefined ? s.fadeOut : 0.1;
+  var opacity = 1.0;
+  if (state.u < fadeIn && fadeIn > 0) {
+    opacity = state.u / fadeIn;
+  } else if (state.u > (1.0 - fadeOut) && fadeOut > 0) {
+    opacity = (1.0 - state.u) / fadeOut;
+  }
+  box.style.opacity = opacity;
+}
+</script>
+</body></html>

@@ -315,6 +315,70 @@ def setup_test30():
     return p.render("test30.mp4", dry_run=True)
 
 
+def setup_test31():
+    """crop Transformテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test31_crop.py", priority=0)
+    return p.render("test31.mp4", dry_run=True)
+
+
+def setup_test32():
+    """pad Transformテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test32_pad.py", priority=0)
+    return p.render("test32.mp4", dry_run=True)
+
+
+def setup_test33():
+    """blur Transformテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test33_blur.py", priority=0)
+    return p.render("test33.mp4", dry_run=True)
+
+
+def setup_test34():
+    """eq Transformテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test34_eq.py", priority=0)
+    return p.render("test34.mp4", dry_run=True)
+
+
+def setup_test35():
+    """wipe Effectテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test35_wipe.py", priority=0)
+    return p.render("test35.mp4", dry_run=True)
+
+
+def setup_test36():
+    """zoom Effectテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test36_zoom.py", priority=0)
+    return p.render("test36.mp4", dry_run=True)
+
+
+def setup_test37():
+    """color_shift Effectテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test37_color_shift.py", priority=0)
+    return p.render("test37.mp4", dry_run=True)
+
+
+def setup_test38():
+    """subtitle_box Webテンプレートテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test38_subtitle_box.py", priority=0)
+    return p.render("test38.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -346,6 +410,14 @@ ALL_TESTS = [
     ("test28", setup_test28),
     ("test29", setup_test29),
     ("test30", setup_test30),
+    ("test31", setup_test31),
+    ("test32", setup_test32),
+    ("test33", setup_test33),
+    ("test34", setup_test34),
+    ("test35", setup_test35),
+    ("test36", setup_test36),
+    ("test37", setup_test37),
+    ("test38", setup_test38),
 ]
 
 

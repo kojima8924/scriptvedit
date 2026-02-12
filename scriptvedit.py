@@ -12,7 +12,9 @@ __all__ = [
     "AudioEffect", "AudioEffectChain",
     "VideoView", "AudioView",
     # ファクトリ関数
-    "resize", "rotate", "scale", "fade", "move", "morph_to", "rotate_to",
+    "resize", "rotate", "crop", "pad", "blur", "eq",
+    "scale", "fade", "move", "morph_to", "rotate_to",
+    "wipe", "zoom", "color_shift", "shake",
     "again", "afade", "adelete", "delete", "trim", "atrim", "atempo",
     # アンカー/同期
     "anchor", "pause",
@@ -31,7 +33,7 @@ __all__ = [
     # DSL糖衣
     "P",
     # テンプレートラッパー
-    "subtitle", "bubble", "diagram",
+    "subtitle", "subtitle_box", "bubble", "diagram",
     # 図形ビルダー
     "circle", "rect", "arrow", "label", "spotlight",
 ]
@@ -380,8 +382,8 @@ _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
-_ENGINE_VER = "3"
-_BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to"}
+_ENGINE_VER = "4"
+_BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift"}
 
 
 def _file_fingerprint(path):
@@ -1594,6 +1596,30 @@ def _build_transform_filters(obj):
                 filters.append(
                     f"rotate=angle='{ang_str}':fillcolor={fill}:ow=iw:oh=ih"
                 )
+        elif t.name == "crop":
+            x = t.params.get("x", 0)
+            y = t.params.get("y", 0)
+            w = t.params["w"]
+            h = t.params["h"]
+            filters.append(f"crop={w}:{h}:{x}:{y}")
+        elif t.name == "pad":
+            w = t.params["w"]
+            h = t.params["h"]
+            x = t.params.get("x", -1)
+            y = t.params.get("y", -1)
+            color = t.params.get("color", "black")
+            x_str = "(ow-iw)/2" if x == -1 else str(x)
+            y_str = "(oh-ih)/2" if y == -1 else str(y)
+            filters.append(f"pad={w}:{h}:{x_str}:{y_str}:color={color}")
+        elif t.name == "blur":
+            r = t.params.get("radius", 5)
+            filters.append(f"boxblur={r}:{r}")
+        elif t.name == "eq":
+            b = t.params.get("brightness", 0)
+            c = t.params.get("contrast", 1)
+            s = t.params.get("saturation", 1)
+            g = t.params.get("gamma", 1)
+            filters.append(f"eq=brightness={b}:contrast={c}:saturation={s}:gamma={g}")
     return filters
 
 
@@ -1605,7 +1631,7 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
     filters = []
     pad_size = None
     for e in obj.effects:
-        if e.name in ("move", "trim", "delete", "morph_to"):
+        if e.name in ("move", "trim", "delete", "morph_to", "shake"):
             continue
         if e.name == "scale":
             scale_expr = e.params.get("value", Const(1))
@@ -1651,6 +1677,37 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
                 filters.append(
                     f"rotate=angle='{ang_str}':fillcolor={fill}:ow=iw:oh=ih"
                 )
+        elif e.name == "wipe":
+            prog_expr = e.params.get("progress", Const(1))
+            u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+            ffmpeg_str = prog_expr.to_ffmpeg(u_expr)
+            direction = e.params.get("direction", "left")
+            filters.append("format=rgba")
+            if direction == "left":
+                filters.append(f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='if(lte(X\\,W*({ffmpeg_str}))\\,alpha(X\\,Y)\\,0)'")
+            elif direction == "right":
+                filters.append(f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='if(gte(X\\,W*(1-({ffmpeg_str})))\\,alpha(X\\,Y)\\,0)'")
+            elif direction == "up":
+                filters.append(f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='if(gte(Y\\,H*(1-({ffmpeg_str})))\\,alpha(X\\,Y)\\,0)'")
+            elif direction == "down":
+                filters.append(f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='if(lte(Y\\,H*({ffmpeg_str}))\\,alpha(X\\,Y)\\,0)'")
+        elif e.name == "color_shift":
+            u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+            parts = []
+            if "hue" in e.params:
+                h_str = e.params["hue"].to_ffmpeg(u_expr)
+                parts.append(f"hue=h={h_str}")
+            eq_parts = []
+            if "saturation" in e.params:
+                s_str = e.params["saturation"].to_ffmpeg(u_expr)
+                eq_parts.append(f"saturation={s_str}")
+            if "brightness" in e.params:
+                b_str = e.params["brightness"].to_ffmpeg(u_expr)
+                eq_parts.append(f"brightness={b_str}")
+            for p in parts:
+                filters.append(p)
+            if eq_parts:
+                filters.append("eq=" + ":".join(eq_parts))
     return filters, pad_size
 
 
@@ -1691,6 +1748,20 @@ def _build_move_exprs(obj, start, dur, pad_size=None):
     else:
         x_result = f"trunc({base_x})"
         y_result = f"trunc({base_y})"
+
+    # shake Effect: overlay座標にsin/cosオフセットを加算
+    shake_effect = None
+    for e in obj.effects:
+        if e.name == "shake":
+            shake_effect = e
+    if shake_effect:
+        amp = shake_effect.params.get("amplitude", 0.02)
+        freq = shake_effect.params.get("frequency", 10)
+        u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+        x_shake = f"{amp}*W*sin({freq}*2*PI*{u_expr}+0.7)"
+        y_shake = f"{amp}*H*cos({freq}*2.3*PI*{u_expr}+1.3)"
+        x_result = f"trunc({x_result}+{x_shake})"
+        y_result = f"trunc({y_result}+{y_shake})"
 
     return x_result, y_result
 
@@ -2275,6 +2346,31 @@ def rotate(*, deg=None, rad=None, expand=False, fill="0x00000000"):
     return Transform("rotate", rad=rad_val, expand=expand, fill=fill)
 
 
+def crop(x=0, y=0, w=None, h=None):
+    """クロップTransform。x,y: 左上起点(px)、w,h: 出力サイズ(px)。"""
+    if w is None or h is None:
+        raise ValueError("crop: w と h は必須です")
+    return Transform("crop", x=x, y=y, w=w, h=h)
+
+
+def pad(w=None, h=None, x=-1, y=-1, color="black"):
+    """パディングTransform。w,h: 出力サイズ、x,y: 配置位置(-1=中央)。"""
+    if w is None or h is None:
+        raise ValueError("pad: w と h は必須です")
+    return Transform("pad", w=w, h=h, x=x, y=y, color=color)
+
+
+def blur(radius=5):
+    """ガウスぼかしTransform。"""
+    return Transform("blur", radius=radius)
+
+
+def eq(*, brightness=0, contrast=1, saturation=1, gamma=1):
+    """色調補正Transform（EQ）。brightness: -1..1, contrast: 0..inf, saturation: 0..inf"""
+    return Transform("eq", brightness=brightness, contrast=contrast,
+                     saturation=saturation, gamma=gamma)
+
+
 # --- Effect関数 ---
 
 def scale(value=1):
@@ -2346,6 +2442,44 @@ def morph_to(target, blend=None, **morph_params):
     eff = Effect("morph_to", blend=blend, **morph_params)
     eff._morph_target = target
     return eff
+
+
+def wipe(direction="left", progress=None):
+    """ワイプEffect。direction: left/right/up/down"""
+    if progress is None:
+        progress = _resolve_param(lambda u: u)
+    else:
+        progress = _resolve_param(progress)
+    return Effect("wipe", direction=direction, progress=progress)
+
+
+def zoom(value=None, *, from_value=1, to_value=None):
+    """ズームEffect。valueまたはfrom/to指定。scaleのエイリアス。"""
+    if value is not None:
+        return Effect("scale", value=_resolve_param(value))
+    if to_value is None:
+        raise ValueError("zoom: value か to_value の指定が必要です")
+    expr = _resolve_param(lambda u: lerp(from_value, to_value, u))
+    return Effect("scale", value=expr)
+
+
+def color_shift(*, hue=None, saturation=None, brightness=None):
+    """時間依存の色調変化Effect。各パラメータはExpr/lambda/数値。"""
+    params = {}
+    if hue is not None:
+        params["hue"] = _resolve_param(hue)
+    if saturation is not None:
+        params["saturation"] = _resolve_param(saturation)
+    if brightness is not None:
+        params["brightness"] = _resolve_param(brightness)
+    if not params:
+        raise ValueError("color_shift: hue/saturation/brightness のいずれかが必要です")
+    return Effect("color_shift", **params)
+
+
+def shake(amplitude=0.02, frequency=10):
+    """振動Effect（ライブ、overlay座標でシェイク）"""
+    return Effect("shake", amplitude=amplitude, frequency=frequency)
 
 
 # --- 音声エフェクト関数 ---
@@ -2466,6 +2600,21 @@ def subtitle(text, who=None, duration=2.5, *, style=None, size=None,
     data = {"text": text, "who": who, "style": style or {}}
     if name is None:
         name = f"subtitle_{_data_hash(data)}"
+    kw = dict(duration=duration, size=size, data=data,
+              name=name, debug_frames=debug_frames)
+    if deps is not None:
+        kw["deps"] = deps
+    return Object(tpl, **kw)
+
+
+def subtitle_box(text, duration=2.5, *, style=None, size=None,
+                 name=None, debug_frames=False, deps=None):
+    """ボックス型字幕テンプレートObjectを生成"""
+    size = _resolve_size(size)
+    tpl = _template_path("subtitle_box.html")
+    data = {"text": text, "style": style or {}}
+    if name is None:
+        name = f"subtitle_box_{_data_hash(data)}"
     kw = dict(duration=duration, size=size, data=data,
               name=name, debug_frames=debug_frames)
     if deps is not None:
