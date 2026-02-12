@@ -9,11 +9,11 @@
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/e1cffaed/e55a52dd5ea9a0ec.webm",
+    "__cache__/artifacts/checkpoint/e1cffaed/d0d5f497960f0ad8.webm",
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/2fdb2eec/6ff3dbe1426f6e80.webm",
+    "__cache__/artifacts/checkpoint/2fdb2eec/e2d358cd4e6f0b21.webm",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,5)'[v1];[v1][2:v]overlay=trunc((0.1+((0.9-0.1)*clip((t-0)/5/,0/,1)))*W-w/2):trunc((0.1+((0.9-0.1)*clip((t-0)/5/,0/,1)))*H-h/2):enable='between(t/,0/,5)'[v2]",
     "-map",
@@ -28,7 +28,7 @@
     "test01.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/e1cffaed/e55a52dd5ea9a0ec.webm": [
+    "__cache__/artifacts/checkpoint/e1cffaed/d0d5f497960f0ad8.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -51,9 +51,9 @@
       "0",
       "-t",
       "5",
-      "__cache__/artifacts/checkpoint/e1cffaed/e55a52dd5ea9a0ec.webm"
+      "__cache__/artifacts/checkpoint/e1cffaed/d0d5f497960f0ad8.webm"
     ],
-    "__cache__/artifacts/checkpoint/2fdb2eec/6ff3dbe1426f6e80.webm": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/e2d358cd4e6f0b21.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -76,7 +76,7 @@
       "0",
       "-t",
       "5",
-      "__cache__/artifacts/checkpoint/2fdb2eec/6ff3dbe1426f6e80.webm"
+      "__cache__/artifacts/checkpoint/2fdb2eec/e2d358cd4e6f0b21.webm"
     ]
   }
 }

@@ -233,6 +233,20 @@ def render_test28():
     p.render(out("test28.mp4"))
 
 
+def render_test29():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test29_web_bakeable.py", priority=0)
+    p.render(out("test29.mp4"))
+
+
+def render_test30():
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test30_sin_scale.py", priority=0)
+    p.render(out("test30.mp4"))
+
+
 ALL_RENDERS = [
     ("test01", render_test01),
     ("test02", render_test02),
@@ -262,6 +276,8 @@ ALL_RENDERS = [
     ("test26", render_test26),
     ("test27", render_test27),
     ("test28", render_test28),
+    ("test29", render_test29),
+    ("test30", render_test30),
 ]
 
 

@@ -11,11 +11,11 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/fc0def09/0607a591978c63fb.png",
+    "__cache__/artifacts/checkpoint/fc0def09/4288a561793af2d6.png",
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/30924af7/8958eda8d6bee6e8.webm",
+    "__cache__/artifacts/checkpoint/30924af7/833e65aa533ec492.webm",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v2]",
     "-map",
@@ -30,7 +30,7 @@
     "test04.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/fc0def09/0607a591978c63fb.png": [
+    "__cache__/artifacts/checkpoint/fc0def09/4288a561793af2d6.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -41,9 +41,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/fc0def09/0607a591978c63fb.png"
+      "__cache__/artifacts/checkpoint/fc0def09/4288a561793af2d6.png"
     ],
-    "__cache__/artifacts/checkpoint/30924af7/e5f50dcf3b5714ba.png": [
+    "__cache__/artifacts/checkpoint/30924af7/0fe1777f49a81366.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -54,9 +54,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/30924af7/e5f50dcf3b5714ba.png"
+      "__cache__/artifacts/checkpoint/30924af7/0fe1777f49a81366.png"
     ],
-    "__cache__/artifacts/checkpoint/30924af7/8958eda8d6bee6e8.webm": [
+    "__cache__/artifacts/checkpoint/30924af7/833e65aa533ec492.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -64,7 +64,7 @@
       "-r",
       "30",
       "-i",
-      "__cache__/artifacts/checkpoint/30924af7/e5f50dcf3b5714ba.png",
+      "__cache__/artifacts/checkpoint/30924af7/0fe1777f49a81366.png",
       "-vf",
       "scale=w='trunc(iw*((0.8+((1-0.8)*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+((1-0.8)*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=340:340:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame",
       "-c:v",
@@ -79,7 +79,7 @@
       "0",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/30924af7/8958eda8d6bee6e8.webm"
+      "__cache__/artifacts/checkpoint/30924af7/833e65aa533ec492.webm"
     ]
   }
 }

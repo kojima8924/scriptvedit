@@ -2,6 +2,7 @@ import subprocess
 import os
 import json
 import hashlib
+import math as _math
 import warnings
 import builtins as _builtins
 
@@ -166,14 +167,13 @@ class _FuncCall(Expr):
     @classmethod
     def _get_eval_funcs(cls):
         if cls._EVAL_FUNCS is None:
-            import math as _m
             cls._EVAL_FUNCS = {
-                'sin': _m.sin, 'cos': _m.cos, 'tan': _m.tan,
-                'asin': _m.asin, 'acos': _m.acos, 'atan': _m.atan,
-                'atan2': _m.atan2, 'sinh': _m.sinh, 'cosh': _m.cosh,
-                'tanh': _m.tanh, 'exp': _m.exp, 'log': _m.log,
-                'sqrt': _m.sqrt, 'floor': _m.floor, 'ceil': _m.ceil,
-                'trunc': _m.trunc, 'round': _builtins.round,
+                'sin': _math.sin, 'cos': _math.cos, 'tan': _math.tan,
+                'asin': _math.asin, 'acos': _math.acos, 'atan': _math.atan,
+                'atan2': _math.atan2, 'sinh': _math.sinh, 'cosh': _math.cosh,
+                'tanh': _math.tanh, 'exp': _math.exp, 'log': _math.log,
+                'sqrt': _math.sqrt, 'floor': _math.floor, 'ceil': _math.ceil,
+                'trunc': _math.trunc, 'round': _builtins.round,
                 'abs': _builtins.abs, 'pow': _builtins.pow,
                 'min': _builtins.min, 'max': _builtins.max,
                 'mod': lambda a, b: a % b,
@@ -380,7 +380,7 @@ _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
-_ENGINE_VER = "2"
+_ENGINE_VER = "3"
 _BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to"}
 
 
@@ -586,8 +586,6 @@ def _layer_cache_paths(filename, project=None):
         sigs.append(f"h={project.height}")
         sigs.append(f"fps={project.fps}")
         sigs.append(f"bg={project.background_color}")
-        dur = project.duration or 0
-        sigs.append(f"dur={dur}")
         key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
         layer_dir = os.path.join(_ARTIFACT_DIR, "layer", basename)
         return (os.path.join(layer_dir, f"{key}.webm"),
@@ -655,7 +653,13 @@ class Project:
             info = {"has_audio": has_audio, "duration": duration}
             self._probe_cache[path] = info
             return info
-        except Exception:
+        except FileNotFoundError:
+            warnings.warn(f"ffprobeが見つかりません。PATHを確認してください。")
+            self._probe_cache[path] = None
+            return None
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError,
+                json.JSONDecodeError, ValueError) as e:
+            warnings.warn(f"メディア情報の取得に失敗 ({path}): {e}")
             self._probe_cache[path] = None
             return None
 
@@ -783,7 +787,7 @@ class Project:
         print(f"実行コマンド:")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
         print()
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=1800)
         self._generate_pending_caches()
         print(f"\n完了: {output_path}")
 
@@ -805,7 +809,7 @@ class Project:
                 break
         # 収束しなかった場合
         if not converged and self._anchors:
-            warnings.warn(
+            raise RuntimeError(
                 f"アンカー解決が{max_iterations}回の反復で収束しませんでした。"
                 f"循環参照の可能性があります。\n"
                 f"定義済みアンカー: {dict(self._anchors)}"
@@ -1069,7 +1073,7 @@ class Project:
                             cmd = self._build_morph_webm_cmd(
                                 frame_pattern, morph_path, dur, fps, quality)
                             print(f"モーフキャッシュ保存: {morph_path}")
-                            subprocess.run(cmd, check=True)
+                            subprocess.run(cmd, check=True, timeout=600)
                     current_source = morph_path
                     current_media_type = "video"
                 else:
@@ -1093,7 +1097,7 @@ class Project:
                                 local_transforms, local_effects,
                                 cache_path, cp_dur, fps, quality)
                         print(f"チェックポイント保存: {cache_path}")
-                        subprocess.run(cmd, check=True)
+                        subprocess.run(cmd, check=True, timeout=600)
                     current_source = cache_path
                     current_media_type = _detect_media_type(cache_path)
 
@@ -1288,7 +1292,7 @@ class Project:
                 cmd = obj._build_web_cmd(self, webm_path)
                 os.makedirs(os.path.dirname(webm_path), exist_ok=True)
                 print(f"  ffmpeg {' '.join(cmd[1:])}")
-                subprocess.run(cmd, check=True)
+                subprocess.run(cmd, check=True, timeout=600)
                 print(f"  完了: {webm_path}")
                 # フレーム削除
                 if not obj._web_debug_frames and os.path.exists(frames_dir):
@@ -1388,7 +1392,7 @@ class Project:
         cmd = self._build_layer_cache_cmd(spec_index)
         print(f"キャッシュ生成: {webm_path}")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=600)
         print(f"  完了: {webm_path}")
 
         # anchors.json書き出し
@@ -1537,10 +1541,17 @@ def _get_media_dimensions(filepath):
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height", "-of", "csv=p=0", filepath],
-            capture_output=True, text=True, check=True)
+            capture_output=True, text=True, check=True, timeout=10)
         parts = result.stdout.strip().split(',')
         return int(parts[0]), int(parts[1])
-    except Exception:
+    except FileNotFoundError:
+        warnings.warn(f"ffprobeが見つかりません。PATHを確認してください。")
+        return None, None
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        warnings.warn(f"メディアサイズの取得に失敗 ({filepath}): {e}")
+        return None, None
+    except (ValueError, IndexError) as e:
+        warnings.warn(f"ffprobe出力のパースに失敗 ({filepath}): {e}")
         return None, None
 
 
@@ -1591,7 +1602,6 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
     base_dims指定時、scaleエフェクトにpadを追加して固定サイズ出力にする。
     Returns: (filters, pad_size) — pad_size は (max_w, max_h) or None
     """
-    import math as _math
     filters = []
     pad_size = None
     for e in obj.effects:
@@ -2253,13 +2263,15 @@ def resize(**kwargs):
 
 
 def rotate(*, deg=None, rad=None, expand=False, fill="0x00000000"):
-    """固定角回転Transform。deg/radどちらか必須（deg優先）。"""
+    """固定角回転Transform。deg/radどちらか一方のみ指定。"""
     if deg is None and rad is None:
         raise ValueError("rotate: deg または rad のどちらかが必要")
-    if rad is None:
-        rad_val = deg2rad(deg) if isinstance(deg, (int, float)) else deg2rad(deg)
+    if deg is not None and rad is not None:
+        raise ValueError("rotate: deg と rad は同時に指定できません")
+    if deg is not None:
+        rad_val = deg2rad(deg)
     else:
-        rad_val = _to_expr(rad) if isinstance(rad, (int, float)) else _to_expr(rad)
+        rad_val = _to_expr(rad)
     return Transform("rotate", rad=rad_val, expand=expand, fill=fill)
 
 
@@ -2323,6 +2335,10 @@ def morph_to(target, blend=None, **morph_params):
     proj = Project._current
     if proj is not None and target in proj.objects:
         proj.objects.remove(target)
+        warnings.warn(
+            f"morph_to: ターゲット '{target.source}' はモーフィングに消費されるため"
+            f"Projectから自動的に除外されました。"
+        )
     if blend is None:
         blend = _resolve_param(lambda u: u * u * (3 - 2 * u))
     else:

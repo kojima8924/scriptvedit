@@ -11,17 +11,17 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/e1cffaed/e33e8c25b3733780.png",
+    "__cache__/artifacts/checkpoint/e1cffaed/a953a0b4b97ad96e.png",
     "-loop",
     "1",
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/2fdb2eec/5d97099769b17f66.png",
+    "__cache__/artifacts/checkpoint/2fdb2eec/5f0a711a6bb2a4e3.png",
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/e795964e/6507f5dd8c845cd1.webm",
+    "__cache__/artifacts/checkpoint/e795964e/7cee6ad7a6145ebc.webm",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,5)'[v1];[v1][2:v]overlay=trunc((0.0+((1.0-0.0)*clip((t-0)/5/,0/,1)))*W-w/2):trunc((0.5+((0.5-0.5)*clip((t-0)/5/,0/,1)))*H-h/2):enable='between(t/,0/,5)'[v2];[v2][3:v]overlay=trunc((1.0+((0.0-1.0)*clip((t-0)/5/,0/,1)))*W-w/2):trunc((0.3+((0.7-0.3)*clip((t-0)/5/,0/,1)))*H-h/2):enable='between(t/,0/,5)'[v3]",
     "-map",
@@ -36,7 +36,7 @@
     "test03.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/e1cffaed/e33e8c25b3733780.png": [
+    "__cache__/artifacts/checkpoint/e1cffaed/a953a0b4b97ad96e.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -47,9 +47,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/e1cffaed/e33e8c25b3733780.png"
+      "__cache__/artifacts/checkpoint/e1cffaed/a953a0b4b97ad96e.png"
     ],
-    "__cache__/artifacts/checkpoint/2fdb2eec/5d97099769b17f66.png": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/5f0a711a6bb2a4e3.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -60,9 +60,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/2fdb2eec/5d97099769b17f66.png"
+      "__cache__/artifacts/checkpoint/2fdb2eec/5f0a711a6bb2a4e3.png"
     ],
-    "__cache__/artifacts/checkpoint/e795964e/6507f5dd8c845cd1.webm": [
+    "__cache__/artifacts/checkpoint/e795964e/7cee6ad7a6145ebc.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -85,7 +85,7 @@
       "0",
       "-t",
       "5",
-      "__cache__/artifacts/checkpoint/e795964e/6507f5dd8c845cd1.webm"
+      "__cache__/artifacts/checkpoint/e795964e/7cee6ad7a6145ebc.webm"
     ]
   }
 }
