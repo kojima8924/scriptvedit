@@ -9,13 +9,13 @@
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/e1cffaed/c511c4dcbd3a6988.webm",
+    "__cache__/artifacts/checkpoint/e1cffaed/190a1b4164a20b3d.webm",
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/a9f242ae/1424ed465af312bc.webm",
+    "__cache__/artifacts/checkpoint/a9f242ae/5bbdbf0329ed5469.webm",
     "-filter_complex",
-    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,5)'[v1];[v1][2:v]overlay=trunc((0.0+((1.0-0.0)*clip((t-0)/5/,0/,1)))*W-w/2):trunc((0.5+((0.5-0.5)*clip((t-0)/5/,0/,1)))*H-h/2):enable='between(t/,0/,5)'[v2]",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,5)'[v1];[v1][2:v]overlay=trunc(clip((t-0)/5/,0/,1)*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,5)'[v2]",
     "-map",
     "[v2]",
     "-c:v",
@@ -28,7 +28,7 @@
     "test08.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/e1cffaed/c511c4dcbd3a6988.webm": [
+    "__cache__/artifacts/checkpoint/e1cffaed/190a1b4164a20b3d.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -38,7 +38,7 @@
       "-i",
       "../bg_pattern_ishigaki.jpg",
       "-vf",
-      "scale=iw*1:ih*1,scale=w='trunc(iw*((1.2+((1-1.2)*clip((t-0)/5/,0/,1))))/2)*2':h='trunc(ih*((1.2+((1-1.2)*clip((t-0)/5/,0/,1))))/2)*2':eval=frame,format=rgba,pad=960:540:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/5/,0/,1)/,0/,1)'",
+      "scale=iw*1:ih*1,scale=w='trunc(iw*((1.2+(-0.19999999999999996*clip((t-0)/5/,0/,1))))/2)*2':h='trunc(ih*((1.2+(-0.19999999999999996*clip((t-0)/5/,0/,1))))/2)*2':eval=frame,format=rgba,pad=960:540:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/5/,0/,1)/,0/,1)'",
       "-c:v",
       "libvpx-vp9",
       "-pix_fmt",
@@ -51,9 +51,9 @@
       "0",
       "-t",
       "5",
-      "__cache__/artifacts/checkpoint/e1cffaed/c511c4dcbd3a6988.webm"
+      "__cache__/artifacts/checkpoint/e1cffaed/190a1b4164a20b3d.webm"
     ],
-    "__cache__/artifacts/checkpoint/a9f242ae/1424ed465af312bc.webm": [
+    "__cache__/artifacts/checkpoint/a9f242ae/5bbdbf0329ed5469.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -76,7 +76,7 @@
       "0",
       "-t",
       "5",
-      "__cache__/artifacts/checkpoint/a9f242ae/1424ed465af312bc.webm"
+      "__cache__/artifacts/checkpoint/a9f242ae/5bbdbf0329ed5469.webm"
     ]
   }
 }

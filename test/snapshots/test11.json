@@ -11,11 +11,11 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/fc0def09/4924791b149afb39.png",
+    "__cache__/artifacts/checkpoint/fc0def09/e9c0faeb4a63b318.png",
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/2fdb2eec/e0f6e00fd662d34f.webm",
+    "__cache__/artifacts/checkpoint/2fdb2eec/91329c2ab192ef0a.webm",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,3.0/,6.0)'[v2]",
     "-map",
@@ -30,7 +30,7 @@
     "test11.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/fc0def09/4924791b149afb39.png": [
+    "__cache__/artifacts/checkpoint/fc0def09/e9c0faeb4a63b318.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -41,9 +41,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/fc0def09/4924791b149afb39.png"
+      "__cache__/artifacts/checkpoint/fc0def09/e9c0faeb4a63b318.png"
     ],
-    "__cache__/artifacts/checkpoint/2fdb2eec/e0f6e00fd662d34f.webm": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/91329c2ab192ef0a.webm": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -53,7 +53,7 @@
       "-i",
       "../onigiri_tenmusu.png",
       "-vf",
-      "scale=iw*0.4:ih*0.4,scale=w='trunc(iw*((0.5+((1-0.5)*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.5+((1-0.5)*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=258:320:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/3/,0/,1)/,0/,1)'",
+      "scale=iw*0.4:ih*0.4,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=258:320:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/3/,0/,1)/,0/,1)'",
       "-c:v",
       "libvpx-vp9",
       "-pix_fmt",
@@ -66,7 +66,7 @@
       "0",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/2fdb2eec/e0f6e00fd662d34f.webm"
+      "__cache__/artifacts/checkpoint/2fdb2eec/91329c2ab192ef0a.webm"
     ]
   }
 }

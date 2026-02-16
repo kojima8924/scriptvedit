@@ -26,12 +26,32 @@ __all__ = [
     "exp", "log", "sqrt", "floor", "ceil", "trunc",
     "log10", "cbrt", "lerp", "clip", "clamp",
     "step", "smoothstep", "mod", "frac", "deg2rad", "rad2deg",
+    # 条件分岐・比較
+    "if_", "lt", "gt", "lte", "gte", "eq_", "neq",
+    "and_", "or_", "not_", "between", "case",
+    "sign", "random",
     # Python組み込み互換
     "abs", "min", "max", "round", "pow",
     # 定数
     "PI", "E",
     # DSL糖衣
     "P",
+    # イージング関数
+    "linear",
+    "ease_in_quad", "ease_out_quad", "ease_in_out_quad",
+    "ease_in_cubic", "ease_out_cubic", "ease_in_out_cubic",
+    "ease_in_quart", "ease_out_quart", "ease_in_out_quart",
+    "ease_in_quint", "ease_out_quint", "ease_in_out_quint",
+    "ease_in_sine", "ease_out_sine", "ease_in_out_sine",
+    "ease_in_expo", "ease_out_expo", "ease_in_out_expo",
+    "ease_in_circ", "ease_out_circ", "ease_in_out_circ",
+    "ease_in_back", "ease_out_back", "ease_in_out_back",
+    "ease_in_elastic", "ease_out_elastic", "ease_in_out_elastic",
+    "ease_in_bounce", "ease_out_bounce", "ease_in_out_bounce",
+    "ease_cubic_bezier", "ease_spring", "steps", "apply_easing",
+    # シーケンス・キーフレーム
+    "phase", "sequence_param", "repeat", "bounce", "alternate", "staircase",
+    "keyframes",
     # テンプレートラッパー
     "subtitle", "subtitle_box", "bubble", "diagram",
     # 図形ビルダー
@@ -51,40 +71,76 @@ class Expr:
         raise NotImplementedError
 
     def __add__(self, other):
-        return _BinOp("+", self, _to_expr(other))
+        return _make_binop("+", self, _to_expr(other))
 
     def __radd__(self, other):
-        return _BinOp("+", _to_expr(other), self)
+        return _make_binop("+", _to_expr(other), self)
 
     def __sub__(self, other):
-        return _BinOp("-", self, _to_expr(other))
+        return _make_binop("-", self, _to_expr(other))
 
     def __rsub__(self, other):
-        return _BinOp("-", _to_expr(other), self)
+        return _make_binop("-", _to_expr(other), self)
 
     def __mul__(self, other):
-        return _BinOp("*", self, _to_expr(other))
+        return _make_binop("*", self, _to_expr(other))
 
     def __rmul__(self, other):
-        return _BinOp("*", _to_expr(other), self)
+        return _make_binop("*", _to_expr(other), self)
 
     def __truediv__(self, other):
-        return _BinOp("/", self, _to_expr(other))
+        return _make_binop("/", self, _to_expr(other))
 
     def __rtruediv__(self, other):
-        return _BinOp("/", _to_expr(other), self)
+        return _make_binop("/", _to_expr(other), self)
 
     def __pow__(self, other):
-        return _FuncCall("pow", [self, _to_expr(other)])
+        return _make_func("pow", [self, _to_expr(other)])
 
     def __rpow__(self, other):
-        return _FuncCall("pow", [_to_expr(other), self])
+        return _make_func("pow", [_to_expr(other), self])
 
     def __neg__(self):
-        return _UnOp("-", self)
+        return _make_unop("-", self)
 
     def __abs__(self):
-        return _FuncCall("abs", [self])
+        return _make_func("abs", [self])
+
+    def smooth(self):
+        """smoothstep: 3t²-2t³"""
+        return self * self * (Const(3) - Const(2) * self)
+
+    def invert(self):
+        """反転: 1 - self"""
+        return Const(1) - self
+
+    def pingpong(self):
+        """三角波(0→1→0): |1 - 2*mod(self, 1)|"""
+        return Const(1) - _make_func("abs", [Const(2) * _make_func("mod", [self, Const(1)]) - Const(1)])
+
+    def map(self, lo, hi):
+        """値をlo〜hiにマッピング: self * (hi - lo) + lo"""
+        return self * (_to_expr(hi) - _to_expr(lo)) + _to_expr(lo)
+
+    def clamped(self, lo=0, hi=1):
+        """値をlo〜hiにクランプ"""
+        return _make_func("clip", [self, _to_expr(lo), _to_expr(hi)])
+
+    def oscillate(self, frequency=1, amplitude=1, offset=0):
+        """正弦波: offset + amplitude * sin(self * frequency * 2π)"""
+        f = _to_expr(frequency)
+        a = _to_expr(amplitude)
+        o = _to_expr(offset)
+        return o + a * _make_func("sin", [self * f * Const(2 * 3.141592653589793)])
+
+    def sawtooth(self, frequency=1):
+        """ノコギリ波: 0→1を周期的に繰り返す"""
+        return _make_func("mod", [self * _to_expr(frequency), Const(1)])
+
+    def triangle(self, frequency=1):
+        """三角波: 0→1→0を周期的に繰り返す"""
+        phase = _make_func("mod", [self * _to_expr(frequency), Const(1)])
+        return Const(1) - _make_func("abs", [Const(2) * phase - Const(1)])
 
 
 class Const(Expr):
@@ -181,6 +237,19 @@ class _FuncCall(Expr):
                 'mod': lambda a, b: a % b,
                 'clip': lambda v, lo, hi: _builtins.max(lo, _builtins.min(hi, v)),
                 'gte': lambda x, e: 1.0 if x >= e else 0.0,
+                'lte': lambda x, e: 1.0 if x <= e else 0.0,
+                'lt': lambda x, e: 1.0 if x < e else 0.0,
+                'gt': lambda x, e: 1.0 if x > e else 0.0,
+                'eq': lambda a, b: 1.0 if a == b else 0.0,
+                'if': lambda c, t, e: t if c != 0 else e,
+                'and': lambda a, b: 1.0 if (a != 0 and b != 0) else 0.0,
+                'or': lambda a, b: 1.0 if (a != 0 or b != 0) else 0.0,
+                'not': lambda a: 1.0 if a == 0 else 0.0,
+                'between': lambda x, lo, hi: 1.0 if lo <= x <= hi else 0.0,
+                'sign': lambda x: (1.0 if x > 0 else (-1.0 if x < 0 else 0.0)),
+                'random': lambda seed: 0.5,  # eval_at用ダミー（ffmpegランタイムで評価）
+                'log10': lambda x: _math.log10(x),
+                'cbrt': lambda x: x ** (1/3) if x >= 0 else -((-x) ** (1/3)),
             }
         return cls._EVAL_FUNCS
 
@@ -199,6 +268,57 @@ def _to_expr(x):
     if isinstance(x, (int, float)):
         return Const(x)
     raise TypeError(f"Exprに変換できません: {type(x)}")
+
+
+_NONFOLDABLE_FUNCS = frozenset({'random'})
+
+def _make_binop(op, left, right):
+    """定数畳み込み・恒等式簡約付きBinOp生成"""
+    if isinstance(left, Const) and isinstance(right, Const):
+        l, r = left.value, right.value
+        if op == '+': return Const(l + r)
+        if op == '-': return Const(l - r)
+        if op == '*': return Const(l * r)
+        if op == '/' and r != 0: return Const(l / r)
+    if op == '+':
+        if isinstance(left, Const) and left.value == 0: return right
+        if isinstance(right, Const) and right.value == 0: return left
+    elif op == '-':
+        if isinstance(right, Const) and right.value == 0: return left
+    elif op == '*':
+        if isinstance(left, Const) and left.value == 0: return Const(0)
+        if isinstance(right, Const) and right.value == 0: return Const(0)
+        if isinstance(left, Const) and left.value == 1: return right
+        if isinstance(right, Const) and right.value == 1: return left
+    elif op == '/':
+        if isinstance(right, Const) and right.value == 1: return left
+    return _BinOp(op, left, right)
+
+def _make_unop(op, operand):
+    """定数畳み込み付きUnOp生成"""
+    if isinstance(operand, Const):
+        if op == '-': return Const(-operand.value)
+    if op == '-' and isinstance(operand, _UnOp) and operand.op == '-':
+        return operand.operand
+    return _UnOp(op, operand)
+
+def _make_func(name, args):
+    """定数畳み込み付きFuncCall生成"""
+    if name == 'if' and len(args) == 3 and isinstance(args[0], Const):
+        return args[1] if args[0].value != 0 else args[2]
+    if name in _NONFOLDABLE_FUNCS:
+        return _FuncCall(name, args)
+    if all(isinstance(a, Const) for a in args):
+        funcs = _FuncCall._get_eval_funcs()
+        if name in funcs:
+            try:
+                vals = [a.value for a in args]
+                result = funcs[name](*vals)
+                if isinstance(result, (int, float)) and _math.isfinite(result):
+                    return Const(result)
+            except (ValueError, ZeroDivisionError, OverflowError):
+                pass
+    return _FuncCall(name, args)
 
 
 def _resolve_param(param):
@@ -224,72 +344,72 @@ def _resolve_param(param):
 # --- 数学関数（Exprラッパー） ---
 
 def sin(x):
-    return _FuncCall("sin", [_to_expr(x)])
+    return _make_func("sin", [_to_expr(x)])
 
 def cos(x):
-    return _FuncCall("cos", [_to_expr(x)])
+    return _make_func("cos", [_to_expr(x)])
 
 def tan(x):
-    return _FuncCall("tan", [_to_expr(x)])
+    return _make_func("tan", [_to_expr(x)])
 
 def asin(x):
-    return _FuncCall("asin", [_to_expr(x)])
+    return _make_func("asin", [_to_expr(x)])
 
 def acos(x):
-    return _FuncCall("acos", [_to_expr(x)])
+    return _make_func("acos", [_to_expr(x)])
 
 def atan(x):
-    return _FuncCall("atan", [_to_expr(x)])
+    return _make_func("atan", [_to_expr(x)])
 
 def atan2(y, x):
-    return _FuncCall("atan2", [_to_expr(y), _to_expr(x)])
+    return _make_func("atan2", [_to_expr(y), _to_expr(x)])
 
 def sinh(x):
-    return _FuncCall("sinh", [_to_expr(x)])
+    return _make_func("sinh", [_to_expr(x)])
 
 def cosh(x):
-    return _FuncCall("cosh", [_to_expr(x)])
+    return _make_func("cosh", [_to_expr(x)])
 
 def tanh(x):
-    return _FuncCall("tanh", [_to_expr(x)])
+    return _make_func("tanh", [_to_expr(x)])
 
 def exp(x):
-    return _FuncCall("exp", [_to_expr(x)])
+    return _make_func("exp", [_to_expr(x)])
 
 def log(x):
-    return _FuncCall("log", [_to_expr(x)])
+    return _make_func("log", [_to_expr(x)])
 
 def sqrt(x):
-    return _FuncCall("sqrt", [_to_expr(x)])
+    return _make_func("sqrt", [_to_expr(x)])
 
 def floor(x):
-    return _FuncCall("floor", [_to_expr(x)])
+    return _make_func("floor", [_to_expr(x)])
 
 def ceil(x):
-    return _FuncCall("ceil", [_to_expr(x)])
+    return _make_func("ceil", [_to_expr(x)])
 
 def trunc(x):
-    return _FuncCall("trunc", [_to_expr(x)])
+    return _make_func("trunc", [_to_expr(x)])
 
 _LN10 = 2.302585092994046  # math.log(10)
 
 def log10(x):
-    return _FuncCall("log", [_to_expr(x)]) / Const(_LN10)
+    return _make_func("log", [_to_expr(x)]) / Const(_LN10)
 
 def cbrt(x):
-    return _FuncCall("pow", [_to_expr(x), Const(1/3)])
+    return _make_func("pow", [_to_expr(x), Const(1/3)])
 
 def lerp(a, b, t):
     a, b, t = _to_expr(a), _to_expr(b), _to_expr(t)
     return a + (b - a) * t
 
 def clip(x, lo, hi):
-    return _FuncCall("clip", [_to_expr(x), _to_expr(lo), _to_expr(hi)])
+    return _make_func("clip", [_to_expr(x), _to_expr(lo), _to_expr(hi)])
 
 clamp = clip
 
 def step(edge, x):
-    return _FuncCall("gte", [_to_expr(x), _to_expr(edge)])
+    return _make_func("gte", [_to_expr(x), _to_expr(edge)])
 
 def smoothstep(edge0, edge1, x):
     e0, e1, xv = _to_expr(edge0), _to_expr(edge1), _to_expr(x)
@@ -297,7 +417,7 @@ def smoothstep(edge0, edge1, x):
     return t * t * (Const(3) - Const(2) * t)
 
 def mod(a, b):
-    return _FuncCall("mod", [_to_expr(a), _to_expr(b)])
+    return _make_func("mod", [_to_expr(a), _to_expr(b)])
 
 def frac(x):
     xv = _to_expr(x)
@@ -312,32 +432,103 @@ def rad2deg(x):
 # Python組み込みと衝突する関数（両方対応）
 def abs(x):
     if isinstance(x, Expr):
-        return _FuncCall("abs", [x])
+        return _make_func("abs", [x])
     return _builtins.abs(x)
 
 def min(*args):
     if any(isinstance(a, Expr) for a in args):
-        return _FuncCall("min", [_to_expr(a) for a in args])
+        return _make_func("min", [_to_expr(a) for a in args])
     return _builtins.min(*args)
 
 def max(*args):
     if any(isinstance(a, Expr) for a in args):
-        return _FuncCall("max", [_to_expr(a) for a in args])
+        return _make_func("max", [_to_expr(a) for a in args])
     return _builtins.max(*args)
 
 def round(x):
     if isinstance(x, Expr):
-        return _FuncCall("round", [x])
+        return _make_func("round", [x])
     return _builtins.round(x)
 
 def pow(x, y):
     if isinstance(x, Expr) or isinstance(y, Expr):
-        return _FuncCall("pow", [_to_expr(x), _to_expr(y)])
+        return _make_func("pow", [_to_expr(x), _to_expr(y)])
     return _builtins.pow(x, y)
 
 # 定数
 PI = 3.141592653589793
 E = 2.718281828459045
+
+
+# --- 条件分岐・比較 ---
+
+def if_(cond, then_val, else_val):
+    """条件分岐: cond≠0ならthen_val、そうでなければelse_val"""
+    return _make_func("if", [_to_expr(cond), _to_expr(then_val), _to_expr(else_val)])
+
+def lt(a, b):
+    """a < b → 1.0, else → 0.0"""
+    return _make_func("lt", [_to_expr(a), _to_expr(b)])
+
+def gt(a, b):
+    """a > b → 1.0, else → 0.0"""
+    return _make_func("gt", [_to_expr(a), _to_expr(b)])
+
+def lte(a, b):
+    """a <= b → 1.0, else → 0.0"""
+    return _make_func("lte", [_to_expr(a), _to_expr(b)])
+
+def gte(a, b):
+    """a >= b → 1.0, else → 0.0"""
+    return _make_func("gte", [_to_expr(a), _to_expr(b)])
+
+def eq_(a, b):
+    """a == b → 1.0, else → 0.0"""
+    return _make_func("eq", [_to_expr(a), _to_expr(b)])
+
+def neq(a, b):
+    """a != b → 1.0, else → 0.0"""
+    return _make_func("not", [_make_func("eq", [_to_expr(a), _to_expr(b)])])
+
+def and_(a, b):
+    """論理AND"""
+    return _make_func("and", [_to_expr(a), _to_expr(b)])
+
+def or_(a, b):
+    """論理OR"""
+    return _make_func("or", [_to_expr(a), _to_expr(b)])
+
+def not_(a):
+    """論理NOT"""
+    return _make_func("not", [_to_expr(a)])
+
+def between(x, lo, hi):
+    """lo <= x <= hi → 1.0"""
+    return _make_func("between", [_to_expr(x), _to_expr(lo), _to_expr(hi)])
+
+def case(*when_then_pairs, default=0):
+    """多岐条件分岐: ネストif_の糖衣
+
+    使用例:
+        case(
+            (lt(u, 0.3), 0.5),      # u<0.3 → 0.5
+            (lt(u, 0.7), 1.0),      # u<0.7 → 1.0
+            default=0.2,            # それ以外 → 0.2
+        )
+    """
+    result = _to_expr(default)
+    for cond, val in reversed(when_then_pairs):
+        result = if_(cond, val, result)
+    return result
+
+def sign(x):
+    """符号関数: x>0→1, x==0→0, x<0→-1"""
+    xv = _to_expr(x)
+    return if_(gt(xv, 0), 1, if_(lt(xv, 0), -1, 0))
+
+def random(seed=0):
+    """疑似乱数 [0, 1)（ffmpegランタイムで評価）"""
+    return _make_func("random", [_to_expr(seed)])
 
 
 # --- DSL糖衣: パーセント記法 ---
@@ -2722,6 +2913,395 @@ class _PauseFactory:
 
 
 pause = _PauseFactory()
+
+
+# --- イージング関数 ---
+
+_EASE_PI = 3.141592653589793
+_EASE_C1 = 1.70158
+_EASE_C3 = _EASE_C1 + 1
+_EASE_C4 = (2 * _EASE_PI) / 3
+_EASE_C5 = (2 * _EASE_PI) / 4.5
+
+def _power_n(expr, n):
+    """expr^n を繰り返し乗算で構築"""
+    result = expr
+    for _ in range(n - 1):
+        result = result * expr
+    return result
+
+def _ease_in_power(t, n):
+    return _power_n(_to_expr(t), n)
+
+def _ease_out_power(t, n):
+    t = _to_expr(t)
+    return Const(1) - _power_n(Const(1) - t, n)
+
+def _ease_in_out_power(t, n):
+    t = _to_expr(t)
+    coeff = 2 ** (n - 1)
+    branch1 = Const(coeff) * _power_n(t, n)
+    branch2 = Const(1) - _power_n(Const(-2) * t + Const(2), n) / Const(2)
+    return if_(lt(t, 0.5), branch1, branch2)
+
+def linear(t):
+    """線形イージング"""
+    return _to_expr(t)
+
+# Quad (二次)
+def ease_in_quad(t): return _ease_in_power(t, 2)
+def ease_out_quad(t): return _ease_out_power(t, 2)
+def ease_in_out_quad(t): return _ease_in_out_power(t, 2)
+
+# Cubic (三次)
+def ease_in_cubic(t): return _ease_in_power(t, 3)
+def ease_out_cubic(t): return _ease_out_power(t, 3)
+def ease_in_out_cubic(t): return _ease_in_out_power(t, 3)
+
+# Quart (四次)
+def ease_in_quart(t): return _ease_in_power(t, 4)
+def ease_out_quart(t): return _ease_out_power(t, 4)
+def ease_in_out_quart(t): return _ease_in_out_power(t, 4)
+
+# Quint (五次)
+def ease_in_quint(t): return _ease_in_power(t, 5)
+def ease_out_quint(t): return _ease_out_power(t, 5)
+def ease_in_out_quint(t): return _ease_in_out_power(t, 5)
+
+# Sine (正弦)
+def ease_in_sine(t):
+    t = _to_expr(t)
+    return Const(1) - cos(t * Const(_EASE_PI / 2))
+
+def ease_out_sine(t):
+    t = _to_expr(t)
+    return sin(t * Const(_EASE_PI / 2))
+
+def ease_in_out_sine(t):
+    t = _to_expr(t)
+    return (Const(1) - cos(t * Const(_EASE_PI))) / Const(2)
+
+# Exponential (指数)
+def ease_in_expo(t):
+    t = _to_expr(t)
+    return if_(lt(t, Const(0.001)), Const(0), pow(2, Const(10) * t - Const(10)))
+
+def ease_out_expo(t):
+    t = _to_expr(t)
+    return if_(lt(Const(0.999), t), Const(1), Const(1) - pow(2, Const(-10) * t))
+
+def ease_in_out_expo(t):
+    t = _to_expr(t)
+    branch1 = pow(2, Const(20) * t - Const(10)) / Const(2)
+    branch2 = (Const(2) - pow(2, Const(-20) * t + Const(10))) / Const(2)
+    inner = if_(lt(t, 0.5), branch1, branch2)
+    return if_(lt(t, Const(0.001)), Const(0),
+           if_(lt(Const(0.999), t), Const(1), inner))
+
+# Circular (円)
+def ease_in_circ(t):
+    t = _to_expr(t)
+    return Const(1) - sqrt(Const(1) - t * t)
+
+def ease_out_circ(t):
+    t = _to_expr(t)
+    inv = t - Const(1)
+    return sqrt(Const(1) - inv * inv)
+
+def ease_in_out_circ(t):
+    t = _to_expr(t)
+    t2 = Const(2) * t
+    branch1 = (Const(1) - sqrt(clip(Const(1) - t2 * t2, 0, 1))) / Const(2)
+    t2m2 = Const(2) * t - Const(2)
+    branch2 = (sqrt(clip(Const(1) - t2m2 * t2m2, 0, 1)) + Const(1)) / Const(2)
+    return if_(lt(t, 0.5), branch1, branch2)
+
+# Back (オーバーシュート)
+def ease_in_back(t):
+    t = _to_expr(t)
+    return Const(_EASE_C3) * t * t * t - Const(_EASE_C1) * t * t
+
+def ease_out_back(t):
+    t = _to_expr(t)
+    inv = t - Const(1)
+    return Const(1) + Const(_EASE_C3) * inv * inv * inv + Const(_EASE_C1) * inv * inv
+
+def ease_in_out_back(t):
+    t = _to_expr(t)
+    c2 = _EASE_C1 * 1.525
+    t2 = Const(2) * t
+    t2m2 = Const(2) * t - Const(2)
+    branch1 = (t2 * t2 * (Const(c2 + 1) * t2 - Const(c2))) / Const(2)
+    branch2 = (t2m2 * t2m2 * (Const(c2 + 1) * t2m2 + Const(c2)) + Const(2)) / Const(2)
+    return if_(lt(t, 0.5), branch1, branch2)
+
+# Elastic (弾性)
+def ease_in_elastic(t):
+    t = _to_expr(t)
+    normal = -pow(2, Const(10) * t - Const(10)) * sin((Const(10) * t - Const(10.75)) * Const(_EASE_C4))
+    return if_(lt(t, Const(0.001)), Const(0),
+           if_(lt(Const(0.999), t), Const(1), normal))
+
+def ease_out_elastic(t):
+    t = _to_expr(t)
+    normal = pow(2, Const(-10) * t) * sin((Const(10) * t - Const(0.75)) * Const(_EASE_C4)) + Const(1)
+    return if_(lt(t, Const(0.001)), Const(0),
+           if_(lt(Const(0.999), t), Const(1), normal))
+
+def ease_in_out_elastic(t):
+    t = _to_expr(t)
+    branch1 = -pow(2, Const(20) * t - Const(10)) * sin((Const(20) * t - Const(11.125)) * Const(_EASE_C5)) / Const(2)
+    branch2 = pow(2, Const(-20) * t + Const(10)) * sin((Const(20) * t - Const(11.125)) * Const(_EASE_C5)) / Const(-2) + Const(1)
+    inner = if_(lt(t, 0.5), branch1, branch2)
+    return if_(lt(t, Const(0.001)), Const(0),
+           if_(lt(Const(0.999), t), Const(1), inner))
+
+# Bounce (バウンス)
+def ease_out_bounce(t):
+    t = _to_expr(t)
+    n1 = 7.5625
+    d1 = 2.75
+    s1 = Const(n1) * t * t
+    t2 = t - Const(1.5 / d1)
+    s2 = Const(n1) * t2 * t2 + Const(0.75)
+    t3 = t - Const(2.25 / d1)
+    s3 = Const(n1) * t3 * t3 + Const(0.9375)
+    t4 = t - Const(2.625 / d1)
+    s4 = Const(n1) * t4 * t4 + Const(0.984375)
+    return if_(lt(t, Const(1 / d1)), s1,
+           if_(lt(t, Const(2 / d1)), s2,
+           if_(lt(t, Const(2.5 / d1)), s3, s4)))
+
+def ease_in_bounce(t):
+    t = _to_expr(t)
+    return Const(1) - ease_out_bounce(Const(1) - t)
+
+def ease_in_out_bounce(t):
+    t = _to_expr(t)
+    branch1 = (Const(1) - ease_out_bounce(Const(1) - Const(2) * t)) / Const(2)
+    branch2 = (Const(1) + ease_out_bounce(Const(2) * t - Const(1))) / Const(2)
+    return if_(lt(t, 0.5), branch1, branch2)
+
+# Cubic Bezier (CSS互換)
+def ease_cubic_bezier(x1, y1, x2, y2, segments=16):
+    """CSS cubic-bezier互換イージング関数を生成
+
+    使用例:
+        ease = ease_cubic_bezier(0.25, 0.1, 0.25, 1.0)  # CSS ease
+        obj.time(2) <= scale(lambda u: lerp(0.5, 1, ease(u)))
+    """
+    def _bx(s): return 3*x1*s*(1-s)**2 + 3*x2*s**2*(1-s) + s**3
+    def _by(s): return 3*y1*s*(1-s)**2 + 3*y2*s**2*(1-s) + s**3
+    def _dbx(s): return 3*x1 + (6*x2 - 12*x1)*s + (9*x1 - 9*x2 + 3)*s**2
+    def _solve_s(t_val):
+        if t_val <= 0: return 0.0
+        if t_val >= 1: return 1.0
+        s = t_val
+        for _ in range(8):
+            dx = _dbx(s)
+            if _builtins.abs(dx) < 1e-12: break
+            s -= (_bx(s) - t_val) / dx
+            s = _builtins.max(0.0, _builtins.min(1.0, s))
+        return s
+    points = [(i / segments, _by(_solve_s(i / segments))) for i in range(segments + 1)]
+    def _easing(u):
+        u = _to_expr(u)
+        result = Const(points[-1][1])
+        for i in range(len(points) - 2, -1, -1):
+            t0, v0 = points[i]
+            t1, v1 = points[i + 1]
+            seg_len = t1 - t0
+            if seg_len <= 0: continue
+            local_t = clip((u - Const(t0)) / Const(seg_len), 0, 1)
+            seg_val = lerp(v0, v1, local_t)
+            result = if_(lt(u, Const(t1)), seg_val, result)
+        return result
+    return _easing
+
+# スプリング (バネ)
+def ease_spring(stiffness=3, damping=4):
+    """バネイージング: オーバーシュートしながら1.0に収束"""
+    def _easing(t):
+        t = _to_expr(t)
+        decay = pow(Const(E), Const(-damping) * t)
+        osc = cos(t * Const(stiffness) * Const(_EASE_PI))
+        return Const(1) - decay * osc
+    return _easing
+
+# ステップ関数
+def steps(n, jump="end"):
+    """CSS steps()互換ステップ関数"""
+    if n < 1:
+        raise ValueError(f"steps: n は1以上が必要です（{n}）")
+    if jump not in ("start", "end"):
+        raise ValueError(f"steps: jump は 'start' または 'end': {jump}")
+    def _easing(u):
+        u = _to_expr(u)
+        if jump == "end":
+            return clip(floor(u * Const(n)) / Const(n), 0, 1)
+        else:
+            return clip(floor(u * Const(n) + Const(1)) / Const(n), 0, 1)
+    return _easing
+
+def apply_easing(easing_func, from_val, to_val):
+    """イージング関数を値範囲に適用するlambdaを返す
+
+    使用例:
+        obj.time(2) <= scale(apply_easing(ease_in_quad, 0.5, 1.0))
+    """
+    def _inner(u):
+        return lerp(from_val, to_val, easing_func(u))
+    return _inner
+
+
+# --- シーケンス・キーフレーム ---
+
+def phase(start, end, fn):
+    """エフェクトパラメータを時間区間[start, end]にリマッピング
+
+    区間外ではtがclipされる（start前→t=0, end後→t=1）
+
+    使用例:
+        obj.time(6) <= fade(phase(0, 0.3, lambda t: t))  # 0-30%でフェードイン
+    """
+    if start >= end:
+        raise ValueError(f"phase: start({start}) < end({end}) が必要です")
+    if start < 0 or end > 1:
+        raise ValueError(f"phase: start/end は [0, 1] の範囲が必要です")
+    def _inner(u):
+        u = _to_expr(u)
+        t = clip((u - Const(start)) / Const(end - start), 0, 1)
+        if callable(fn):
+            return fn(t)
+        return _to_expr(fn)
+    return _inner
+
+def sequence_param(*segments, default=0):
+    """複数の時間区間でパラメータ値を切り替え
+
+    使用例:
+        obj.time(6) <= fade(sequence_param(
+            (0, 0.2, lambda t: t),      # 0-20%: フェードイン
+            (0.2, 0.8, 1.0),            # 20-80%: 保持
+            (0.8, 1.0, lambda t: 1-t),  # 80-100%: フェードアウト
+        ))
+    """
+    for i, (s, e, _) in enumerate(segments):
+        if s >= e:
+            raise ValueError(f"sequence_param: segment[{i}] の start({s}) < end({e}) が必要です")
+    def _inner(u):
+        u = _to_expr(u)
+        result = _to_expr(default)
+        for s, e, val in reversed(segments):
+            t = clip((u - Const(s)) / Const(e - s), 0, 1)
+            segment_val = val(t) if callable(val) else _to_expr(val)
+            result = if_(lt(u, Const(e)), segment_val, result)
+        return result
+    return _inner
+
+def repeat(n, fn):
+    """パラメータ関数をn回繰り返す
+
+    使用例:
+        obj.time(6) <= scale(repeat(3, lambda t: 1 + 0.2 * sin(t * PI * 2)))
+    """
+    if n <= 0:
+        raise ValueError(f"repeat: n は正の整数が必要です（{n}）")
+    def _inner(u):
+        u = _to_expr(u)
+        local_t = clip(u * Const(n) - floor(u * Const(n)), 0, 1)
+        if callable(fn):
+            return fn(local_t)
+        return _to_expr(fn)
+    return _inner
+
+def bounce(n, fn):
+    """パラメータ関数をn回往復させる（0→1→0の三角波）
+
+    使用例:
+        obj.time(6) <= scale(bounce(2, lambda t: lerp(0.5, 1, t)))
+    """
+    if n <= 0:
+        raise ValueError(f"bounce: n は正の整数が必要です（{n}）")
+    def _inner(u):
+        u = _to_expr(u)
+        local = clip(u * Const(n) - floor(u * Const(n)), 0, 1)
+        t = Const(1) - abs(Const(2) * local - Const(1))
+        if callable(fn):
+            return fn(t)
+        return _to_expr(fn)
+    return _inner
+
+def alternate(n, fn_a, fn_b):
+    """2つの関数をn回交互に切り替え
+
+    使用例:
+        obj.time(4) <= fade(alternate(4, lambda t: 1.0, lambda t: 0.5))
+    """
+    if n <= 0:
+        raise ValueError(f"alternate: n は正の整数が必要です（{n}）")
+    def _inner(u):
+        u = _to_expr(u)
+        seg = floor(u * Const(n))
+        local_t = clip(u * Const(n) - seg, 0, 1)
+        is_even = lt(mod(seg, Const(2)), Const(1))
+        val_a = fn_a(local_t) if callable(fn_a) else _to_expr(fn_a)
+        val_b = fn_b(local_t) if callable(fn_b) else _to_expr(fn_b)
+        return if_(is_even, val_a, val_b)
+    return _inner
+
+def staircase(n, fn):
+    """階段状に値を上昇させる
+
+    使用例:
+        obj.time(3) <= scale(staircase(3, lambda t: lerp(0.5, 1, t)))
+    """
+    if n <= 0:
+        raise ValueError(f"staircase: n は正の整数が必要です（{n}）")
+    def _inner(u):
+        u = _to_expr(u)
+        seg = floor(u * Const(n))
+        base = seg / Const(n)
+        local_t = clip(u * Const(n) - seg, 0, 1)
+        if callable(fn):
+            return base + fn(local_t) / Const(n)
+        return base + _to_expr(fn) / Const(n)
+    return _inner
+
+def keyframes(*args, easing=None):
+    """キーフレーム補間: 固定時点のパラメータ指定で自動線形補間
+
+    使用例:
+        obj.time(4) <= scale(keyframes(0, 0.5, 0.5, 1.2, 1.0, 1.0))
+        obj.time(4) <= fade(keyframes((0, 0), (0.2, 1), (0.8, 1), (1.0, 0)))
+        obj.time(4) <= scale(keyframes((0, 0.5), (1, 1.5), easing=ease_in_out_quad))
+    """
+    if len(args) == 0:
+        raise ValueError("keyframes: 最低2つのキーフレームが必要です")
+    if isinstance(args[0], tuple):
+        points = [(float(t), float(v)) for t, v in args]
+    else:
+        if len(args) % 2 != 0:
+            raise ValueError("keyframes: フラット形式では偶数個の引数が必要です（t0, v0, t1, v1, ...）")
+        points = [(float(args[i]), float(args[i+1])) for i in range(0, len(args), 2)]
+    if len(points) < 2:
+        raise ValueError("keyframes: 最低2つのキーフレームが必要です")
+    points.sort(key=lambda p: p[0])
+    def _inner(u):
+        u = _to_expr(u)
+        result = Const(points[-1][1])
+        for i in range(len(points) - 2, -1, -1):
+            t0, v0 = points[i]
+            t1, v1 = points[i + 1]
+            seg_len = t1 - t0
+            if seg_len <= 0: continue
+            local_t = clip((u - Const(t0)) / Const(seg_len), 0, 1)
+            if easing is not None:
+                local_t = easing(local_t)
+            seg_val = lerp(v0, v1, local_t)
+            result = if_(lt(u, Const(t1)), seg_val, result)
+        return result
+    return _inner
 
 
 # --- テンプレートラッパー ---

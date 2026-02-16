@@ -894,7 +894,7 @@ def test_move_survives_bakeable_checkpoint():
         if not isinstance(cmd, dict):
             return False, f"dictでない: {type(cmd)}"
         main_str = " ".join(cmd["main"])
-        has_move = "0.2" in main_str and "0.8" in main_str
+        has_move = "0.2" in main_str and ("0.8" in main_str or "0.6" in main_str)
         if has_move:
             return True, "move preserved after bakeable checkpoint"
         return False, "move lost after checkpoint"
