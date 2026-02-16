@@ -6,14 +6,12 @@
     "lavfi",
     "-i",
     "color=c=darkgreen:s=1280x720:d=4:r=30",
-    "-c:v",
-    "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/checkpoint/07fb9cc9/c7b88913db807dae.webm",
+    "__cache__/artifacts/checkpoint/07fb9cc9/e2cf2a268ac2b967.mkv",
     "-i",
     "../Impact-38.mp3",
     "-filter_complex",
-    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1];[1:a]atrim=duration=3,asetpts=PTS-STARTPTS[a0];[2:a]atrim=duration=4,asetpts=PTS-STARTPTS,volume=volume='0.6':eval=frame,volume=volume='clip((t)/4/,0/,1)':eval=frame[a1];[a0][a1]amix=inputs=2:normalize=0[aout]",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v1];[1:a]atrim=duration=3,asetpts=PTS-STARTPTS[a0];[2:a]atrim=duration=4,asetpts=PTS-STARTPTS,volume=volume='0.6':eval=frame,volume=volume='clip((t)/4/,0/,1)':eval=frame[a1];[a0][a1]amix=inputs=2:normalize=0[aout]",
     "-map",
     "[v1]",
     "-map",
@@ -29,7 +27,7 @@
     "test17.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/07fb9cc9/c7b88913db807dae.webm": [
+    "__cache__/artifacts/checkpoint/07fb9cc9/e2cf2a268ac2b967.mkv": [
       "ffmpeg",
       "-y",
       "-i",
@@ -37,18 +35,14 @@
       "-vf",
       "scale=iw*0.5:ih*0.5,scale=w='trunc(iw*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame",
       "-c:v",
-      "libvpx-vp9",
+      "ffv1",
+      "-level",
+      "3",
       "-pix_fmt",
-      "yuva420p",
-      "-b:v",
-      "0",
-      "-crf",
-      "30",
-      "-auto-alt-ref",
-      "0",
+      "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/07fb9cc9/c7b88913db807dae.webm"
+      "__cache__/artifacts/checkpoint/07fb9cc9/e2cf2a268ac2b967.mkv"
     ]
   }
 }

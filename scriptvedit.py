@@ -573,7 +573,7 @@ _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
-_ENGINE_VER = "6"
+_ENGINE_VER = "7"
 _BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift"}
 
 
@@ -665,9 +665,9 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
     if fps is not None:
         sigs.append(f"fps={fps}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
-    # video入力 + transform-only でも動画ならwebm
+    # video入力 + transform-only でも動画ならmkv (ffv1)
     is_video = _detect_media_type(original_source) in ("video",)
-    ext = ".webm" if (duration is not None or is_video) else ".png"
+    ext = ".mkv" if (duration is not None or is_video) else ".png"
     src_hash = hashlib.sha256(original_source.replace("\\", "/").encode()).hexdigest()[:8]
     cache_dir = os.path.join(_ARTIFACT_DIR, "checkpoint", src_hash)
     return os.path.join(cache_dir, f"{key}{ext}")
@@ -693,7 +693,7 @@ def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
     src_hash = hashlib.sha256(src_path.replace("\\", "/").encode()).hexdigest()[:8]
     cache_dir = os.path.join(_ARTIFACT_DIR, "morph", src_hash)
-    return os.path.join(cache_dir, f"{key}.webm")
+    return os.path.join(cache_dir, f"{key}.mkv")
 
 
 def _validate_morph_position(bakeable_ops):
@@ -704,9 +704,11 @@ def _validate_morph_position(bakeable_ops):
             morph_idx = i
     if morph_idx is None:
         return
-    # morph_to の後に他のbakeable opがあればエラー
+    # morph_to の後に他のbakeable opがあればエラー（policy='off'は実質ライブなのでスキップ）
     for i in range(morph_idx + 1, len(bakeable_ops)):
         after_op = bakeable_ops[i][1]
+        if getattr(after_op, 'policy', 'auto') == "off":
+            continue
         raise ValueError(
             f"morph_to はbakeable opsの末尾に配置してください。"
             f"morph_to(idx={morph_idx})の後に "
@@ -781,10 +783,10 @@ def _layer_cache_paths(filename, project=None):
         sigs.append(f"bg={project.background_color}")
         key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
         layer_dir = os.path.join(_ARTIFACT_DIR, "layer", basename)
-        return (os.path.join(layer_dir, f"{key}.webm"),
+        return (os.path.join(layer_dir, f"{key}.mkv"),
                 os.path.join(layer_dir, f"{key}.anchors.json"))
     # フォールバック（後方互換）
-    return (os.path.join(_CACHE_DIR, f"{basename}.webm"),
+    return (os.path.join(_CACHE_DIR, f"{basename}.mkv"),
             os.path.join(_CACHE_DIR, f"{basename}.anchors.json"))
 
 
@@ -1182,25 +1184,24 @@ class Project:
         filters = pre_filters + filters
         eff_filters, _ = _build_effect_filters(temp, 0, dur, base_dims=base_dims)
         filters.extend(eff_filters)
+        filters = _optimize_filter_chain(filters)
 
         if filters:
             cmd.extend(["-vf", ",".join(filters)])
 
-        crf = "40" if quality == "fast" else "30"
         cmd.extend([
-            "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
-            "-b:v", "0", "-crf", crf, "-auto-alt-ref", "0",
+            "-c:v", "ffv1", "-level", "3",
+            "-pix_fmt", "yuva444p",
             "-t", str(dur), cache_path,
         ])
         return cmd
 
     def _build_morph_webm_cmd(self, frame_pattern, cache_path, duration, fps, quality="final"):
-        """PNG連番 → alpha webm のffmpegコマンドを構築"""
-        crf = "40" if quality == "fast" else "30"
+        """PNG連番 → alpha映像 のffmpegコマンドを構築"""
         return ["ffmpeg", "-y", "-framerate", str(fps),
                 "-i", frame_pattern,
-                "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
-                "-b:v", "0", "-crf", crf, "-auto-alt-ref", "0",
+                "-c:v", "ffv1", "-level", "3",
+                "-pix_fmt", "yuva444p",
                 "-t", str(duration), cache_path]
 
     def _process_checkpoints(self, obj):
@@ -1548,6 +1549,10 @@ class Project:
             obj_filters = _build_transform_filters(obj)
             eff_filters, pad_size = _build_effect_filters(obj, start, obj_dur, base_dims=base_dims)
             obj_filters.extend(eff_filters)
+            # ビデオ入力が start_time > 0 の場合、tpad で先頭にフレームを追加
+            if obj.media_type != "image" and start > 0:
+                obj_filters.insert(0, f"tpad=start_duration={start}:start_mode=clone")
+            obj_filters = _optimize_filter_chain(obj_filters)
 
             obj_label = f"[obj{input_idx}]"
             if obj_filters:
@@ -1566,7 +1571,7 @@ class Project:
 
             out_label = f"[v{input_idx}]"
             filter_parts.append(
-                f"{current_base}{obj_label}overlay={x_expr}:{y_expr}{enable_str}{out_label}"
+                f"{current_base}{obj_label}overlay={x_expr}:{y_expr}:eof_action=pass{enable_str}{out_label}"
             )
             current_base = out_label
 
@@ -1651,6 +1656,11 @@ class Project:
             obj_filters = pre_filters + _build_transform_filters(obj)
             eff_filters, pad_size = _build_effect_filters(obj, start, dur, base_dims=base_dims)
             obj_filters.extend(eff_filters)
+            # ビデオ入力が start_time > 0 の場合、tpad で先頭に透明フレームを追加
+            # (overlay有効化前にフレームが消費されるのを防ぐ)
+            if obj.media_type != "image" and start > 0:
+                obj_filters.insert(0, f"tpad=start_duration={start}:start_mode=clone")
+            obj_filters = _optimize_filter_chain(obj_filters)
 
             obj_label = f"[obj{input_idx}]"
             if obj_filters:
@@ -1669,7 +1679,7 @@ class Project:
 
             out_label = f"[v{input_idx}]"
             filter_parts.append(
-                f"{current_base}{obj_label}overlay={x_expr}:{y_expr}{enable_str}{out_label}"
+                f"{current_base}{obj_label}overlay={x_expr}:{y_expr}:eof_action=pass{enable_str}{out_label}"
             )
             current_base = out_label
 
@@ -1856,12 +1866,18 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
                 pad_size = (max_w, max_h)
         elif e.name == "fade":
             alpha_expr = e.params.get("alpha", Const(1.0))
-            u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
-            ffmpeg_str = alpha_expr.to_ffmpeg(u_expr)
             filters.append("format=rgba")
-            filters.append(
-                f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
-            )
+            # ネイティブfadeを試行（geq比で10倍高速）
+            native = _try_native_fade(alpha_expr, start, dur)
+            if native:
+                filters.extend(native)
+            else:
+                # 複雑なパターンはgeqにフォールバック
+                u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
+                ffmpeg_str = alpha_expr.to_ffmpeg(u_expr)
+                filters.append(
+                    f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
+                )
         elif e.name == "rotate_to":
             rad_expr = e.params.get("rad", Const(0))
             u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
@@ -1967,6 +1983,66 @@ def _build_move_exprs(obj, start, dur, pad_size=None):
         y_result = f"trunc({y_result}+{y_shake})"
 
     return x_result, y_result
+
+
+def _try_native_fade(alpha_expr, start, dur):
+    """alpha式をサンプリングし、ffmpegネイティブfadeフィルタで近似を試みる。
+    成功時はフィルタ文字列のリスト、失敗時はNoneを返す。
+    ネイティブfadeはgeq比で10倍以上高速（Cの内部ループ）。"""
+    N = 100
+    samples = []
+    try:
+        for i in range(N + 1):
+            samples.append(alpha_expr.eval_at(i / N))
+    except Exception:
+        return None
+
+    # 中間領域が1.0近い標準的なfadeパターンかチェック
+    mid = samples[N // 2]
+    if mid < 0.95:
+        return None  # 中間で不透明でない複雑パターン
+
+    # fade-in区間を検出: alpha >= 0.99 の最初のサンプル位置
+    fade_in_end_u = 0.0
+    for i in range(N + 1):
+        if samples[i] >= 0.99:
+            fade_in_end_u = i / N
+            break
+
+    # fade-out区間を検出: alpha >= 0.99 の最後のサンプル位置
+    fade_out_start_u = 1.0
+    for i in range(N, -1, -1):
+        if samples[i] >= 0.99:
+            fade_out_start_u = i / N
+            break
+
+    # 値が途中で大きく変動しないか確認
+    for i in range(int(fade_in_end_u * N), int(fade_out_start_u * N) + 1):
+        if i <= N and samples[i] < 0.95:
+            return None  # 中間領域で不透明度が下がる複雑パターン
+
+    result = []
+    if fade_in_end_u > 0.005:
+        fade_in_dur = fade_in_end_u * dur
+        result.append(f"fade=t=in:st={start}:d={fade_in_dur}:alpha=1")
+    if fade_out_start_u < 0.995:
+        fade_out_dur = (1.0 - fade_out_start_u) * dur
+        fade_out_st = start + fade_out_start_u * dur
+        result.append(f"fade=t=out:st={fade_out_st}:d={fade_out_dur}:alpha=1")
+
+    return result if result else None
+
+
+def _optimize_filter_chain(filters):
+    """フィルタチェーンの最適化: 連続format重複を除去"""
+    if not filters:
+        return filters
+    result = []
+    for f in filters:
+        if f.startswith("format=") and result and result[-1] == f:
+            continue
+        result.append(f)
+    return result
 
 
 def _build_video_pre_filters(obj):
@@ -2490,7 +2566,7 @@ class Object:
         key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
         src_hash = hashlib.sha256(
             self.source.replace("\\", "/").encode()).hexdigest()[:8]
-        ext = ".webm" if duration is not None else ".png"
+        ext = ".mkv" if duration is not None else ".png"
         return os.path.join(_ARTIFACT_DIR, "compute", src_hash, f"{key}{ext}")
 
     def _build_compute_image_cmd(self, cache_path):
@@ -2535,10 +2611,9 @@ class Object:
         for e in self.effects:
             if getattr(e, 'quality', 'final') == "fast":
                 quality = "fast"
-        crf = "40" if quality == "fast" else "30"
         cmd.extend([
-            "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p",
-            "-b:v", "0", "-crf", crf, "-auto-alt-ref", "0",
+            "-c:v", "ffv1", "-level", "3",
+            "-pix_fmt", "yuva444p",
             "-t", str(duration), cache_path,
         ])
         return cmd

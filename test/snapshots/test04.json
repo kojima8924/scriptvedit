@@ -11,13 +11,11 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/fc0def09/a4b4040ac40e4249.png",
-    "-c:v",
-    "libvpx-vp9",
+    "__cache__/artifacts/checkpoint/fc0def09/6047962a4662cd2f.png",
     "-i",
-    "__cache__/artifacts/checkpoint/30924af7/6c567fe12c250340.webm",
+    "__cache__/artifacts/checkpoint/30924af7/b93214c4ccc23c05.mkv",
     "-filter_complex",
-    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v2]",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v2]",
     "-map",
     "[v2]",
     "-c:v",
@@ -30,7 +28,7 @@
     "test04.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/fc0def09/a4b4040ac40e4249.png": [
+    "__cache__/artifacts/checkpoint/fc0def09/6047962a4662cd2f.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -41,9 +39,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/fc0def09/a4b4040ac40e4249.png"
+      "__cache__/artifacts/checkpoint/fc0def09/6047962a4662cd2f.png"
     ],
-    "__cache__/artifacts/checkpoint/30924af7/bd4402ff3621fe8d.png": [
+    "__cache__/artifacts/checkpoint/30924af7/e934764ab1e6f5ca.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -54,9 +52,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/30924af7/bd4402ff3621fe8d.png"
+      "__cache__/artifacts/checkpoint/30924af7/e934764ab1e6f5ca.png"
     ],
-    "__cache__/artifacts/checkpoint/30924af7/6c567fe12c250340.webm": [
+    "__cache__/artifacts/checkpoint/30924af7/b93214c4ccc23c05.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -64,22 +62,18 @@
       "-r",
       "30",
       "-i",
-      "__cache__/artifacts/checkpoint/30924af7/bd4402ff3621fe8d.png",
+      "__cache__/artifacts/checkpoint/30924af7/e934764ab1e6f5ca.png",
       "-vf",
       "scale=w='trunc(iw*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':eval=frame",
       "-c:v",
-      "libvpx-vp9",
+      "ffv1",
+      "-level",
+      "3",
       "-pix_fmt",
-      "yuva420p",
-      "-b:v",
-      "0",
-      "-crf",
-      "30",
-      "-auto-alt-ref",
-      "0",
+      "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/30924af7/6c567fe12c250340.webm"
+      "__cache__/artifacts/checkpoint/30924af7/b93214c4ccc23c05.mkv"
     ]
   }
 }

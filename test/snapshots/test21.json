@@ -9,13 +9,11 @@
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/web/diagram_40cf3695/be342e0d6ac035e9.webm",
-    "-c:v",
-    "libvpx-vp9",
+    "__cache__/artifacts/web/diagram_40cf3695/5e95c244a9451fa0.webm",
     "-i",
-    "__cache__/artifacts/checkpoint/2fdb2eec/b70477f6ec72df53.webm",
+    "__cache__/artifacts/checkpoint/2fdb2eec/8935c3c0bcae8283.mkv",
     "-filter_complex",
-    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3.0)'[v1];[v1][2:v]overlay=trunc(0.85*W-w/2):trunc(0.8*H-h/2):enable='between(t/,0/,3)'[v2]",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3.0)'[v1];[v1][2:v]overlay=trunc(0.85*W-w/2):trunc(0.8*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v2]",
     "-map",
     "[v2]",
     "-c:v",
@@ -28,7 +26,7 @@
     "test21.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/web/diagram_40cf3695/be342e0d6ac035e9.webm": [
+    "__cache__/artifacts/web/diagram_40cf3695/5e95c244a9451fa0.webm": [
       "ffmpeg",
       "-y",
       "-framerate",
@@ -47,9 +45,9 @@
       "0",
       "-t",
       "3.0",
-      "__cache__/artifacts/web/diagram_40cf3695/be342e0d6ac035e9.webm"
+      "__cache__/artifacts/web/diagram_40cf3695/5e95c244a9451fa0.webm"
     ],
-    "__cache__/artifacts/checkpoint/2fdb2eec/b70477f6ec72df53.webm": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/8935c3c0bcae8283.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -61,18 +59,14 @@
       "-vf",
       "scale=iw*0.25:ih*0.25,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip((0.3+(0.7*clip((T-0)/3/,0/,1)))/,0/,1)'",
       "-c:v",
-      "libvpx-vp9",
+      "ffv1",
+      "-level",
+      "3",
       "-pix_fmt",
-      "yuva420p",
-      "-b:v",
-      "0",
-      "-crf",
-      "30",
-      "-auto-alt-ref",
-      "0",
+      "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/2fdb2eec/b70477f6ec72df53.webm"
+      "__cache__/artifacts/checkpoint/2fdb2eec/8935c3c0bcae8283.mkv"
     ]
   }
 }

@@ -11,13 +11,11 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/fc0def09/e9c0faeb4a63b318.png",
-    "-c:v",
-    "libvpx-vp9",
+    "__cache__/artifacts/checkpoint/fc0def09/165444e4d638657c.png",
     "-i",
-    "__cache__/artifacts/checkpoint/2fdb2eec/91329c2ab192ef0a.webm",
+    "__cache__/artifacts/checkpoint/2fdb2eec/0083ba5cf1b42d25.mkv",
     "-filter_complex",
-    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,3.0/,6.0)'[v2]",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v1];[2:v]tpad=start_duration=3.0:start_mode=clone[obj2];[v1][obj2]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,3.0/,6.0)'[v2]",
     "-map",
     "[v2]",
     "-c:v",
@@ -30,7 +28,7 @@
     "test14.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/layer/test14_maku/34fca16d86110a06.webm": [
+    "__cache__/artifacts/layer/test14_maku/8c6471d1323248f8.mkv": [
       "ffmpeg",
       "-y",
       "-f",
@@ -44,7 +42,7 @@
       "-i",
       "../pattern_teishiki_maku.png",
       "-filter_complex",
-      "[1:v]scale=iw*1:ih*1[obj1];[0:v][obj1]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):enable='between(t/,0/,3)'[v1]",
+      "[1:v]scale=iw*1:ih*1[obj1];[0:v][obj1]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v1]",
       "-map",
       "[v1]",
       "-c:v",
@@ -59,9 +57,9 @@
       "0",
       "-t",
       "6.0",
-      "__cache__/artifacts/layer/test14_maku/34fca16d86110a06.webm"
+      "__cache__/artifacts/layer/test14_maku/8c6471d1323248f8.mkv"
     ],
-    "__cache__/artifacts/checkpoint/fc0def09/e9c0faeb4a63b318.png": [
+    "__cache__/artifacts/checkpoint/fc0def09/165444e4d638657c.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -72,9 +70,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/fc0def09/e9c0faeb4a63b318.png"
+      "__cache__/artifacts/checkpoint/fc0def09/165444e4d638657c.png"
     ],
-    "__cache__/artifacts/checkpoint/2fdb2eec/91329c2ab192ef0a.webm": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/0083ba5cf1b42d25.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -86,18 +84,14 @@
       "-vf",
       "scale=iw*0.4:ih*0.4,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=258:320:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/3/,0/,1)/,0/,1)'",
       "-c:v",
-      "libvpx-vp9",
+      "ffv1",
+      "-level",
+      "3",
       "-pix_fmt",
-      "yuva420p",
-      "-b:v",
-      "0",
-      "-crf",
-      "30",
-      "-auto-alt-ref",
-      "0",
+      "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/2fdb2eec/91329c2ab192ef0a.webm"
+      "__cache__/artifacts/checkpoint/2fdb2eec/0083ba5cf1b42d25.mkv"
     ]
   }
 }

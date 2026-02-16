@@ -1,4 +1,4 @@
-# scriptvedit2
+# scriptvedit
 
 Pythonスクリプトで動画を構成するDSL。ffmpegによるレンダリング。
 
@@ -35,6 +35,14 @@ obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
                & fade(lambda u: u)
 ```
 
+### パーセント記法
+
+`P` を使って 0〜1 の正規化値をパーセントで書ける。
+
+```python
+move(x=50%P, y=75%P)  # x=0.5, y=0.75
+```
+
 ### Transformは静的、Effectは定数またはアニメーション
 
 - **Transform** (`|` で連結、`<=` で適用): 1回だけ適用される空間変換
@@ -51,13 +59,26 @@ obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
   - `scale(lambda u: lerp(0.5, 1, u))` ... 0.5倍 → 等倍にアニメーション
   - `fade(0.5)` ... 定数 半透明
   - `fade(lambda u: u)` ... 透明 → 不透明にアニメーション
+  - `zoom(to_value=2)` ... ズーム（scale のエイリアス、from/to指定可）
   - `rotate_to(from_deg, to_deg)` ... 回転アニメーション（bakeable）
   - `wipe(direction)` ... ワイプ表示（"left"/"right"/"top"/"bottom"）
   - `color_shift(hue, saturation, brightness)` ... 色相/彩度/明度シフト
   - `shake(amplitude, frequency)` ... 振動（live、overlay座標変調）
+  - `trim(duration)` ... 先頭からduration秒にカット（時間影響あり）
+  - `delete()` ... 映像をレンダリングから除外（音声のみ残す）
   - `morph_to(target_obj)` ... 画像→画像モーフィング（bakeable、重い。bakeable opsの末尾に配置必須）
 
 `u` は正規化時間（0〜1）。Effectの表示開始から終了まで線形に変化する。
+
+### zoom（scale エイリアス）
+
+`zoom` は `scale` の便利ラッパー。from/to 指定でアニメーションを簡潔に書ける。
+
+```python
+zoom(to_value=2)                      # 1.0 → 2.0 ズーム
+zoom(from_value=0.5, to_value=2)      # 0.5 → 2.0 ズーム
+zoom(value=1.5)                       # 固定1.5倍ズーム
+```
 
 ### Effect分類（bakeable / live）
 
@@ -68,7 +89,7 @@ checkpointで焼き込まれるか、レンダリング時にoverlay座標で解
 | Transform | resize, rotate, crop, pad, blur, eq | bakeable | 全Transform は bakeable |
 | Effect | scale (zoom) | bakeable | zoom は scale のエイリアス |
 | Effect | fade | bakeable | |
-| Effect | trim | bakeable | |
+| Effect | trim | bakeable | 時間影響あり |
 | Effect | rotate_to | bakeable | |
 | Effect | wipe | bakeable | |
 | Effect | color_shift | bakeable | |
@@ -81,6 +102,36 @@ checkpointで焼き込まれるか、レンダリング時にoverlay座標で解
 
 morph_to は bakeable ops の末尾に配置する必要がある（違反時は ValueError）。
 shake は overlay 座標の変調として実装されており live 分類。将来 bakeable に変更する場合は ENGINE_VER 更新が必要。
+
+### 音声エフェクト
+
+動画・音声ファイルの音声トラックを制御する。`&` で連結可能。`~` で無効化。
+
+- `again(value)` ... 音量倍率（デフォルト 1.0）
+- `afade(alpha)` ... 音量フェード
+- `atrim(duration)` ... 音声トリム（時間影響あり）
+- `atempo(rate)` ... テンポ変更（時間影響あり）
+- `adelete()` ... 音声をミックスから除外
+
+```python
+clip = Object("video.mp4")
+clip.time(5) <= move(x=0.5, y=0.5, anchor="center") \
+              & fade(lambda u: u) \
+              & again(0.6) \
+              & atrim(3)
+```
+
+### 映像/音声分離（split）
+
+`split()` で映像と音声を個別に制御できる。
+
+```python
+clip = Object("video.mp4")
+v, a = clip.split()
+v <= resize(sx=0.5, sy=0.5)     # 映像のみ変換
+a <= again(0.3)                  # 音声のみ音量調整
+clip.time(5) <= move(x=0.5, y=0.5, anchor="center")
+```
 
 ### Expr式ビルダー
 
@@ -250,8 +301,11 @@ clip.compute(duration=3)  # WebM動画として生成
 字幕・吹き出し・図解をPython関数1行で生成。内部でweb Object (HTML→Playwright→webm) パイプラインを利用。
 
 ```python
-# 字幕
+# 字幕（画面下部テロップ）
 s = subtitle("こんにちは！", who="Alice", duration=2.5)
+
+# 字幕ボックス（中央配置ボックス型）
+sb = subtitle_box("タイトルテキスト", duration=3.0)
 
 # 吹き出し
 b = bubble("ここがポイント！", duration=1.0, anchor=(0.6, 0.75))
@@ -262,8 +316,42 @@ d = diagram([
     label(0.25, 0.22, "Step 1", fill="#fff"),
     circle(0.7, 0.3, 0.06, fill="#ff6644"),
     arrow(0.45, 0.22, 0.62, 0.3, stroke="#ffcc00"),
+    spotlight(0.5, 0.5, 0.15),
 ], duration=3.0)
 ```
+
+テンプレート共通オプション: `style={}`, `size=(w,h)`, `name=`, `debug_frames=`, `deps=[]`
+
+diagram 図形要素:
+- `rect(x, y, w, h, **kw)` ... 矩形
+- `circle(x, y, r, **kw)` ... 円
+- `arrow(x1, y1, x2, y2, **kw)` ... 矢印
+- `label(x, y, text, **kw)` ... テキスト
+- `spotlight(x, y, r, **kw)` ... スポットライト（暗幕くり抜き）
+
+### web Object（HTML直接指定）
+
+HTMLファイルをPlaywright経由でフレーム描画し、WebM動画として生成する。
+
+```python
+web_obj = Object("template.html",
+                 duration=5.0,
+                 size=(1280, 720),
+                 data={"message": "Hello"},
+                 deps=["style.css"])
+web_obj.time(5) <= move(x=0.5, y=0.5, anchor="center")
+```
+
+- `duration` (必須) ... 表示秒数
+- `size` (必須) ... キャンバスサイズ `(width, height)`
+- `fps` ... フレームレート（デフォルト: Project.fps）
+- `data` ... HTML/JSに渡すデータ辞書
+- `name` ... 内部名称（自動生成）
+- `debug_frames` ... フレーム出力デバッグ
+- `deps` ... 依存ファイルリスト（変更検出用）
+
+HTML内で `window.renderFrame(state)` 関数を定義する。
+`state`: `{frame, t, u, fps, duration, width, height, data, seed}`
 
 ### 2パスアーキテクチャ
 
@@ -281,6 +369,20 @@ d = diagram([
 
 `p.layer(filename, priority=N)` の `priority` で重ね順を制御する。
 値が大きいほど手前に表示。記述順に依存しない。
+
+## Object メソッド一覧
+
+| メソッド | シグネチャ | 説明 |
+|---------|----------|------|
+| `time` | `time(duration=None, *, name=None)` | 表示時間設定（動画/音声は省略で自動duration） |
+| `until` | `until(name, offset=0.0)` | durationをアンカー時刻+offset秒まで伸長 |
+| `show` | `show(duration, *, priority=None)` | current_timeを進めずに表示 |
+| `show_until` | `show_until(name, offset=0.0, *, priority=None)` | current_timeを進めずにアンカーまで表示 |
+| `compute` | `compute(duration=None)` | タイムライン外で素材生成（PNG or WebM） |
+| `length` | `length()` | 加工後の再生時間を返す（trim/atempo反映） |
+| `split` | `split()` | `(VideoView, AudioView)` を返す |
+
+プロパティ: `has_video`, `has_audio`, `source`, `duration`, `start_time`, `priority`
 
 ## 使い方
 
@@ -340,7 +442,7 @@ cmd = p.render("output.mp4", dry_run=True)
 
 ```
 cd test
-python test_snapshot.py        # スナップショットテスト（30テスト）
+python test_snapshot.py        # スナップショットテスト（38テスト）
 python test_snapshot.py --update  # スナップショット更新
 python test_errors.py          # エラーケーステスト（66テスト）
 python test01_main.py          # 個別テスト（MP4生成）

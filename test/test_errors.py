@@ -474,8 +474,8 @@ def test_video_no_time_checkpoint_has_duration():
             return False, "cacheが空"
         # cacheの各コマンドに-tが含まれ、値がNoneでないこと
         for path, cmd in cache.items():
-            if not path.endswith(".webm"):
-                return False, f"拡張子が.webmでない: {path}"
+            if not (path.endswith(".mkv") or path.endswith(".webm")):
+                return False, f"拡張子が.mkvまたは.webmでない: {path}"
             if "-t" not in cmd:
                 return False, f"-tがコマンドにない: {cmd}"
             t_idx = cmd.index("-t")
