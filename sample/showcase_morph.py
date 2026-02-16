@@ -1,13 +1,13 @@
 from scriptvedit import *
 
-# タイトル画面下部: ソースコード → 動画プレーヤーのモーフィング
-src = Object("computer_screen_programming.png")
-tgt = Object("video_frame_32.png")
+# タイトル画面下部: カフカ → テントウムシのモーフィング
+src = Object("nigaoe_franz_kafka.png")
+tgt = Object("mushi_tentoumushi.png")
 
 src.time(5) <= morph_to(tgt) \
     & -scale(0.25) \
     & move(
-        x=lambda u: 0.15 + 0.7 * u,
+        x=apply_easing(ease_out_cubic, 0.35, 0.65),
         y=0.82,
         anchor="center",
     ) & -fade(sequence_param(
