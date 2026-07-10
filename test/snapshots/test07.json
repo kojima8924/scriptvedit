@@ -7,11 +7,11 @@
     "-i",
     "color=c=navy:s=1280x720:d=4:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/2fdb2eec/050bab66c1aaf8b1.mkv",
+    "__cache__/artifacts/checkpoint/2fdb2eec/975a8e5f0b200a3a.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/30924af7/6f28fc4327a6dcfc.mkv",
+    "__cache__/artifacts/checkpoint/30924af7/59589962b05db833.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/e795964e/127fd9d40acf09c5.mkv",
+    "__cache__/artifacts/checkpoint/e795964e/bdb0b872a9b8e6e2.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.2*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v2];[v2][3:v]overlay=trunc(0.8*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v3]",
     "-map",
@@ -26,7 +26,7 @@
     "test07.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/2fdb2eec/050bab66c1aaf8b1.mkv": [
+    "__cache__/artifacts/checkpoint/2fdb2eec/975a8e5f0b200a3a.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -36,7 +36,7 @@
       "-i",
       "../onigiri_tenmusu.png",
       "-vf",
-      "scale=iw*0.2:ih*0.2,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=128:160:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/4/,0/,1)/,0/,1)'",
+      "scale=iw*0.2:ih*0.2,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=128:160:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/4/,0/,1)/,0/,1)'",
       "-c:v",
       "ffv1",
       "-level",
@@ -45,9 +45,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/2fdb2eec/050bab66c1aaf8b1.mkv"
+      "__cache__/artifacts/checkpoint/2fdb2eec/975a8e5f0b200a3a.mkv"
     ],
-    "__cache__/artifacts/checkpoint/30924af7/6f28fc4327a6dcfc.mkv": [
+    "__cache__/artifacts/checkpoint/30924af7/59589962b05db833.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -57,7 +57,7 @@
       "-i",
       "../figure_cafe.png",
       "-vf",
-      "scale=iw*0.2:ih*0.2,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=226:226:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/4/,0/,1)/,0/,1)'",
+      "scale=iw*0.2:ih*0.2,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=226:226:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/4/,0/,1)/,0/,1)'",
       "-c:v",
       "ffv1",
       "-level",
@@ -66,9 +66,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/30924af7/6f28fc4327a6dcfc.mkv"
+      "__cache__/artifacts/checkpoint/30924af7/59589962b05db833.mkv"
     ],
-    "__cache__/artifacts/checkpoint/e795964e/127fd9d40acf09c5.mkv": [
+    "__cache__/artifacts/checkpoint/e795964e/bdb0b872a9b8e6e2.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -78,7 +78,7 @@
       "-i",
       "../virus_message_fuyoufukyu_gaisyutsu.png",
       "-vf",
-      "scale=iw*0.2:ih*0.2,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=314:130:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/4/,0/,1)/,0/,1)'",
+      "scale=iw*0.2:ih*0.2,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=314:130:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/4/,0/,1)/,0/,1)'",
       "-c:v",
       "ffv1",
       "-level",
@@ -87,7 +87,7 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/e795964e/127fd9d40acf09c5.mkv"
+      "__cache__/artifacts/checkpoint/e795964e/bdb0b872a9b8e6e2.mkv"
     ]
   }
 }

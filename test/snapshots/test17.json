@@ -7,7 +7,7 @@
     "-i",
     "color=c=darkgreen:s=1280x720:d=4:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/07fb9cc9/e2cf2a268ac2b967.mkv",
+    "__cache__/artifacts/checkpoint/07fb9cc9/07edb0c0e6a7c17f.mkv",
     "-i",
     "../Impact-38.mp3",
     "-filter_complex",
@@ -27,13 +27,13 @@
     "test17.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/07fb9cc9/e2cf2a268ac2b967.mkv": [
+    "__cache__/artifacts/checkpoint/07fb9cc9/07edb0c0e6a7c17f.mkv": [
       "ffmpeg",
       "-y",
       "-i",
       "../fox_noaudio.mp4",
       "-vf",
-      "scale=iw*0.5:ih*0.5,scale=w='trunc(iw*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame",
+      "scale=iw*0.5:ih*0.5,scale=w='trunc(iw*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy",
       "-c:v",
       "ffv1",
       "-level",
@@ -42,7 +42,7 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/07fb9cc9/e2cf2a268ac2b967.mkv"
+      "__cache__/artifacts/checkpoint/07fb9cc9/07edb0c0e6a7c17f.mkv"
     ]
   }
 }

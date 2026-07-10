@@ -11,9 +11,9 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/fc0def09/6047962a4662cd2f.png",
+    "__cache__/artifacts/checkpoint/fc0def09/b312a560e316200c.png",
     "-i",
-    "__cache__/artifacts/checkpoint/30924af7/b93214c4ccc23c05.mkv",
+    "__cache__/artifacts/checkpoint/30924af7/89400ef09427db6b.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v2]",
     "-map",
@@ -28,7 +28,7 @@
     "test04.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/fc0def09/6047962a4662cd2f.png": [
+    "__cache__/artifacts/checkpoint/fc0def09/b312a560e316200c.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -39,9 +39,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/fc0def09/6047962a4662cd2f.png"
+      "__cache__/artifacts/checkpoint/fc0def09/b312a560e316200c.png"
     ],
-    "__cache__/artifacts/checkpoint/30924af7/e934764ab1e6f5ca.png": [
+    "__cache__/artifacts/checkpoint/30924af7/5ad760cfd05bf8a7.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -52,9 +52,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/30924af7/e934764ab1e6f5ca.png"
+      "__cache__/artifacts/checkpoint/30924af7/5ad760cfd05bf8a7.png"
     ],
-    "__cache__/artifacts/checkpoint/30924af7/b93214c4ccc23c05.mkv": [
+    "__cache__/artifacts/checkpoint/30924af7/89400ef09427db6b.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -62,7 +62,7 @@
       "-r",
       "30",
       "-i",
-      "__cache__/artifacts/checkpoint/30924af7/e934764ab1e6f5ca.png",
+      "__cache__/artifacts/checkpoint/30924af7/5ad760cfd05bf8a7.png",
       "-vf",
       "scale=w='trunc(iw*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.8+(0.19999999999999996*clip((t-0)/3/,0/,1))))/2)*2':eval=frame",
       "-c:v",
@@ -73,7 +73,7 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/30924af7/b93214c4ccc23c05.mkv"
+      "__cache__/artifacts/checkpoint/30924af7/89400ef09427db6b.mkv"
     ]
   }
 }

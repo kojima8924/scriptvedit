@@ -15,6 +15,7 @@ morph.py - 最適輸送 + ワープ場によるモーフィング動画生成
 """
 
 import argparse
+import inspect
 import os
 import numpy as np
 from PIL import Image
@@ -22,6 +23,21 @@ from scipy.optimize import linear_sum_assignment
 from scipy.interpolate import RBFInterpolator
 import cv2
 from tqdm import tqdm
+
+
+# ============================================================
+# 定数
+# ============================================================
+
+# MORPH_PARAM_KEYS（**params の既知キー）は _prepare_morph のシグネチャから
+# 導出する（定義は _prepare_morph の直後）。二重管理を避けるため手書きしない
+
+# 実効サンプル数 Na+Nb の警告閾値。コスト行列が (Na+Nb)^2 float32、
+# ハンガリアン法が O(N^3) のため、これを超えるとメモリ・時間が急増する
+MORPH_SAMPLES_WARN = 16000
+
+# RBF の smoothing 下限（0 だと補間行列が特異になり得る）
+MIN_SMOOTHING = 1e-6
 
 
 # ============================================================
@@ -174,6 +190,12 @@ def build_warp_fields(src_pos, dst_pos, src_col, dst_col,
                           np.linspace(0, h - 1, gh))
     grid_pts = np.column_stack([gx.ravel(), gy.ravel()])
 
+    # smoothing=0 は RBF の補間行列が特異になり得るため下限を設ける
+    if smoothing < MIN_SMOOTHING:
+        print(f"  警告: smoothing={smoothing} は小さすぎるため "
+              f"{MIN_SMOOTHING} に引き上げます（特異行列の防止）")
+        smoothing = MIN_SMOOTHING
+
     def interpolate_field(ctrl, disp, label):
         """制御点+境界アンカー → RBF補間 → フル解像度変位場"""
         ctrl_all = np.vstack([ctrl, anchors])
@@ -216,6 +238,60 @@ def ease_in_out(t: float) -> float:
     return t * t * (3.0 - 2.0 * t)
 
 
+def _prepare_morph(path_a, path_b, *,
+                   max_pixels=2000, w_move=1.0, w_color=0.3, w_vanish=1.5,
+                   grid_step=8, smoothing=10.0):
+    """手順1〜4（画像読み込み→ピクセル抽出→最適輸送→ワープ場構築）の共通処理
+
+    返値: arr_a, arr_b, canvas, dx_s, dy_s, dx_t, dy_t
+    """
+    # --- 1. 画像読み込み ---
+    print("[1/5] 画像読み込み...")
+    arr_a, arr_b, canvas = load_images(path_a, path_b)
+
+    # --- 2. ピクセル抽出 + サブサンプリング ---
+    print("[2/5] ピクセル抽出...")
+    pos_a, col_a = extract_pixels(arr_a)
+    pos_b, col_b = extract_pixels(arr_b)
+    print(f"  A: {len(pos_a):,}px,  B: {len(pos_b):,}px")
+
+    rng = np.random.default_rng(42)
+    pos_a_s, col_a_s = subsample(pos_a, col_a, max_pixels, rng)
+    pos_b_s, col_b_s = subsample(pos_b, col_b, max_pixels, rng)
+    print(f"  サンプリング後: A={len(pos_a_s):,}, B={len(pos_b_s):,}")
+
+    # 実効サンプル数（max_pixels の指定値でなく実際の N）で計算量を警告する。
+    # ハードエラーにはしない（遅くても完走させ、既存スクリプトを壊さない）
+    n_total = len(pos_a_s) + len(pos_b_s)
+    if n_total > MORPH_SAMPLES_WARN:
+        est_gb = (n_total * n_total * 4) / (1024 ** 3)
+        print(f"  警告: サンプル数 {n_total:,} は推奨上限 {MORPH_SAMPLES_WARN:,} を超えています"
+              f"（コスト行列 約{est_gb:.1f}GB + O(N^3) の最適輸送計算で数十分かかる可能性）。"
+              f" max_pixels を下げることを推奨します")
+
+    # --- 3. 最適輸送 ---
+    print("[3/5] 最適輸送...")
+    sp, dp, sc, dc = solve_transport(
+        pos_a_s, col_a_s, pos_b_s, col_b_s, canvas,
+        w_move=w_move, w_color=w_color, w_vanish=w_vanish,
+    )
+
+    # --- 4. ワープ場構築 ---
+    print("[4/5] ワープ場構築（RBF補間）...")
+    dx_s, dy_s, dx_t, dy_t = build_warp_fields(
+        sp, dp, sc, dc, canvas,
+        grid_step=grid_step, smoothing=smoothing,
+    )
+
+    return arr_a, arr_b, canvas, dx_s, dy_s, dx_t, dy_t
+
+
+# **params で受け付ける既知キー（タイポ検出用）。
+# _prepare_morph のキーワード専用引数から導出し、二重管理を避ける
+MORPH_PARAM_KEYS = frozenset(
+    inspect.signature(_prepare_morph).parameters) - {"path_a", "path_b"}
+
+
 # ============================================================
 # RGBA フレーム生成（scriptvedit統合用）
 # ============================================================
@@ -234,42 +310,18 @@ def generate_rgba_frames(path_a, path_b, out_dir, n_frames, blend_fn=None, **par
     if blend_fn is None:
         blend_fn = ease_in_out
 
-    max_pixels = params.get("max_pixels", 2000)
-    w_move = params.get("w_move", 1.0)
-    w_color = params.get("w_color", 0.3)
-    w_vanish = params.get("w_vanish", 1.5)
-    grid_step = params.get("grid_step", 8)
-    smoothing = params.get("smoothing", 10.0)
+    # 未知キーはタイポの可能性が高いため明示的にエラーにする
+    unknown = set(params) - MORPH_PARAM_KEYS
+    if unknown:
+        raise ValueError(
+            f"未知のパラメータ: {sorted(unknown)}"
+            f"（有効なキー: {sorted(MORPH_PARAM_KEYS)}）"
+        )
 
-    # --- 1. 画像読み込み ---
-    print("[1/5] 画像読み込み...")
-    arr_a, arr_b, canvas = load_images(path_a, path_b)
+    # --- 1〜4. 読み込み→抽出→最適輸送→ワープ場構築（共通処理） ---
+    arr_a, arr_b, canvas, dx_s, dy_s, dx_t, dy_t = _prepare_morph(
+        path_a, path_b, **params)
     w, h = canvas
-
-    # --- 2. ピクセル抽出 + サブサンプリング ---
-    print("[2/5] ピクセル抽出...")
-    pos_a, col_a = extract_pixels(arr_a)
-    pos_b, col_b = extract_pixels(arr_b)
-    print(f"  A: {len(pos_a):,}px,  B: {len(pos_b):,}px")
-
-    rng = np.random.default_rng(42)
-    pos_a_s, col_a_s = subsample(pos_a, col_a, max_pixels, rng)
-    pos_b_s, col_b_s = subsample(pos_b, col_b, max_pixels, rng)
-    print(f"  サンプリング後: A={len(pos_a_s):,}, B={len(pos_b_s):,}")
-
-    # --- 3. 最適輸送 ---
-    print("[3/5] 最適輸送...")
-    sp, dp, sc, dc = solve_transport(
-        pos_a_s, col_a_s, pos_b_s, col_b_s, canvas,
-        w_move=w_move, w_color=w_color, w_vanish=w_vanish,
-    )
-
-    # --- 4. ワープ場構築 ---
-    print("[4/5] ワープ場構築（RBF補間）...")
-    dx_s, dy_s, dx_t, dy_t = build_warp_fields(
-        sp, dp, sc, dc, canvas,
-        grid_step=grid_step, smoothing=smoothing,
-    )
 
     # --- 5. RGBAフレーム生成 ---
     src_pm = premultiply_alpha(arr_a)
@@ -283,17 +335,26 @@ def generate_rgba_frames(path_a, path_b, out_dir, n_frames, blend_fn=None, **par
     print(f"[5/5] RGBAフレーム生成: {n_frames}フレーム, {w}x{h}")
     for i in tqdm(range(n_frames), desc="フレーム生成"):
         t = i / max(n_frames - 1, 1)
-        et = blend_fn(t)
+        # ワープ変位には未クランプの et を使い、ease_out_back / elastic 等の
+        # overshoot（et>1 の行き過ぎ変形）を意図どおり表現する。
+        # remap は範囲外座標を BORDER_CONSTANT で安全に扱うためクランプ不要。
+        # 一方クロスディゾルブの重みは負アルファを生まないよう [0,1] にクランプする
+        et_raw = blend_fn(t)
+        et = min(max(et_raw, 0.0), 1.0)
+
+        # 注意: 後方ワープ（出力座標基準の参照）に、ソース点で評価した
+        # 前方基準の変位場をそのまま流用する近似。変位が大きい場合は
+        # 参照位置がずれ、にじみ・ゴーストが出ることがある。
 
         # ソース画像をワープ
-        mx_s = ident_x - et * dx_s
-        my_s = ident_y - et * dy_s
+        mx_s = ident_x - et_raw * dx_s
+        my_s = ident_y - et_raw * dy_s
         ws = cv2.remap(src_pm, mx_s, my_s, cv2.INTER_LINEAR,
                        borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
         # ターゲット画像を逆ワープ
-        mx_t = ident_x - (1.0 - et) * dx_t
-        my_t = ident_y - (1.0 - et) * dy_t
+        mx_t = ident_x - (1.0 - et_raw) * dx_t
+        my_t = ident_y - (1.0 - et_raw) * dy_t
         wt = cv2.remap(tgt_pm, mx_t, my_t, cv2.INTER_LINEAR,
                        borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
@@ -301,8 +362,9 @@ def generate_rgba_frames(path_a, path_b, out_dir, n_frames, blend_fn=None, **par
         blended = (1.0 - et) * ws + et * wt
 
         # unpremultiply → RGBA保存
+        # 除数に下限1.0を設け、低アルファ画素で色ノイズが増幅されるのを防ぐ
         alpha = blended[:, :, 3:4]
-        safe_alpha = np.where(alpha > 0, alpha, 1.0)
+        safe_alpha = np.maximum(alpha, 1.0)
         rgb = blended[:, :, :3] / safe_alpha * 255.0
         a_out = alpha
         rgba = np.dstack([rgb, a_out])
@@ -325,35 +387,13 @@ def create_video(path_a, path_b, output_path, *,
                  bg_color=(0, 0, 0)):
     """モーフィング動画を生成"""
 
-    # --- 1. 画像読み込み ---
-    print("[1/5] 画像読み込み...")
-    arr_a, arr_b, canvas = load_images(path_a, path_b)
+    # --- 1〜4. 読み込み→抽出→最適輸送→ワープ場構築（共通処理） ---
+    arr_a, arr_b, canvas, dx_s, dy_s, dx_t, dy_t = _prepare_morph(
+        path_a, path_b,
+        max_pixels=max_pixels, w_move=w_move, w_color=w_color,
+        w_vanish=w_vanish, grid_step=grid_step, smoothing=smoothing,
+    )
     w, h = canvas
-
-    # --- 2. ピクセル抽出 + サブサンプリング ---
-    print("[2/5] ピクセル抽出...")
-    pos_a, col_a = extract_pixels(arr_a)
-    pos_b, col_b = extract_pixels(arr_b)
-    print(f"  A: {len(pos_a):,}px,  B: {len(pos_b):,}px")
-
-    rng = np.random.default_rng(42)
-    pos_a_s, col_a_s = subsample(pos_a, col_a, max_pixels, rng)
-    pos_b_s, col_b_s = subsample(pos_b, col_b, max_pixels, rng)
-    print(f"  サンプリング後: A={len(pos_a_s):,}, B={len(pos_b_s):,}")
-
-    # --- 3. 最適輸送 ---
-    print("[3/5] 最適輸送...")
-    sp, dp, sc, dc = solve_transport(
-        pos_a_s, col_a_s, pos_b_s, col_b_s, canvas,
-        w_move=w_move, w_color=w_color, w_vanish=w_vanish,
-    )
-
-    # --- 4. ワープ場構築 ---
-    print("[4/5] ワープ場構築（RBF補間）...")
-    dx_s, dy_s, dx_t, dy_t = build_warp_fields(
-        sp, dp, sc, dc, canvas,
-        grid_step=grid_step, smoothing=smoothing,
-    )
 
     # --- 5. 動画レンダリング ---
     # 事前計算
@@ -372,34 +412,42 @@ def create_video(path_a, path_b, output_path, *,
         raise RuntimeError("VideoWriterを開けません")
 
     print(f"[5/5] レンダリング: {num_frames}フレーム, {w}x{h}")
-    for i in tqdm(range(num_frames), desc="レンダリング"):
-        t = i / max(num_frames - 1, 1)
-        et = ease_in_out(t)
+    try:
+        for i in tqdm(range(num_frames), desc="レンダリング"):
+            t = i / max(num_frames - 1, 1)
+            et = ease_in_out(t)
 
-        # ソース画像をワープ（後方写像: 出力(x,y) ← ソース(x-et*dx, y-et*dy)）
-        mx_s = ident_x - et * dx_s
-        my_s = ident_y - et * dy_s
-        ws = cv2.remap(src_pm, mx_s, my_s, cv2.INTER_LINEAR,
-                       borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+            # 注意: 後方ワープ（出力座標基準の参照）に、ソース点で評価した
+            # 前方基準の変位場をそのまま流用する近似。変位が大きい場合は
+            # 参照位置がずれ、にじみ・ゴーストが出ることがある。
 
-        # ターゲット画像を逆ワープ（t=0で最大変形、t=1で元に戻る）
-        mx_t = ident_x - (1.0 - et) * dx_t
-        my_t = ident_y - (1.0 - et) * dy_t
-        wt = cv2.remap(tgt_pm, mx_t, my_t, cv2.INTER_LINEAR,
-                       borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+            # ソース画像をワープ（後方写像: 出力(x,y) ← ソース(x-et*dx, y-et*dy)）
+            mx_s = ident_x - et * dx_s
+            my_s = ident_y - et * dy_s
+            ws = cv2.remap(src_pm, mx_s, my_s, cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
-        # クロスディゾルブ（事前乗算済み空間で線形ブレンド）
-        blended = (1.0 - et) * ws + et * wt
-        alpha = blended[:, :, 3:4] / 255.0
-        rgb = blended[:, :, :3]  # 事前乗算済みRGB
+            # ターゲット画像を逆ワープ（t=0で最大変形、t=1で元に戻る）
+            mx_t = ident_x - (1.0 - et) * dx_t
+            my_t = ident_y - (1.0 - et) * dy_t
+            wt = cv2.remap(tgt_pm, mx_t, my_t, cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
-        # 背景合成（over合成: premul_fg + bg * (1 - α)）
-        frame = rgb + bg * (1.0 - alpha)
-        # RGB → BGR に変換して書き出し
-        frame_bgr = np.clip(frame[:, :, ::-1], 0, 255).astype(np.uint8)
-        writer.write(frame_bgr)
+            # クロスディゾルブ（事前乗算済み空間で線形ブレンド）
+            blended = (1.0 - et) * ws + et * wt
+            alpha = blended[:, :, 3:4] / 255.0
+            rgb = blended[:, :, :3]  # 事前乗算済みRGB
 
-    writer.release()
+            # 背景合成（over合成: premul_fg + bg * (1 - α)）
+            frame = rgb + bg * (1.0 - alpha)
+            # RGB → BGR に変換して書き出し
+            frame_bgr = np.clip(frame[:, :, ::-1], 0, 255).astype(np.uint8)
+            # OpenCVのバージョンにより返値はNone/bool（Falseなら書き込み失敗）
+            ok = writer.write(frame_bgr)
+            if ok is False:
+                raise RuntimeError(f"フレーム{i}の書き込みに失敗しました")
+    finally:
+        writer.release()
     print(f"完了: {output_path}")
 
 

@@ -566,6 +566,75 @@ def _detect_media_type(path):
     return "image"  # フォールバック
 
 
+# --- ffmpeg実行ヘルパー ---
+
+# Windowsのコマンドライン長制限対策: フィルタ文字列がこの長さを超えたら一時ファイル経由で渡す
+_FILTER_SCRIPT_THRESHOLD = 4000
+
+
+def _externalize_long_filters(cmd):
+    """フィルタ文字列が閾値を超える場合、一時ファイル + FFmpeg 8 の `-/オプション` 構文に差し替える
+
+    例: `-filter_complex <長大な文字列>` → `-/filter_complex <一時ファイルパス>`
+    Returns: (実行用cmd, 一時ファイルパスのリスト)
+    """
+    import tempfile
+    new_cmd = list(cmd)
+    tmp_files = []
+    for opt in ("-filter_complex", "-vf", "-af"):
+        for i in range(len(new_cmd) - 1):
+            if new_cmd[i] == opt and len(new_cmd[i + 1]) >= _FILTER_SCRIPT_THRESHOLD:
+                fd, path = tempfile.mkstemp(suffix=".txt", prefix="svfilter_")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(new_cmd[i + 1])
+                new_cmd[i] = f"-/{opt.lstrip('-')}"
+                new_cmd[i + 1] = path
+                tmp_files.append(path)
+                break
+    return new_cmd, tmp_files
+
+
+def _run_ffmpeg(cmd, timeout=600):
+    """ffmpegコマンドを実行（長大フィルタは一時ファイル経由で渡し、実行後に削除）"""
+    run_cmd, tmp_files = _externalize_long_filters(cmd)
+    try:
+        subprocess.run(run_cmd, check=True, timeout=timeout)
+    finally:
+        for path in tmp_files:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def _run_ffmpeg_to_cache(cmd, cache_path, timeout=600):
+    """ffmpegを一時パスへ出力し、成功時のみ os.replace でキャッシュパスに確定する
+
+    タイムアウトやCtrl-Cで壊れた部分ファイルがキャッシュとして残り、
+    以後 os.path.exists() 判定で恒久的に使われ続けるのを防ぐ。
+    cmd 内の cache_path と一致する引数を一時パス（拡張子は維持）に差し替えて実行する。
+    """
+    base, ext = os.path.splitext(cache_path)
+    tmp_path = f"{base}.tmp{ext}"
+    replaced = sum(1 for arg in cmd if arg == cache_path)
+    if replaced == 0:
+        # 置換0件のまま実行すると非アトミック書き込み後にos.replaceが
+        # FileNotFoundErrorになるため、ここで即座に検出する
+        raise ValueError(
+            f"_run_ffmpeg_to_cache: cmd内に出力先cache_pathが見つかりません: {cache_path}\n"
+            f"コマンド構築時と実行時で出力パスが食い違っています。")
+    run_cmd = [tmp_path if arg == cache_path else arg for arg in cmd]
+    try:
+        _run_ffmpeg(run_cmd, timeout=timeout)
+        os.replace(tmp_path, cache_path)
+    finally:
+        # 失敗時に残った一時ファイルを削除（成功時はos.replace済みで存在しない）
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 # --- configure許可キー ---
 
 _CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
@@ -584,15 +653,30 @@ def _file_fingerprint(path):
     return (abs_path, stat.st_size, stat.st_mtime_ns)
 
 
+def _is_cache_artifact_path(path):
+    """パスがキャッシュディレクトリ(__cache__)配下の生成物かどうか判定"""
+    abs_path = os.path.abspath(path).replace("\\", "/")
+    cache_root = os.path.abspath(_CACHE_DIR).replace("\\", "/")
+    return abs_path.startswith(cache_root + "/")
+
+
+def _is_pending_cache_path(path):
+    """未生成のキャッシュ予定パスかどうか判定（dry_run中のprobe抑制用）
+
+    dry_runではチェックポイント等のsourceが「これから生成される予定のパス」に
+    差し替わるため、存在しないキャッシュ配下パスへのffprobeは警告スパムになる。
+    """
+    return (not os.path.exists(path)) and _is_cache_artifact_path(path)
+
+
 def _op_fingerprint_str(op):
     """単一opのフィンガープリント文字列を生成"""
     parts = [op.name]
     for k in sorted(op.params):
         v = op.params[k]
         parts.append(f"{k}={v.to_ffmpeg('u') if isinstance(v, Expr) else repr(v)}")
-    policy = getattr(op, 'policy', 'auto')
+    # policy はレンダ結果に影響しないためフィンガープリントに含めない
     quality = getattr(op, 'quality', 'final')
-    parts.append(f"p={policy}")
     parts.append(f"q={quality}")
     # morph_to: ターゲット画像のFFPをsignatureに含める
     if op.name == "morph_to" and hasattr(op, '_morph_target'):
@@ -640,7 +724,7 @@ def _compute_save_points(ops):
     raa_candidate = None
     for i, (typ, op) in enumerate(ops):
         policy = getattr(op, 'policy', 'auto')
-        if policy == "auto" and _is_bakeable(typ, op) and policy != "off":
+        if policy == "auto" and _is_bakeable(typ, op):
             raa_candidate = i
     # RAAはFSP以降にforceがない場合のみ有効（= 最後のforce以降にautoがある場合）
     if raa_candidate is not None and raa_candidate > last_force:
@@ -675,10 +759,15 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
 
 def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     """morph WebMのキャッシュパスを計算"""
-    try:
-        sigs = [f"ffp={_file_fingerprint(src_path)}"]
-    except OSError:
+    if _is_cache_artifact_path(src_path):
+        # キャッシュ生成物はパス自体が内容由来の鍵を含むため、常にパス文字列署名を使う
+        # （dry_runでは未生成でFFP不可→実レンダとの鍵不一致を防ぐ）
         sigs = [f"src={src_path.replace(chr(92), '/')}"]
+    else:
+        try:
+            sigs = [f"ffp={_file_fingerprint(src_path)}"]
+        except OSError:
+            sigs = [f"src={src_path.replace(chr(92), '/')}"]
     # ターゲットFFP
     if hasattr(morph_op, '_morph_target'):
         try:
@@ -696,14 +785,49 @@ def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     return os.path.join(cache_dir, f"{key}.mkv")
 
 
+def _morph_input_frame_path(src_path):
+    """morph入力用の最終フレームPNGの置き場所を導出
+
+    morph（PIL）は画像しか読めないため、動画ソース（前ベイクの.mkv等）は
+    最終フレームをRGBA PNGに抽出してからmorphの入力にする。
+    """
+    if _is_cache_artifact_path(src_path):
+        # キャッシュ生成物: 拡張子差し替え（パス自体が内容由来の鍵を含む）
+        return os.path.splitext(src_path)[0] + ".morphsrc.png"
+    # 元素材が動画: キャッシュ配下に内容由来の鍵で生成
+    try:
+        sig = f"ffp={_file_fingerprint(src_path)}"
+    except OSError:
+        sig = f"src={src_path.replace(chr(92), '/')}"
+    key = hashlib.sha256(sig.encode()).hexdigest()[:16]
+    return os.path.join(_ARTIFACT_DIR, "morph", "src", f"{key}.png")
+
+
+def _build_morph_frame_extract_cmd(src_path, frame_path):
+    """動画の最終フレームをRGBA PNGに抽出するffmpegコマンド（morph入力用）
+
+    -sseof -0.5: 終端0.5秒前からデコード
+    -update 1: 残り全フレームを同一ファイルへ上書き → 最終フレームが残る
+    -pix_fmt rgba: alpha維持（前ベイクのffv1 yuva444p等の透過を保つ）
+    """
+    cmd = ["ffmpeg", "-y", "-sseof", "-0.5"]
+    cmd.extend(_decoder_input_args(src_path, "video", None))
+    cmd.extend(["-update", "1", "-pix_fmt", "rgba", frame_path])
+    return cmd
+
+
 def _validate_morph_position(bakeable_ops):
-    """morph_toがbakeable opsの末尾であることを検証"""
-    morph_idx = None
-    for i, (typ, op) in enumerate(bakeable_ops):
-        if typ == "effect" and op.name == "morph_to":
-            morph_idx = i
-    if morph_idx is None:
+    """morph_toがbakeable opsの末尾に1つだけあることを検証"""
+    morph_indices = [i for i, (typ, op) in enumerate(bakeable_ops)
+                     if typ == "effect" and op.name == "morph_to"]
+    if not morph_indices:
         return
+    if len(morph_indices) > 1:
+        raise ValueError(
+            f"morph_to は1つのObjectに1回しか適用できません"
+            f"（{len(morph_indices)}個指定されています: idx={morph_indices}）。\n"
+            f"複数段のモーフには compute() 等で中間素材を生成して分割してください。")
+    morph_idx = morph_indices[0]
     # morph_to の後に他のbakeable opがあればエラー（policy='off'は実質ライブなのでスキップ）
     for i in range(morph_idx + 1, len(bakeable_ops)):
         after_op = bakeable_ops[i][1]
@@ -808,6 +932,9 @@ class Project:
         self._mode = "render"  # "plan" or "render"
         self._current_layer_file = None  # 現在実行中のレイヤーファイル
         self._probe_cache = {}  # path → {"duration": float, "has_audio": bool}
+        self._layer_sources = {}  # layer filename → [参照ソースパス]（キャッシュ鮮度検証用）
+        self._extra_layer_deps = {}  # layer filename → [追加依存パス]（morph_toターゲット等）
+        self._layer_meta_cache = {}  # anchors.jsonパス → パース済みメタ（二重読み防止）
         Project._current = self
 
     def configure(self, **kwargs):
@@ -829,17 +956,28 @@ class Project:
         self._layers = []
         self._anchors = {}
         self._anchor_defined_in = {}
+        # probe失敗(None)エントリのみ破棄（renderをまたいだ再試行を許す）
+        self._probe_cache = {k: v for k, v in self._probe_cache.items()
+                             if v is not None}
+        self._layer_meta_cache = {}
 
     def _probe_media(self, path):
         """ffprobeでメディア情報を取得（キャッシュあり）"""
         if path in self._probe_cache:
             return self._probe_cache[path]
+        if _is_pending_cache_path(path):
+            # dry_run中の未生成キャッシュ予定パス。probeせず警告なしでNoneを返す
+            # （キャッシュはしない: 実レンダで生成された後は通常probeに進む）
+            return None
         try:
             result = subprocess.run(
                 ["ffprobe", "-v", "quiet", "-print_format", "json",
                  "-show_streams", "-show_format", path],
                 capture_output=True, text=True, timeout=10
             )
+            if result.returncode != 0:
+                # ffprobe失敗（ファイル欠損等）。空JSONを成功扱いしない
+                raise ValueError(f"ffprobe exit code {result.returncode}")
             data = json.loads(result.stdout)
             streams = data.get("streams", [])
             has_audio = any(s.get("codec_type") == "audio" for s in streams)
@@ -849,6 +987,8 @@ class Project:
             self._probe_cache[path] = info
             return info
         except FileNotFoundError:
+            # 失敗もrender内ではキャッシュ（_reset_runtime_stateでNoneのみ破棄され、
+            # renderをまたげば再試行される）
             warnings.warn(f"ffprobeが見つかりません。PATHを確認してください。")
             self._probe_cache[path] = None
             return None
@@ -868,6 +1008,8 @@ class Project:
         """レイヤーファイルを実行してobjectsに登録"""
         start_idx = len(self.objects)
         self._current_layer_file = filename
+        # exec中にmorph_to等が積む追加依存をリセット（plan/renderの再実行で重複させない）
+        self._extra_layer_deps[filename] = []
         Project._current = self
         with open(filename, encoding="utf-8") as f:
             code = f.read()
@@ -879,6 +1021,19 @@ class Project:
             override = getattr(obj, '_priority_override', None)
             obj.priority = override if override is not None else priority
         self._fill_auto_durations(start_idx, end_idx)
+        # レイヤーが参照する素材ソースを記録（checkpoint等で差し替わる前の値）
+        sources = []
+        for o in self.objects[start_idx:end_idx]:
+            if not isinstance(o, Object):
+                continue
+            # compute()済みは導出キャッシュパスではなく元素材を記録
+            sources.extend(getattr(o, '_origin_sources', None) or [o.source])
+            # web Objectの依存素材（deps=）も鮮度検証の対象にする
+            if getattr(o, '_web_deps', None):
+                sources.extend(o._web_deps)
+        # morph_toターゲット等、objectsから除外された依存を併合
+        sources.extend(self._extra_layer_deps.get(filename, []))
+        self._layer_sources[filename] = sources
         self._current_layer_file = None
 
     def _fill_auto_durations(self, start_idx, end_idx):
@@ -957,7 +1112,7 @@ class Project:
                 if until_name and until_name not in self._anchors:
                     raise RuntimeError(f"未定義のアンカー: '{until_name}'")
 
-    def render(self, output_path, *, dry_run=False):
+    def render(self, output_path, *, dry_run=False, timeout=1800):
         self._reset_runtime_state()
         self._dry_run = dry_run
         self._pending_compute_cmds = {}
@@ -979,13 +1134,14 @@ class Project:
             self.duration = self._calc_total_duration()
 
         if dry_run:
-            cache_cmds = self._collect_cache_cmds()
             web_cmds = self._collect_web_cmds()
-            # web Objectのsourceを予定webmパスに仮差し替え（checkpoint収集より前）
+            # web Objectのsourceを予定webmパスに仮差し替え
+            # （layer cache / checkpoint収集より前。-i xxx.html の混入を防ぐ）
             for obj in self.objects:
                 if isinstance(obj, Object) and obj.media_type == "web":
                     obj.source = _web_cache_path(obj, self)
                     obj.media_type = "video"
+            cache_cmds = self._collect_cache_cmds()
             checkpoint_cmds = self._collect_checkpoint_cmds()
             cmd = self._build_ffmpeg_cmd(output_path)
             all_extra = {}
@@ -1007,7 +1163,7 @@ class Project:
         print(f"実行コマンド:")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
         print()
-        subprocess.run(cmd, check=True, timeout=1800)
+        _run_ffmpeg(cmd, timeout=timeout)
         self._generate_pending_caches()
         print(f"\n完了: {output_path}")
 
@@ -1071,14 +1227,46 @@ class Project:
                         f"先に cache='make' でキャッシュを生成してください。"
                     )
 
+    def _layer_cache_is_fresh(self, spec):
+        """anchors.jsonに記録された素材FFPと現在のファイル状態を比較して鮮度を判定
+
+        旧形式（sourcesキーなし）のメタは後方互換のため常に新鮮とみなす。
+        """
+        _, json_path = _layer_cache_paths(spec["filename"], self)
+        if not os.path.exists(json_path):
+            return True  # メタなし（後方互換）
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return True
+        # パース済みメタを保持し、_load_cached_layerでの再読込をスキップする
+        self._layer_meta_cache[json_path] = meta
+        sources = meta.get("sources")
+        if not sources:
+            return True  # 旧形式（後方互換）
+        for path, ffp in sources.items():
+            try:
+                cur = _file_fingerprint(path)
+            except OSError:
+                return False  # 素材が消えた
+            if [cur[1], cur[2]] != list(ffp):
+                return False  # サイズ/mtimeが変わった
+        return True
+
     def _should_use_cache(self, spec):
         """キャッシュ利用判定"""
         cache = spec["cache"]
         if cache == "use":
+            if not self._layer_cache_is_fresh(spec):
+                warnings.warn(
+                    f"レイヤーキャッシュの素材が更新されています: {spec['filename']}。"
+                    f"cache='make' で再生成してください（cache='use' 指定のため続行します）。")
             return True
         if cache == "auto":
             webm_path, _ = _layer_cache_paths(spec["filename"], self)
-            return os.path.exists(webm_path)
+            # 素材更新済みの古いキャッシュは使わず再実行
+            return os.path.exists(webm_path) and self._layer_cache_is_fresh(spec)
         return False  # off, make
 
     def _load_cached_layer(self, spec):
@@ -1107,9 +1295,12 @@ class Project:
         cached_obj._web_name = None
         cached_obj._web_debug_frames = False
         # anchors.jsonからduration/anchorsを読み込み
-        if os.path.exists(json_path):
+        # （_layer_cache_is_freshでパース済みならそのメタを流用し二重読みを避ける）
+        cache_meta = self._layer_meta_cache.get(json_path)
+        if cache_meta is None and os.path.exists(json_path):
             with open(json_path, encoding="utf-8") as f:
                 cache_meta = json.load(f)
+        if cache_meta is not None:
             cached_obj.duration = cache_meta.get("duration")
             for name, time_val in cache_meta.get("anchors", {}).items():
                 self._anchors[name] = time_val
@@ -1140,12 +1331,11 @@ class Project:
         """dry_run用のキャッシュ生成コマンド辞書構築"""
         cache_cmds = {}
         for i, spec in enumerate(self._layer_specs):
-            if spec["cache"] in ("make", "auto") and not self._should_use_cache(spec):
-                if spec["cache"] == "make" or spec["cache"] == "auto":
-                    if spec["cache"] == "make":
-                        cmd = self._build_layer_cache_cmd(i)
-                        webm_path, _ = _layer_cache_paths(spec["filename"], self)
-                        cache_cmds[webm_path] = cmd
+            # "make" は常に生成（"auto" はキャッシュ有無に関わらず生成コマンドを持たない）
+            if spec["cache"] == "make":
+                webm_path, _ = _layer_cache_paths(spec["filename"], self)
+                cmd = self._build_layer_cache_cmd(i, webm_path)
+                cache_cmds[webm_path] = cmd
         return cache_cmds
 
     def _build_checkpoint_image_cmd(self, source, transforms, cache_path, quality="final"):
@@ -1166,10 +1356,7 @@ class Project:
                                      cache_path, dur, fps, quality="final"):
         """動画チェックポイント: Transform+Effect適用→透明VP9"""
         cmd = ["ffmpeg", "-y"]
-        if media_type == "image":
-            cmd.extend(["-loop", "1", "-r", str(fps), "-i", source])
-        else:
-            cmd.extend(["-i", source])
+        cmd.extend(_decoder_input_args(source, media_type, fps))
 
         # フィルタ構築: 一時Object経由で既存ビルダーを再利用
         temp = Object.__new__(Object)
@@ -1204,6 +1391,20 @@ class Project:
                 "-pix_fmt", "yuva444p",
                 "-t", str(duration), cache_path]
 
+    @staticmethod
+    def _require_morph_duration(bakeable_ops, dur, source):
+        """morph_toを含むObjectのduration未設定を明示エラーにする
+
+        画像 + duration未設定のまま進むと int(fps * None) の TypeError で
+        原因が分かりにくいため、ここで日本語エラーを投げる。
+        """
+        has_morph = any(t == "effect" and op.name == "morph_to"
+                        for t, op in bakeable_ops)
+        if has_morph and dur is None:
+            raise ValueError(
+                f"morph_to を含むObject ('{source}') には表示時間の指定が必要です。"
+                f"obj.time(秒数) で duration を設定してください。")
+
     def _process_checkpoints(self, obj):
         """1つのObjectのチェックポイント処理（実レンダ）"""
         ops = _build_unified_ops(obj)
@@ -1228,6 +1429,7 @@ class Project:
         if dur is None and _detect_media_type(original_source) in ("video",):
             dur = obj.length()
         fps = self.fps
+        self._require_morph_duration(bakeable_ops, dur, original_source)
 
         # 復元点チェック（bakeable_opsベース）
         resume_idx, resume_path = self._find_resume_point(original_source, bakeable_ops, dur, fps, save_points)
@@ -1256,6 +1458,45 @@ class Project:
 
                 # morph_to 分岐
                 if typ == "effect" and op.name == "morph_to" and hasattr(op, '_morph_target'):
+                    # morph直前の未ベイクopsを先に中間チェックポイントへベイク
+                    # （破棄するとmorph前のresize等が黙って消えるため）
+                    if pos > 0:
+                        pre_ops = remaining_ops[:pos]
+                        pre_segment = executed + pre_ops
+                        pre_has_effects = any(t == "effect" for t, _ in pre_segment)
+                        pre_dur = dur if (pre_has_effects or is_video) else None
+                        pre_fps = fps if pre_dur is not None else None
+                        pre_quality = getattr(pre_ops[-1][1], 'quality', 'final')
+                        pre_path = _checkpoint_cache_path(
+                            original_source, pre_segment, pre_dur, pre_fps, pre_quality)
+                        if not os.path.exists(pre_path):
+                            pre_transforms = [o for t, o in pre_ops if t == "transform"]
+                            pre_effects = [o for t, o in pre_ops if t == "effect"]
+                            os.makedirs(os.path.dirname(pre_path), exist_ok=True)
+                            if pre_dur is None:
+                                pre_cmd = self._build_checkpoint_image_cmd(
+                                    current_source, pre_transforms, pre_path, pre_quality)
+                            else:
+                                pre_cmd = self._build_checkpoint_video_cmd(
+                                    current_source, current_media_type,
+                                    pre_transforms, pre_effects,
+                                    pre_path, pre_dur, fps, pre_quality)
+                            print(f"チェックポイント保存 (morph前処理): {pre_path}")
+                            _run_ffmpeg_to_cache(pre_cmd, pre_path, timeout=600)
+                        current_source = pre_path
+                        current_media_type = _detect_media_type(pre_path)
+                    # morph（PIL）は画像のみ対応: 直前ソースが動画（前ベイクの.mkv等）
+                    # なら最終フレームをRGBA PNGに抽出してmorphの入力にする
+                    if _detect_media_type(current_source) == "video":
+                        frame_path = _morph_input_frame_path(current_source)
+                        if not os.path.exists(frame_path):
+                            frame_cmd = _build_morph_frame_extract_cmd(
+                                current_source, frame_path)
+                            os.makedirs(os.path.dirname(frame_path), exist_ok=True)
+                            print(f"モーフ入力フレーム抽出: {frame_path}")
+                            _run_ffmpeg_to_cache(frame_cmd, frame_path, timeout=600)
+                        current_source = frame_path
+                        current_media_type = "image"
                     morph_path = _morph_cache_path(current_source, op, dur, fps, quality)
                     policy = getattr(op, 'policy', 'auto')
                     need_render = (policy == "force") or not os.path.exists(morph_path)
@@ -1279,7 +1520,7 @@ class Project:
                             cmd = self._build_morph_webm_cmd(
                                 frame_pattern, morph_path, dur, fps, quality)
                             print(f"モーフキャッシュ保存: {morph_path}")
-                            subprocess.run(cmd, check=True, timeout=600)
+                            _run_ffmpeg_to_cache(cmd, morph_path, timeout=600)
                     current_source = morph_path
                     current_media_type = "video"
                 else:
@@ -1303,7 +1544,7 @@ class Project:
                                 local_transforms, local_effects,
                                 cache_path, cp_dur, fps, quality)
                         print(f"チェックポイント保存: {cache_path}")
-                        subprocess.run(cmd, check=True, timeout=600)
+                        _run_ffmpeg_to_cache(cmd, cache_path, timeout=600)
                     current_source = cache_path
                     current_media_type = _detect_media_type(cache_path)
 
@@ -1314,6 +1555,10 @@ class Project:
             pos += 1
 
         # Objectを更新: source差し替え、残余bakeable ops + live opsを再設定
+        # 差し替え前に解決した実長を保持（差し替え後のprobe依存を排除し、
+        # dry_runと実レンダで式を一致させる）
+        if dur:
+            obj._resolved_length = dur
         obj.source = current_source
         obj.media_type = current_media_type
         obj.transforms = [op for t, op in remaining_ops if t == "transform"]
@@ -1335,10 +1580,12 @@ class Project:
                             if i <= boundary and getattr(ops[i][1], 'policy', 'auto') == "auto"],
                            reverse=True)
 
-        has_effects = any(t == "effect" for t, _ in ops)
         is_video = _detect_media_type(original_source) in ("video",)
         for idx in candidates:
             segment_ops = ops[:idx + 1]
+            # 保存側と同じくセグメント（保存点までのprefix）単位でhas_effectsを計算
+            # （全ops基準だとキャッシュキーが食い違い、永久にキャッシュミスする）
+            has_effects = any(t == "effect" for t, _ in segment_ops)
             cp_dur = duration if (has_effects or is_video) else None
             cp_fps = fps if cp_dur is not None else None
             quality = getattr(ops[idx][1], 'quality', 'final')
@@ -1385,6 +1632,7 @@ class Project:
             if dur is None and _detect_media_type(original_source) in ("video",):
                 dur = obj.length()
             fps = self.fps
+            self._require_morph_duration(bakeable_ops, dur, original_source)
             current_source = original_source
             current_media_type = obj.media_type
 
@@ -1421,6 +1669,38 @@ class Project:
 
                 # morph_to 分岐
                 if sp_typ == "effect" and sp_op.name == "morph_to" and hasattr(sp_op, '_morph_target'):
+                    # morph直前の未ベイクopsの中間チェックポイントコマンドも収集
+                    # （実レンダの_process_checkpointsと同じ経路）
+                    pre_start = prev_sps[-1] + 1 if prev_sps else 0
+                    pre_ops = bakeable_ops[pre_start:sp_idx]
+                    if pre_ops:
+                        pre_segment = bakeable_ops[:sp_idx]
+                        pre_has_effects = any(t == "effect" for t, _ in pre_segment)
+                        pre_dur = dur if (pre_has_effects or is_video) else None
+                        pre_fps = fps if pre_dur is not None else None
+                        pre_quality = getattr(pre_ops[-1][1], 'quality', 'final')
+                        pre_path = _checkpoint_cache_path(
+                            original_source, pre_segment, pre_dur, pre_fps, pre_quality)
+                        pre_transforms = [o for t, o in pre_ops if t == "transform"]
+                        pre_effects = [o for t, o in pre_ops if t == "effect"]
+                        if pre_dur is None:
+                            pre_cmd = self._build_checkpoint_image_cmd(
+                                current_source, pre_transforms, pre_path, pre_quality)
+                        else:
+                            pre_cmd = self._build_checkpoint_video_cmd(
+                                current_source, current_media_type,
+                                pre_transforms, pre_effects,
+                                pre_path, pre_dur, fps, pre_quality)
+                        cmds[pre_path] = pre_cmd
+                        current_source = pre_path
+                        current_media_type = _detect_media_type(pre_path)
+                    # 動画ソースは最終フレームPNG抽出を挟む（実レンダと同じ経路）
+                    if _detect_media_type(current_source) == "video":
+                        frame_path = _morph_input_frame_path(current_source)
+                        cmds[frame_path] = _build_morph_frame_extract_cmd(
+                            current_source, frame_path)
+                        current_source = frame_path
+                        current_media_type = "image"
                     morph_path = _morph_cache_path(current_source, sp_op, dur, fps, quality)
                     frame_pattern = os.path.join("__morph_frames__", "frame_%05d.png")
                     cmd = self._build_morph_webm_cmd(
@@ -1464,6 +1744,9 @@ class Project:
                     dur if (last_has_eff or last_is_video) else None,
                     fps if (last_has_eff or last_is_video) else None,
                     getattr(last_op, 'quality', 'final'))
+            # 差し替え前に解決した実長を保持（未生成予定パスへのprobe fallback防止）
+            if dur:
+                obj._resolved_length = dur
             obj.source = last_path
             obj.media_type = _detect_media_type(last_path)
             remaining = bakeable_ops[last_sp + 1:]
@@ -1494,16 +1777,18 @@ class Project:
 
             if not os.path.exists(webm_path):
                 print(f"Webクリップ生成: {obj.source}")
-                obj._render_web_frames(self)
-                cmd = obj._build_web_cmd(self, webm_path)
-                os.makedirs(os.path.dirname(webm_path), exist_ok=True)
-                print(f"  ffmpeg {' '.join(cmd[1:])}")
-                subprocess.run(cmd, check=True, timeout=600)
-                print(f"  完了: {webm_path}")
-                # フレーム削除
-                if not obj._web_debug_frames and os.path.exists(frames_dir):
-                    import shutil
-                    shutil.rmtree(frames_dir)
+                try:
+                    obj._render_web_frames(self)
+                    cmd = obj._build_web_cmd(self, webm_path)
+                    os.makedirs(os.path.dirname(webm_path), exist_ok=True)
+                    print(f"  ffmpeg {' '.join(cmd[1:])}")
+                    _run_ffmpeg_to_cache(cmd, webm_path, timeout=600)
+                    print(f"  完了: {webm_path}")
+                finally:
+                    # フレーム削除（失敗時も中間フレームを残さない）
+                    if not obj._web_debug_frames and os.path.exists(frames_dir):
+                        import shutil
+                        shutil.rmtree(frames_dir, ignore_errors=True)
 
             obj.source = webm_path
             obj.media_type = "video"
@@ -1514,12 +1799,26 @@ class Project:
             if spec["cache"] == "make":
                 self._render_layer_to_cache(i)
 
-    def _build_layer_cache_cmd(self, spec_index):
-        """レイヤーキャッシュ用ffmpegコマンド（透明webm VP9 alpha）"""
+    def _build_layer_cache_cmd(self, spec_index, webm_path):
+        """レイヤーキャッシュ用ffmpegコマンド（透明webm VP9 alpha）
+
+        webm_path: 出力先パス。呼び出し側で計算して渡す
+        （_layer_cache_pathsはFFP依存のため、二重計算するとレイヤーファイルの
+        mtime変化等で構築時と実行時のパスが食い違うおそれがある）。
+        """
         spec = self._layer_specs[spec_index]
-        webm_path, _ = _layer_cache_paths(spec["filename"], self)
         objects, anchors = self._get_layer_data(spec_index)
-        renderable = [o for o in objects if isinstance(o, Object)]
+        # 本レンダと同じく priority ソート + 映像を持つオブジェクトのみ合成
+        renderable = sorted(
+            [o for o in objects if isinstance(o, Object) and o.has_video],
+            key=lambda o: o.priority)
+        # レイヤーキャッシュは映像のみ保存するため、音声を含むレイヤーは明示警告
+        audio_sources = [o.source for o in objects
+                         if isinstance(o, Object) and o.has_audio]
+        if audio_sources:
+            warnings.warn(
+                f"レイヤーキャッシュ ({spec['filename']}) は映像のみ保存します。"
+                f"以下の音声はキャッシュ再生時に脱落します: {', '.join(audio_sources)}")
 
         dur = self.duration or self._calc_total_duration()
 
@@ -1536,43 +1835,13 @@ class Project:
 
         for i, obj in enumerate(renderable):
             input_idx = i + 1
-
-            if obj.media_type == "image":
-                inputs.extend(["-loop", "1", "-r", str(self.fps), "-i", obj.source])
-            else:
-                inputs.extend(["-i", obj.source])
-
-            obj_dur = obj.duration or dur
-            start = obj.start_time
-
-            base_dims = _get_base_dimensions(obj)
-            obj_filters = _build_transform_filters(obj)
-            eff_filters, pad_size = _build_effect_filters(obj, start, obj_dur, base_dims=base_dims)
-            obj_filters.extend(eff_filters)
-            # ビデオ入力が start_time > 0 の場合、tpad で先頭にフレームを追加
-            if obj.media_type != "image" and start > 0:
-                obj_filters.insert(0, f"tpad=start_duration={start}:start_mode=clone")
-            obj_filters = _optimize_filter_chain(obj_filters)
-
-            obj_label = f"[obj{input_idx}]"
-            if obj_filters:
-                filter_parts.append(
-                    f"[{input_idx}:v]{','.join(obj_filters)}{obj_label}"
-                )
-            else:
-                obj_label = f"[{input_idx}:v]"
-
-            x_expr, y_expr = _build_move_exprs(obj, start, obj_dur, pad_size=pad_size)
-
-            enable_str = ""
-            if obj.duration is not None:
-                end = start + obj.duration
-                enable_str = f":enable='between(t\\,{start}\\,{end})'"
-
-            out_label = f"[v{input_idx}]"
-            filter_parts.append(
-                f"{current_base}{obj_label}overlay={x_expr}:{y_expr}:eof_action=pass{enable_str}{out_label}"
-            )
+            inputs.extend(_build_input_args(obj, self.fps))
+            # 本レンダと同じ解決ロジックでu正規化の分母を統一
+            # （レイヤー全体尺fallbackだとcache有無でアニメ速度が変わる）
+            obj_dur = self._resolve_obj_duration(obj)
+            parts, out_label = _build_video_overlay_parts(
+                obj, input_idx, current_base, obj_dur)
+            filter_parts.extend(parts)
             current_base = out_label
 
         cmd = ["ffmpeg", "-y"]
@@ -1599,19 +1868,51 @@ class Project:
         webm_path, json_path = _layer_cache_paths(spec["filename"], self)
         os.makedirs(os.path.dirname(webm_path), exist_ok=True)
 
-        cmd = self._build_layer_cache_cmd(spec_index)
+        cmd = self._build_layer_cache_cmd(spec_index, webm_path)
         print(f"キャッシュ生成: {webm_path}")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
-        subprocess.run(cmd, check=True, timeout=600)
+        _run_ffmpeg_to_cache(cmd, webm_path, timeout=600)
         print(f"  完了: {webm_path}")
 
-        # anchors.json書き出し
+        # anchors.json書き出し（素材FFPも記録してキャッシュ鮮度検証に使う）
         objects, anchors = self._get_layer_data(spec_index)
         dur = self.duration or self._calc_total_duration()
-        cache_meta = {"duration": dur, "anchors": anchors}
-        with open(json_path, "w", encoding="utf-8") as f:
+        sources_meta = {}
+        for src in self._layer_sources.get(spec["filename"], []):
+            try:
+                ffp = _file_fingerprint(src)
+                sources_meta[ffp[0]] = [ffp[1], ffp[2]]
+            except OSError:
+                pass
+        cache_meta = {"duration": dur, "anchors": anchors, "sources": sources_meta}
+        # アトミック書き込み（webmと同様、中断による壊れたメタの残留を防ぐ）
+        tmp_json = f"{json_path}.tmp"
+        with open(tmp_json, "w", encoding="utf-8") as f:
             json.dump(cache_meta, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_json, json_path)
         print(f"  アンカー保存: {json_path}")
+
+    def _resolve_obj_duration(self, obj, fallback=5):
+        """objのduration未設定/0のとき実長で補完（取得不能・0のときのみfallback）
+
+        duration=0 をそのまま返すと u正規化 clip((t-start)/0,...) のゼロ除算で
+        ffmpegがEINVAL失敗するため、0はfallbackに落とす。
+        """
+        if obj.duration:
+            return obj.duration
+        # checkpoint等でsourceが予定パスに差し替わる前に解決した実長を最優先
+        resolved = getattr(obj, '_resolved_length', None)
+        if resolved:
+            return resolved
+        if obj.media_type != "image":
+            # trim/atrim/atempoを反映した加工後長（チェックポイントベイクと同一基準）
+            try:
+                length = obj.length()
+            except Exception:
+                return fallback
+            if length:
+                return length
+        return fallback
 
     def _build_ffmpeg_cmd(self, output_path):
         inputs = []
@@ -1630,17 +1931,7 @@ class Project:
         for i, obj in enumerate(sorted_objects):
             input_idx = i + 1
             input_map[id(obj)] = input_idx
-            if obj.media_type == "image":
-                inputs.extend(["-loop", "1", "-r", str(self.fps), "-i", obj.source])
-            elif obj.media_type == "audio":
-                inputs.extend(["-i", obj.source])
-            else:  # video
-                # WebM(VP9 alpha)はlibvpx-vp9デコーダが必要
-                # (ffmpeg 8.0のネイティブVP9デコーダはalpha非対応)
-                if obj.source.lower().endswith(".webm"):
-                    inputs.extend(["-c:v", "libvpx-vp9", "-i", obj.source])
-                else:
-                    inputs.extend(["-i", obj.source])
+            inputs.extend(_build_input_args(obj, self.fps))
 
         # --- 映像チェーン ---
         current_base = "[0:v]"
@@ -1648,39 +1939,10 @@ class Project:
 
         for obj in video_objects:
             input_idx = input_map[id(obj)]
-            dur = obj.duration or 5
-            start = obj.start_time
-
-            base_dims = _get_base_dimensions(obj)
-            pre_filters = _build_video_pre_filters(obj)
-            obj_filters = pre_filters + _build_transform_filters(obj)
-            eff_filters, pad_size = _build_effect_filters(obj, start, dur, base_dims=base_dims)
-            obj_filters.extend(eff_filters)
-            # ビデオ入力が start_time > 0 の場合、tpad で先頭に透明フレームを追加
-            # (overlay有効化前にフレームが消費されるのを防ぐ)
-            if obj.media_type != "image" and start > 0:
-                obj_filters.insert(0, f"tpad=start_duration={start}:start_mode=clone")
-            obj_filters = _optimize_filter_chain(obj_filters)
-
-            obj_label = f"[obj{input_idx}]"
-            if obj_filters:
-                filter_parts.append(
-                    f"[{input_idx}:v]{','.join(obj_filters)}{obj_label}"
-                )
-            else:
-                obj_label = f"[{input_idx}:v]"
-
-            x_expr, y_expr = _build_move_exprs(obj, start, dur, pad_size=pad_size)
-
-            enable_str = ""
-            if obj.duration is not None:
-                end = start + obj.duration
-                enable_str = f":enable='between(t\\,{start}\\,{end})'"
-
-            out_label = f"[v{input_idx}]"
-            filter_parts.append(
-                f"{current_base}{obj_label}overlay={x_expr}:{y_expr}:eof_action=pass{enable_str}{out_label}"
-            )
+            dur = self._resolve_obj_duration(obj)
+            parts, out_label = _build_video_overlay_parts(
+                obj, input_idx, current_base, dur)
+            filter_parts.extend(parts)
             current_base = out_label
 
         # --- 音声チェーン ---
@@ -1691,7 +1953,7 @@ class Project:
             audio_labels = []
             for ai, obj in enumerate(audio_objects):
                 input_idx = input_map[id(obj)]
-                dur = obj.duration or 5
+                dur = self._resolve_obj_duration(obj)
                 start = obj.start_time
 
                 a_filters = []
@@ -1706,10 +1968,10 @@ class Project:
                 a_filters.extend(a_pre)
                 # 音声エフェクト（again/afade）
                 a_filters.extend(_build_audio_effect_filters(obj, dur))
-                # adelay（タイミングシフト）
+                # adelay（タイミングシフト）: all=1 で全チャンネルに適用（2ch前提を排除）
                 delay_ms = int(start * 1000)
                 if delay_ms > 0:
-                    a_filters.append(f"adelay={delay_ms}|{delay_ms}")
+                    a_filters.append(f"adelay={delay_ms}:all=1")
 
                 a_label = f"[a{ai}]"
                 if a_filters:
@@ -1722,6 +1984,12 @@ class Project:
 
             if len(audio_labels) == 1:
                 audio_out = audio_labels[0]
+                # フィルタなしの生入力参照（[N:a]）はフィルタグラフのラベルではないため、
+                # -map にはブラケットを外したストリーム指定（N:a）で渡す
+                inner = audio_out[1:-1]
+                if audio_out.startswith("[") and inner.endswith(":a") \
+                        and inner[:-2].isdigit():
+                    audio_out = inner
             else:
                 amix_in = "".join(audio_labels)
                 audio_out = "[aout]"
@@ -1752,6 +2020,9 @@ class Project:
 
 def _get_media_dimensions(filepath):
     """メディアの幅・高さを取得 (ffprobe)"""
+    if _is_pending_cache_path(filepath):
+        # dry_run中の未生成キャッシュ予定パスはprobeしない（警告スパム防止）
+        return None, None
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -1771,7 +2042,11 @@ def _get_media_dimensions(filepath):
 
 
 def _get_base_dimensions(obj):
-    """オブジェクトのscaleエフェクト適用前の基底サイズを取得"""
+    """オブジェクトのscaleエフェクト適用前の基底サイズを取得
+
+    resizeに加えてcrop/pad/rotate(expand)のサイズ変化も反映する
+    （scaleエフェクトのpadサイズ過小による実行時エラーを防ぐ）。
+    """
     src_w, src_h = _get_media_dimensions(obj.source)
     if src_w is None:
         return None, None
@@ -1781,10 +2056,90 @@ def _get_base_dimensions(obj):
             sy = t.params.get("sy", 1)
             src_w = int(src_w * sx)
             src_h = int(src_h * sy)
+        elif t.name in ("crop", "pad"):
+            # w/h が式文字列等の非数値ならサイズ反映をスキップ（従来挙動へフォールバック）
+            try:
+                new_w = int(t.params["w"])
+                new_h = int(t.params["h"])
+            except (TypeError, ValueError):
+                continue
+            src_w, src_h = new_w, new_h
+        elif t.name == "rotate" and t.params.get("expand"):
+            # 静的角度なら expand 後の外接矩形サイズを反映
+            ang = t.params.get("rad")
+            try:
+                a = ang.eval_at(0) if isinstance(ang, Expr) else float(ang)
+            except Exception:
+                continue
+            c = _builtins.abs(_math.cos(a))
+            s = _builtins.abs(_math.sin(a))
+            new_w = int(_math.ceil(src_w * c + src_h * s))
+            new_h = int(_math.ceil(src_w * s + src_h * c))
+            src_w, src_h = new_w, new_h
     return src_w, src_h
 
 
 # --- フィルタ生成ヘルパー ---
+
+def _decoder_input_args(source, media_type, fps):
+    """メディア種別に応じたffmpeg入力デコーダ引数を構築（全経路共通）
+
+    本レンダ/レイヤーキャッシュ/チェックポイント/computeで共通利用し、
+    webmデコーダ判定等の重複と乖離を防ぐ。
+    """
+    if media_type == "image":
+        return ["-loop", "1", "-r", str(fps), "-i", source]
+    if media_type != "audio" and source.lower().endswith(".webm"):
+        # WebM(VP9 alpha)はlibvpx-vp9デコーダが必要
+        # (ffmpeg 8.0のネイティブVP9デコーダはalpha非対応)
+        return ["-c:v", "libvpx-vp9", "-i", source]
+    return ["-i", source]
+
+
+def _build_input_args(obj, fps):
+    """メディア種別に応じたffmpeg入力引数を構築（本レンダ/レイヤーキャッシュ共通）"""
+    return _decoder_input_args(obj.source, obj.media_type, fps)
+
+
+def _build_video_overlay_parts(obj, input_idx, current_base, dur):
+    """1オブジェクト分の映像フィルタチェーン + overlay行を構築
+    （本レンダとレイヤーキャッシュで共通利用し、両経路の乖離を防ぐ）
+
+    Returns: (filter_parts, out_label)
+    """
+    start = obj.start_time
+    base_dims = _get_base_dimensions(obj)
+    obj_filters = list(_build_video_pre_filters(obj))
+    # ビデオ入力が start_time > 0 の場合、tpad で先頭にフレームを追加
+    # (overlay有効化前にフレームが消費されるのを防ぐ)
+    # trim/setpts の後に挿入し、trim がクローンフレーム込みで尺を切らないようにする
+    if obj.media_type != "image" and start > 0:
+        obj_filters.append(f"tpad=start_duration={start}:start_mode=clone")
+    obj_filters.extend(_build_transform_filters(obj))
+    eff_filters, pad_size = _build_effect_filters(obj, start, dur, base_dims=base_dims)
+    obj_filters.extend(eff_filters)
+    obj_filters = _optimize_filter_chain(obj_filters)
+
+    parts = []
+    obj_label = f"[obj{input_idx}]"
+    if obj_filters:
+        parts.append(f"[{input_idx}:v]{','.join(obj_filters)}{obj_label}")
+    else:
+        obj_label = f"[{input_idx}:v]"
+
+    x_expr, y_expr = _build_move_exprs(obj, start, dur, pad_size=pad_size)
+
+    enable_str = ""
+    if obj.duration is not None:
+        end = start + obj.duration
+        enable_str = f":enable='between(t\\,{start}\\,{end})'"
+
+    out_label = f"[v{input_idx}]"
+    parts.append(
+        f"{current_base}{obj_label}overlay={x_expr}:{y_expr}:eof_action=pass{enable_str}{out_label}"
+    )
+    return parts, out_label
+
 
 def _build_transform_filters(obj):
     """Transform処理のフィルタリストを生成"""
@@ -1856,13 +2211,29 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
             # pad: scaleの出力を最大サイズの固定フレームに収め、overlay位置を安定化
             if base_dims and base_dims[0] is not None:
                 bw, bh = base_dims
-                max_s = _builtins.max(scale_expr.eval_at(i / 10) for i in range(11))
+                # 定数スケールはサンプリング不要（101点評価の短絡）
+                if isinstance(scale_expr, Const):
+                    max_s = scale_expr.value
+                else:
+                    # 101点サンプリングで最大スケールを推定（中間ピークの取りこぼしを低減）
+                    try:
+                        max_s = _builtins.max(
+                            scale_expr.eval_at(i / 100) for i in range(101))
+                    except Exception as exc:
+                        raise ValueError(
+                            f"scale式を数値評価できないため、padサイズを決定できません: {exc}\n"
+                            f"scale() には u のみに依存する数値評価可能な式を渡してください。"
+                        ) from exc
                 max_w = _math.ceil(bw * max_s / 2) * 2
                 max_h = _math.ceil(bh * max_s / 2) * 2
                 filters.append("format=rgba")
                 filters.append(
                     f"pad={max_w}:{max_h}:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame"
                 )
+                # SEGVバリア: FFmpeg 8.0では scale(eval=frame)+rotate の組み合わせで
+                # SEGV(0xC0000005)が発生し、pad/format=rgba 単体では防げない。
+                # copy フィルタによるバッファ分離が必要（検証済みの回避策）。
+                filters.append("copy")
                 pad_size = (max_w, max_h)
         elif e.name == "fade":
             alpha_expr = e.params.get("alpha", Const(1.0))
@@ -1948,25 +2319,26 @@ def _build_move_exprs(obj, start, dur, pad_size=None):
         half_h = "h/2"
 
     if move_effect is None:
-        return f"(W-{pad_size[0]})/2" if pad_size else "(W-w)/2", \
-               f"(H-{pad_size[1]})/2" if pad_size else "(H-h)/2"
-
-    p = move_effect.params
-    anchor_val = p.get("anchor", "center")
-
-    x_param = p.get("x", Const(0.5))
-    y_param = p.get("y", Const(0.5))
-
-    u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
-    base_x = f"{x_param.to_ffmpeg(u_expr)}*W"
-    base_y = f"{y_param.to_ffmpeg(u_expr)}*H"
-
-    if anchor_val == "center":
-        x_result = f"trunc({base_x}-{half_w})"
-        y_result = f"trunc({base_y}-{half_h})"
+        # move なしでも shake は適用できるよう、中央配置をベースにして続行する
+        x_result = f"(W-{pad_size[0]})/2" if pad_size else "(W-w)/2"
+        y_result = f"(H-{pad_size[1]})/2" if pad_size else "(H-h)/2"
     else:
-        x_result = f"trunc({base_x})"
-        y_result = f"trunc({base_y})"
+        p = move_effect.params
+        anchor_val = p.get("anchor", "center")
+
+        x_param = p.get("x", Const(0.5))
+        y_param = p.get("y", Const(0.5))
+
+        u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+        base_x = f"{x_param.to_ffmpeg(u_expr)}*W"
+        base_y = f"{y_param.to_ffmpeg(u_expr)}*H"
+
+        if anchor_val == "center":
+            x_result = f"trunc({base_x}-{half_w})"
+            y_result = f"trunc({base_y}-{half_h})"
+        else:
+            x_result = f"trunc({base_x})"
+            y_result = f"trunc({base_y})"
 
     # shake Effect: overlay座標にsin/cosオフセットを加算
     shake_effect = None
@@ -2507,6 +2879,12 @@ class Object:
             proj.objects.remove(self)
         # キャッシュパス計算
         cache_path = self._compute_cache_path(duration)
+        # 差し替え前の元素材パスを保持（レイヤーキャッシュの依存記録で
+        # 導出キャッシュパスではなく元素材の変更を検知できるようにする）
+        self._origin_sources = (getattr(self, '_origin_sources', None) or []) + [self.source]
+        # ベイク尺を保持（差し替え後の未生成予定パスへのprobe fallback防止）
+        if duration:
+            self._resolved_length = duration
         # plan pass: source差し替えのみ
         if proj is not None and proj._mode == "plan":
             self.source = cache_path
@@ -2536,7 +2914,7 @@ class Object:
             return self
         # 実生成
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        subprocess.run(cmd, check=True, timeout=600)
+        _run_ffmpeg_to_cache(cmd, cache_path, timeout=600)
         self.source = cache_path
         self.media_type = _detect_media_type(cache_path)
         self.transforms = []
@@ -2598,19 +2976,9 @@ class Object:
         eff_filters, _ = _build_effect_filters(temp, 0, duration, base_dims=base_dims)
         filters.extend(eff_filters)
         cmd = ["ffmpeg", "-y"]
-        if self.media_type == "image":
-            cmd.extend(["-loop", "1", "-r", str(fps), "-i", self.source])
-        else:
-            cmd.extend(["-i", self.source])
+        cmd.extend(_decoder_input_args(self.source, self.media_type, fps))
         if filters:
             cmd.extend(["-vf", ",".join(filters)])
-        quality = "final"
-        for t in self.transforms:
-            if getattr(t, 'quality', 'final') == "fast":
-                quality = "fast"
-        for e in self.effects:
-            if getattr(e, 'quality', 'final') == "fast":
-                quality = "fast"
         cmd.extend([
             "-c:v", "ffv1", "-level", "3",
             "-pix_fmt", "yuva444p",
@@ -2691,23 +3059,26 @@ class Object:
 
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
-            page = browser.new_page(viewport={"width": w, "height": h})
-            page.goto(url)
-            page.wait_for_function("typeof globalThis.renderFrame === 'function'", timeout=5000)
-            for i in range(N):
-                t = i / fps
-                u = 1.0 if N <= 1 else i / (N - 1)
-                state = {
-                    "frame": i, "t": t, "u": u,
-                    "fps": fps, "duration": dur,
-                    "width": w, "height": h,
-                    "data": self._web_data, "seed": 0,
-                }
-                page.evaluate("state => globalThis.renderFrame(state)", state)
-                page.screenshot(
-                    path=os.path.join(frames_dir, f"frame_{i:05d}.png"),
-                    omit_background=True)
-            browser.close()
+            try:
+                page = browser.new_page(viewport={"width": w, "height": h})
+                page.goto(url)
+                page.wait_for_function("typeof globalThis.renderFrame === 'function'", timeout=5000)
+                for i in range(N):
+                    t = i / fps
+                    u = 1.0 if N <= 1 else i / (N - 1)
+                    state = {
+                        "frame": i, "t": t, "u": u,
+                        "fps": fps, "duration": dur,
+                        "width": w, "height": h,
+                        "data": self._web_data, "seed": 0,
+                    }
+                    page.evaluate("state => globalThis.renderFrame(state)", state)
+                    page.screenshot(
+                        path=os.path.join(frames_dir, f"frame_{i:05d}.png"),
+                        omit_background=True)
+            finally:
+                # 失敗時もブラウザプロセスを残さない
+                browser.close()
 
     def split(self):
         """(VideoView or None, AudioView or None) を返す"""
@@ -2773,6 +3144,11 @@ def rotate(*, deg=None, rad=None, expand=False, fill="0x00000000"):
         rad_val = deg2rad(deg)
     else:
         rad_val = _to_expr(rad)
+    # 時間依存式（uを含む式）は静的Transformでは未定義変数uがフィルタに漏れるため拒否
+    if isinstance(rad_val, Expr) and rad_val.to_ffmpeg("0") != rad_val.to_ffmpeg("1"):
+        raise ValueError(
+            "rotate() に時間依存の式（u を含む式）は使えません。"
+            "時間変化する回転には rotate_to() を使ってください。")
     return Transform("rotate", rad=rad_val, expand=expand, fill=fill)
 
 
@@ -2848,8 +3224,7 @@ def rotate_to(deg=None, rad=None, *, from_deg=None, from_rad=None,
         if rad is not None:
             rad_expr = _resolve_param(rad)
         else:
-            rad_expr = _resolve_param(
-                lambda u, _d=deg: deg2rad(_d) if isinstance(_d, (int, float)) else deg2rad(_d))
+            rad_expr = deg2rad(_resolve_param(deg))
     return Effect("rotate_to", rad=rad_expr, expand=expand, fill=fill)
 
 
@@ -2857,6 +3232,19 @@ def morph_to(target, blend=None, **morph_params):
     """モーフィングEffect: 画像→画像の最適輸送モーフ動画を生成"""
     if not isinstance(target, Object):
         raise TypeError(f"morph_to の target は Object のみ: {type(target)}")
+    # パラメータのタイポはレンダ深部（チェックポイント生成後）ではなく
+    # 構築時点で検出する。morph モジュールが無い環境ではレンダ時に検出される
+    try:
+        from morph import MORPH_PARAM_KEYS
+    except ImportError:
+        pass
+    else:
+        unknown = set(morph_params) - set(MORPH_PARAM_KEYS)
+        if unknown:
+            raise ValueError(
+                f"morph_to: 未知のパラメータ {sorted(unknown)}"
+                f"（有効なキー: {sorted(MORPH_PARAM_KEYS)}）"
+            )
     # ターゲットObjectをProjectから除外（morphに消費される）
     proj = Project._current
     if proj is not None and target in proj.objects:
@@ -2865,6 +3253,12 @@ def morph_to(target, blend=None, **morph_params):
             f"morph_to: ターゲット '{target.source}' はモーフィングに消費されるため"
             f"Projectから自動的に除外されました。"
         )
+    # ターゲット素材をレイヤー依存として記録（objectsから除外されるため
+    # _layer_sourcesの通常記録に載らず、キャッシュ鮮度検証から漏れるのを防ぐ）
+    if proj is not None and proj._current_layer_file:
+        tgt_deps = getattr(target, '_origin_sources', None) or [target.source]
+        proj._extra_layer_deps.setdefault(
+            proj._current_layer_file, []).extend(tgt_deps)
     if blend is None:
         blend = _resolve_param(lambda u: u * u * (3 - 2 * u))
     else:
