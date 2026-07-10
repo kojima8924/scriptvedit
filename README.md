@@ -100,7 +100,13 @@ checkpointで焼き込まれるか、レンダリング時にoverlay座標で解
 
 **重要**: live Effect は checkpoint で焼かれないため、checkpoint 生成後もレンダリング時に必ず残る。
 
-morph_to は bakeable ops の末尾に配置する必要がある（違反時は ValueError）。
+morph_to の注意点:
+- bakeable ops の末尾に配置する必要がある（違反時は ValueError）
+- 1つの Object に1回のみ適用可能（複数指定は ValueError。多段モーフは `compute()` で中間素材を生成して分割）
+- パラメータ名のタイポは構築時（`morph_to()` 呼び出し時点）に ValueError で検出される
+- morph_to 直前の未ベイク transforms/effects は中間チェックポイントに自動ベイクされる（resize 等がサイレントに消えない）
+- effect や動画ソースと併用した場合は、直前結果の最終フレームを RGBA PNG に抽出してモーフ入力にする
+
 shake は overlay 座標の変調として実装されており live 分類。将来 bakeable に変更する場合は ENGINE_VER 更新が必要。
 
 ### 音声エフェクト
@@ -162,6 +168,117 @@ move(x=lambda u: 0.5 + 0.3 * cos(u * 2 * PI),
 - 組み込み互換: `abs`, `min`, `max`, `round`, `pow`
 - 定数: `PI`, `E`
 
+### イージング関数
+
+標準的なイージング30種（10ファミリ × in/out/in_out）とジェネレータ3種を提供。
+lambda内で `u` に直接適用するか、`apply_easing` で値範囲付きlambdaを生成する。
+
+- `linear(t)` ... 線形
+- `ease_in_*` / `ease_out_*` / `ease_in_out_*` × `quad` / `cubic` / `quart` / `quint` / `sine` / `expo` / `circ` / `back` / `elastic` / `bounce`
+- ジェネレータ（イージング関数を返す）:
+  - `ease_cubic_bezier(x1, y1, x2, y2, segments=16)` ... CSS cubic-bezier互換
+  - `ease_spring(stiffness=3, damping=4)` ... バネ（オーバーシュートして1.0に収束）
+  - `steps(n, jump="end")` ... CSS steps()互換ステップ関数（jump: "start"/"end"）
+- `apply_easing(easing_func, from_val, to_val)` ... イージングを値範囲に適用するlambdaを返す
+
+```python
+# ease関数をlambda内で直接使う
+obj.time(2) <= scale(lambda u: lerp(0.5, 1, ease_out_cubic(u)))
+
+# apply_easing: from/to範囲付きlambdaを生成
+obj.time(2) <= scale(apply_easing(ease_in_out_quad, 0.5, 1.0))
+
+# CSS cubic-bezier互換
+ease = ease_cubic_bezier(0.25, 0.1, 0.25, 1.0)  # CSS ease
+obj.time(2) <= fade(lambda u: ease(u))
+```
+
+### キーフレーム補間（keyframes）
+
+`keyframes(*args, easing=None)` は固定時点 `(u, 値)` のリストから区分線形補間のパラメータ関数を生成する。
+フラット形式（`t0, v0, t1, v1, ...`）とタプル形式（`(t0, v0), (t1, v1), ...`）の両方に対応。
+最低2点必要で、時刻順に自動ソートされる。`easing=` で各区間の補間カーブを指定できる。
+
+```python
+# フラット形式: 0.5倍 → 1.2倍 → 等倍
+obj.time(4) <= scale(keyframes(0, 0.5, 0.5, 1.2, 1.0, 1.0))
+
+# タプル形式 + easing指定
+obj.time(4) <= fade(keyframes((0, 0), (0.2, 1), (0.8, 1), (1.0, 0)))
+obj.time(4) <= scale(keyframes((0, 0.5), (1, 1.5), easing=ease_in_out_quad))
+```
+
+### シーケンス関数
+
+エフェクトパラメータを時間区間で組み立てるヘルパー。lambdaの代わりにEffect引数へ渡す。
+`fn` には lambda または定数を指定できる。
+
+- `phase(start, end, fn)` ... fnを区間[start, end]にリマッピング（区間外はclip）
+- `sequence_param(*segments, default=0)` ... `(start, end, 値orfn)` のタプル列で区間切替
+- `repeat(n, fn)` ... fnをn回繰り返す
+- `bounce(n, fn)` ... fnをn回往復（0→1→0の三角波）
+- `alternate(n, fn_a, fn_b)` ... 2つの関数をn回交互に切り替え
+- `staircase(n, fn)` ... 階段状に値を上昇
+
+```python
+# 0〜30%区間でフェードイン
+obj.time(6) <= fade(phase(0, 0.3, lambda t: t))
+
+# フェードイン → 保持 → フェードアウト
+obj.time(6) <= fade(sequence_param(
+    (0, 0.2, lambda t: t),
+    (0.2, 0.8, 1.0),
+    (0.8, 1.0, lambda t: 1 - t),
+))
+
+# 3回パルス
+obj.time(6) <= scale(repeat(3, lambda t: 1 + 0.2 * sin(t * PI * 2)))
+```
+
+### 条件分岐・比較
+
+比較・論理関数は 1.0/0.0 を返すExprを生成する。`if_` / `case` と組み合わせて使う。
+
+- `if_(cond, then_val, else_val)` ... 条件分岐
+- 比較: `lt(a, b)`, `gt(a, b)`, `lte(a, b)`, `gte(a, b)`, `eq_(a, b)`, `neq(a, b)`
+- 論理: `and_(a, b)`, `or_(a, b)`, `not_(a)`, `between(x, lo, hi)`
+- `case(*when_then_pairs, default=0)` ... 多岐条件分岐（ネストif_の糖衣）
+- `sign(x)` ... 符号関数（x>0→1, x==0→0, x<0→-1）
+- `random(seed=0)` ... 疑似乱数 [0, 1)（ffmpegランタイムで評価）
+
+```python
+# u<0.5では半分サイズ、以降は等倍
+obj.time(4) <= scale(lambda u: if_(lt(u, 0.5), 0.5, 1.0))
+
+# 多岐分岐
+obj.time(6) <= fade(lambda u: case(
+    (lt(u, 0.3), 0.5),   # u<0.3 → 0.5
+    (lt(u, 0.7), 1.0),   # u<0.7 → 1.0
+    default=0.2,          # それ以外 → 0.2
+))
+```
+
+### Expr チェーンメソッド
+
+Expr（lambda内の `u` や式の結果）に対するメソッドチェーンで式を加工できる。
+
+- `.smooth()` ... smoothstep（3t²-2t³）
+- `.invert()` ... 反転（1 - x）
+- `.pingpong()` ... 三角波（0→1→0）
+- `.map(lo, hi)` ... 0〜1をlo〜hiへマッピング
+- `.clamped(lo=0, hi=1)` ... lo〜hiにクランプ
+- `.oscillate(frequency=1, amplitude=1, offset=0)` ... 正弦波（offset + amplitude * sin(x * frequency * 2π)）
+- `.sawtooth(frequency=1)` ... ノコギリ波（0→1を周期的に繰り返す）
+- `.triangle(frequency=1)` ... 三角波（0→1→0を周期的に繰り返す）
+
+```python
+# 滑らかに0.5〜1.0へ
+obj.time(3) <= scale(lambda u: u.smooth().map(0.5, 1.0))
+
+# 2周期の三角波フェード
+obj.time(4) <= fade(lambda u: u.triangle(2))
+```
+
 ### move（位置・移動）
 
 `move` は Effect として overlay の座標を制御する。
@@ -211,6 +328,22 @@ obj <= +(resize(sx=0.5, sy=0.5) | resize(sx=0.3, sy=0.3))
 
 キャッシュは `__cache__/artifacts/checkpoint/{src_hash}/{signature}.{ext}` に保存。
 AudioEffectの `~` は従来通り無効化として動作する。
+
+### レイヤーキャッシュ
+
+`p.layer()` の `cache` 引数で、レイヤー単位の VP9 alpha webm キャッシュを制御する。
+
+```python
+p.layer("maku.py", cache="make")   # キャッシュ生成
+p.layer("maku.py", cache="use")    # キャッシュから読み込み
+p.layer("maku.py", cache="auto")   # 新鮮なキャッシュがあれば利用、なければ通常実行
+p.layer("maku.py", cache="off")    # キャッシュしない（デフォルト）
+```
+
+- キャッシュに保存されるのは映像のみ。音声を含むレイヤーをキャッシュ生成すると警告が出て、キャッシュ再生時に音声は脱落する
+- 素材の鮮度検証: キャッシュ生成時に素材のフィンガープリント（サイズ/mtime）を anchors.json に記録し、素材が更新された場合は
+  - `auto` ... 古いキャッシュを使わずレイヤーを再実行（再生成）
+  - `use` ... 警告を出して古いキャッシュのまま続行（`cache="make"` での再生成を促す）
 
 ### Object.cache()（非推奨）
 
@@ -429,6 +562,14 @@ img.time()                                 # TypeError（画像は length を持
 ```
 python main.py
 ```
+
+### render
+
+```python
+p.render(output_path, *, dry_run=False, timeout=1800)
+```
+
+`timeout` は ffmpeg 実行のタイムアウト秒数（デフォルト1800秒）。長尺・高負荷のレンダリングでは大きめに指定する。
 
 ### dry_run（コマンド確認のみ）
 
