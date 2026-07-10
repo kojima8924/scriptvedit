@@ -6,6 +6,9 @@ from scriptvedit import (
     again, move, fade, resize, rotate, rotate_to, morph_to, AudioEffect, AudioEffectChain,
     subtitle, subtitle_box, bubble, diagram, circle, label,
     crop, pad, blur, eq, wipe, zoom, color_shift, shake, scale,
+    chroma_key, vignette, pixelize, glow, lut, glitch,
+    perspective_warp, lens, ken_burns, drop_shadow, outline,
+    slideshow, transition,
     Transform, TransformChain, Effect, EffectChain,
     _checkpoint_cache_path, _file_fingerprint, _web_cache_path,
     anchor, pause,
@@ -1303,6 +1306,318 @@ def test_compute_returns_object():
     return False, f"戻り値の型: {type(result)}"
 
 
+def test_chroma_key_similarity_range():
+    """chroma_key similarity範囲外 → ValueError"""
+    try:
+        chroma_key("green", similarity=1.5)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "similarity" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_chroma_key_bad_color():
+    """chroma_key 不正な16進色 → ValueError"""
+    try:
+        chroma_key("#12345")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "RRGGBB" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_vignette_both_args():
+    """vignette angle+strength同時指定 → ValueError"""
+    try:
+        vignette(angle=0.5, strength=0.5)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "angle" in msg and "strength" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_pixelize_expr_rejected():
+    """pixelize size=Expr → ValueError（定数のみの明示エラー）"""
+    try:
+        pixelize(lambda u: 8 + u * 24)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "定数" in msg:
+            return True, msg.split('\n')[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_glow_intensity_range():
+    """glow intensity範囲外 → ValueError"""
+    try:
+        glow(radius=8, intensity=1.5)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "intensity" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_lut_missing_file():
+    """lut ファイル不在 → ValueError"""
+    try:
+        lut("__no_such_lut__.cube")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "見つかりません" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_lut_bad_ext():
+    """lut 未対応拡張子 → ValueError"""
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_lut.txt")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write("dummy")
+        lut(temp_path)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "未対応" in msg and ".cube" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_glitch_interval_range():
+    """glitch interval=0 → ValueError"""
+    try:
+        glitch(strength=1.0, interval=0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "interval" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_perspective_warp_non_numeric():
+    """perspective_warp 非数値座標 → ValueError"""
+    try:
+        perspective_warp(0, 0, "300", 50, 0, 200, 300, 180)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "x1" in msg and "数値" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_lens_k1_range():
+    """lens k1範囲外 → ValueError"""
+    try:
+        lens(k1=2.0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "k1" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_ken_burns_aspect_mismatch():
+    """ken_burns アスペクト比不一致 → ValueError"""
+    try:
+        ken_burns((0, 0, 800, 450), (0, 0, 400, 400))
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "アスペクト比" in msg:
+            return True, msg.split('\n')[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_ken_burns_bad_rect():
+    """ken_burns 4要素でない矩形 → ValueError"""
+    try:
+        ken_burns((0, 0, 800), (0, 0, 400, 225))
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "from_rect" in msg and "4要素" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_drop_shadow_bad_color():
+    """drop_shadow 未対応の色名 → ValueError"""
+    try:
+        drop_shadow(color="not_a_color")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "色名" in msg:
+            return True, msg.split('\n')[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_outline_width_range():
+    """outline width=0 → ValueError"""
+    try:
+        outline(width=0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "width" in msg and "1" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_slideshow_one_image():
+    """slideshow 画像1枚 → ValueError"""
+    try:
+        slideshow(["../onigiri_tenmusu.png"])
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "2枚以上" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_slideshow_unknown_transition():
+    """slideshow 未知のtransition名 → ValueError"""
+    try:
+        slideshow(["../onigiri_tenmusu.png", "../figure_cafe.png"],
+                  transition="explode")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "explode" in msg and "fade" in msg:
+            return True, msg.split('\n')[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_slideshow_tdur_too_long():
+    """slideshow t_dur >= each → ValueError"""
+    try:
+        slideshow(["../onigiri_tenmusu.png", "../figure_cafe.png"],
+                  each=1.0, t_dur=1.0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "t_dur" in msg and "each" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_transition_with_effects():
+    """transition 加工済みObject → ValueError（compute()の案内）"""
+    p = Project()
+    p.configure(width=320, height=240, fps=1, background_color="black")
+    a = Object("../onigiri_tenmusu.png").time(2)
+    a <= resize(sx=0.5, sy=0.5)
+    b = Object("../figure_cafe.png").time(2)
+    try:
+        transition(a, b)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "compute()" in msg:
+            return True, msg.split('\n')[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_transition_image_needs_time():
+    """transition 画像に.time()未指定 → ValueError"""
+    p = Project()
+    p.configure(width=320, height=240, fps=1, background_color="black")
+    a = Object("../onigiri_tenmusu.png")
+    b = Object("../figure_cafe.png").time(2)
+    try:
+        transition(a, b)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if ".time" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_transition_consumes_objects():
+    """transition 両Objectがタイムラインから除外されること"""
+    p = Project()
+    p.configure(width=320, height=240, fps=1, background_color="black")
+    p._mode = "plan"  # 生成をスキップ
+    a = Object("../onigiri_tenmusu.png").time(2)
+    b = Object("../figure_cafe.png").time(2)
+    tr = transition(a, b, kind="fade", duration=0.5)
+    if a in p.objects or b in p.objects:
+        return False, "消費されたObjectがobjectsに残っています"
+    if tr not in p.objects:
+        return False, "合成Objectがobjectsに登録されていません"
+    if tr._resolved_length != 3.5:
+        return False, f"合成尺が不正: {tr._resolved_length} (期待: 3.5)"
+    return True, f"合成Object生成 source={os.path.basename(tr.source)}, 尺=3.5"
+
+
+def test_glow_filter_in_checkpoint():
+    """glow Effect（split/blend複合チェーン）がcheckpointのfiltergraphに出ること"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2) <= glow(radius=8, intensity=0.8) & move(x=0.5, y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_glow_test.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        cmd = p.render("_tmp_glow.mp4", dry_run=True)
+        ok1, msg1 = _filter_found_in_cache(cmd, "gblur=sigma=8")
+        if not ok1:
+            return ok1, msg1
+        return _filter_found_in_cache(cmd, "blend=all_mode=screen:all_opacity=0.8")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def test_drop_shadow_filter_in_checkpoint():
+    """drop_shadow Effect（split/overlay複合チェーン）がcheckpointに出ること"""
+    layer_code = (
+        'from scriptvedit import *\n'
+        'obj = Object("../onigiri_tenmusu.png")\n'
+        'obj <= resize(sx=0.5, sy=0.5)\n'
+        'obj.time(2) <= drop_shadow(dx=8, dy=8, blur=6) & move(x=0.5, y=0.5, anchor="center")\n'
+    )
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_dshadow_test.py")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = Project()
+        p.configure(width=640, height=360, fps=30, background_color="black")
+        p.layer(temp_path, priority=0)
+        cmd = p.render("_tmp_dshadow.mp4", dry_run=True)
+        ok1, msg1 = _filter_found_in_cache(cmd, "gblur=sigma=6")
+        if not ok1:
+            return ok1, msg1
+        return _filter_found_in_cache(cmd, "alpha(X")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -1370,6 +1685,28 @@ ALL_TESTS = [
     ("compute objects除外", test_compute_removes_from_objects),
     ("compute live error", test_compute_live_effect_error),
     ("compute戻り値", test_compute_returns_object),
+    ("chroma_key similarity範囲", test_chroma_key_similarity_range),
+    ("chroma_key 不正色", test_chroma_key_bad_color),
+    ("vignette angle+strength同時", test_vignette_both_args),
+    ("pixelize Expr拒否", test_pixelize_expr_rejected),
+    ("glow intensity範囲", test_glow_intensity_range),
+    ("lut ファイル不在", test_lut_missing_file),
+    ("lut 未対応拡張子", test_lut_bad_ext),
+    ("glitch interval範囲", test_glitch_interval_range),
+    ("perspective_warp 非数値", test_perspective_warp_non_numeric),
+    ("lens k1範囲", test_lens_k1_range),
+    ("ken_burns アスペクト不一致", test_ken_burns_aspect_mismatch),
+    ("ken_burns 矩形不正", test_ken_burns_bad_rect),
+    ("drop_shadow 不正色", test_drop_shadow_bad_color),
+    ("outline width範囲", test_outline_width_range),
+    ("slideshow 画像1枚", test_slideshow_one_image),
+    ("slideshow 未知transition", test_slideshow_unknown_transition),
+    ("slideshow t_dur過大", test_slideshow_tdur_too_long),
+    ("transition 加工済み拒否", test_transition_with_effects),
+    ("transition 画像time必須", test_transition_image_needs_time),
+    ("transition Object消費", test_transition_consumes_objects),
+    ("glow filter in checkpoint", test_glow_filter_in_checkpoint),
+    ("drop_shadow filter in checkpoint", test_drop_shadow_filter_in_checkpoint),
 ]
 
 

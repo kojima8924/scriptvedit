@@ -379,6 +379,110 @@ def setup_test38():
     return p.render("test38.mp4", dry_run=True)
 
 
+def setup_test39():
+    """chroma_key Effectテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test39_chroma_key.py", priority=0)
+    return p.render("test39.mp4", dry_run=True)
+
+
+def setup_test40():
+    """vignette Effectテスト（strength=Expr → eval=frame）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test40_vignette.py", priority=0)
+    return p.render("test40.mp4", dry_run=True)
+
+
+def setup_test41():
+    """pixelize Effectテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test41_pixelize.py", priority=0)
+    return p.render("test41.mp4", dry_run=True)
+
+
+def setup_test42():
+    """glow Effectテスト（split→gblur→blend=screen）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test42_glow.py", priority=0)
+    return p.render("test42.mp4", dry_run=True)
+
+
+def setup_test43():
+    """lut Effectテスト（lut3d + LUTファイル）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test43_lut.py", priority=0)
+    return p.render("test43.mp4", dry_run=True)
+
+
+def setup_test44():
+    """glitch Effectテスト（rgbashift+noise、間欠enable）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test44_glitch.py", priority=0)
+    return p.render("test44.mp4", dry_run=True)
+
+
+def setup_test45():
+    """perspective_warp Effectテスト"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test45_perspective.py", priority=0)
+    return p.render("test45.mp4", dry_run=True)
+
+
+def setup_test46():
+    """lens Effectテスト（lenscorrection）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test46_lens.py", priority=0)
+    return p.render("test46.mp4", dry_run=True)
+
+
+def setup_test47():
+    """ken_burns Effectテスト（動的scale+crop）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test47_ken_burns.py", priority=0)
+    return p.render("test47.mp4", dry_run=True)
+
+
+def setup_test48():
+    """drop_shadow Effectテスト（split→色付け+gblur→overlay）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test48_drop_shadow.py", priority=0)
+    return p.render("test48.mp4", dry_run=True)
+
+
+def setup_test49():
+    """outline Effectテスト（dilationベースの縁取り）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test49_outline.py", priority=0)
+    return p.render("test49.mp4", dry_run=True)
+
+
+def setup_test50():
+    """slideshowテスト（xfade連結の合成Object）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test50_slideshow.py", priority=0)
+    return p.render("test50.mp4", dry_run=True)
+
+
+def setup_test51():
+    """transitionテスト（2Objectのxfade合成）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test51_transition.py", priority=0)
+    return p.render("test51.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -418,6 +522,19 @@ ALL_TESTS = [
     ("test36", setup_test36),
     ("test37", setup_test37),
     ("test38", setup_test38),
+    ("test39", setup_test39),
+    ("test40", setup_test40),
+    ("test41", setup_test41),
+    ("test42", setup_test42),
+    ("test43", setup_test43),
+    ("test44", setup_test44),
+    ("test45", setup_test45),
+    ("test46", setup_test46),
+    ("test47", setup_test47),
+    ("test48", setup_test48),
+    ("test49", setup_test49),
+    ("test50", setup_test50),
+    ("test51", setup_test51),
 ]
 
 

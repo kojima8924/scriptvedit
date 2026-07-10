@@ -15,6 +15,9 @@ __all__ = [
     "resize", "rotate", "crop", "pad", "blur", "eq",
     "scale", "fade", "move", "morph_to", "rotate_to",
     "wipe", "zoom", "color_shift", "shake",
+    "chroma_key", "vignette", "pixelize", "glow", "lut", "glitch",
+    "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline",
+    "slideshow", "transition",
     "again", "afade", "adelete", "delete", "trim", "atrim", "atempo",
     # アンカー/同期
     "anchor", "pause",
@@ -643,7 +646,9 @@ _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
 _ENGINE_VER = "7"
-_BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift"}
+_BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift",
+                     "chroma_key", "vignette", "pixelize", "glow", "lut", "glitch",
+                     "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline"}
 
 
 def _file_fingerprint(path):
@@ -685,6 +690,13 @@ def _op_fingerprint_str(op):
             parts.append(f"tgt_ffp={tgt_ffp}")
         except OSError:
             parts.append(f"tgt_src={op._morph_target.source}")
+    # lut: LUTファイルのFFPをsignatureに含める（内容変更でキャッシュ無効化）
+    if op.name == "lut":
+        lut_file = op.params.get("file")
+        try:
+            parts.append(f"lut_ffp={_file_fingerprint(lut_file)}")
+        except (OSError, TypeError):
+            parts.append(f"lut_src={lut_file}")
     return "|".join(parts)
 
 
@@ -2116,7 +2128,8 @@ def _build_video_overlay_parts(obj, input_idx, current_base, dur):
     if obj.media_type != "image" and start > 0:
         obj_filters.append(f"tpad=start_duration={start}:start_mode=clone")
     obj_filters.extend(_build_transform_filters(obj))
-    eff_filters, pad_size = _build_effect_filters(obj, start, dur, base_dims=base_dims)
+    eff_filters, pad_size = _build_effect_filters(
+        obj, start, dur, base_dims=base_dims, label_prefix=f"fx{input_idx}")
     obj_filters.extend(eff_filters)
     obj_filters = _optimize_filter_chain(obj_filters)
 
@@ -2191,14 +2204,20 @@ def _build_transform_filters(obj):
     return filters
 
 
-def _build_effect_filters(obj, start, dur, base_dims=None):
+def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
     """scale/fade等のeffectフィルタリストを生成（move/trim/delete以外）
     base_dims指定時、scaleエフェクトにpadを追加して固定サイズ出力にする。
+    label_prefix: 複合フィルタ（split/blend等）の中間ラベル接頭辞。
+    複数入力を扱う本レンダでは入力indexを含めて一意化する。
     Returns: (filters, pad_size) — pad_size は (max_w, max_h) or None
+
+    注意: glow/drop_shadow/outline は split を含む複合サブグラフ文字列を
+    1要素として返す（"split[a][b];[b]...[c];[a][c]blend=..." 形式）。
+    カンマ結合されたチェーンに埋め込んでも有効な filtergraph になる。
     """
     filters = []
     pad_size = None
-    for e in obj.effects:
+    for eff_idx, e in enumerate(obj.effects):
         if e.name in ("move", "trim", "delete", "morph_to", "shake"):
             continue
         if e.name == "scale":
@@ -2298,6 +2317,117 @@ def _build_effect_filters(obj, start, dur, base_dims=None):
                 filters.append(p)
             if eq_parts:
                 filters.append("eq=" + ":".join(eq_parts))
+        elif e.name == "chroma_key":
+            color = e.params.get("color", "green")
+            sim = e.params.get("similarity", 0.1)
+            bl = e.params.get("blend", 0.0)
+            filters.append(f"chromakey=color={color}:similarity={sim}:blend={bl}")
+            # chromakeyはyuva出力 → 後段のgeq/overlay向けにrgbaへ正規化
+            filters.append("format=rgba")
+        elif e.name == "vignette":
+            # 注意: vignetteフィルタはアルファ非対応（透明部分は失われる）。全画面素材向け。
+            ang = e.params.get("angle", Const(_math.pi / 5))
+            if isinstance(ang, Const):
+                filters.append(
+                    f"vignette=angle='clip({ang.to_ffmpeg('0')}\\,0\\,PI/2)'")
+            else:
+                # 時間依存式: eval=frame で毎フレーム評価（uは正規化時刻）
+                u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+                filters.append(
+                    f"vignette=angle='clip({ang.to_ffmpeg(u_expr)}\\,0\\,PI/2)':eval=frame")
+        elif e.name == "pixelize":
+            s = e.params.get("size", 16)
+            filters.append(f"pixelize=w={s}:h={s}")
+        elif e.name == "glow":
+            # split→gblur→blend=screen の複合チェーン（発光合成）
+            r = e.params.get("radius", 10)
+            it = e.params.get("intensity", 1.0)
+            p = f"{label_prefix}e{eff_idx}"
+            filters.append("format=rgba")
+            filters.append(
+                f"split[{p}a][{p}b];"
+                f"[{p}b]gblur=sigma={r}[{p}c];"
+                f"[{p}a][{p}c]blend=all_mode=screen:all_opacity={it}"
+            )
+        elif e.name == "lut":
+            # lut3d: パスはフィルタグラフ用に / 区切り + ':' エスケープ
+            lut_path = e.params["file"].replace("\\", "/").replace(":", "\\:")
+            filters.append(f"lut3d=file='{lut_path}'")
+        elif e.name == "glitch":
+            # rgbashift + noise のプリセット。interval指定時は間欠発動
+            strength = e.params.get("strength", 1.0)
+            iv = e.params.get("interval")
+            shift = _builtins.max(1, int(_builtins.round(4 * strength)))
+            shift_v = _builtins.max(1, shift // 2)
+            nstr = _builtins.min(100, _builtins.max(1, int(_builtins.round(20 * strength))))
+            enable = ""
+            if iv is not None:
+                # 各interval周期の先頭30%区間のみ有効化
+                on_dur = iv * 0.3
+                enable = f":enable='lt(mod(t-{start}\\,{iv})\\,{on_dur})'"
+            filters.append("format=rgba")
+            filters.append(f"rgbashift=rh={shift}:bh=-{shift}:gv={shift_v}{enable}")
+            filters.append(f"noise=alls={nstr}:allf=t+u{enable}")
+        elif e.name == "perspective_warp":
+            # sense=destination: 入力の4隅を指定座標へ移動（左上,右上,左下,右下）
+            coords = ":".join(
+                f"{k}={e.params[k]}"
+                for k in ("x0", "y0", "x1", "y1", "x2", "y2", "x3", "y3"))
+            filters.append(f"perspective={coords}:sense=destination")
+        elif e.name == "lens":
+            k1 = e.params.get("k1", 0)
+            k2 = e.params.get("k2", 0)
+            filters.append(f"lenscorrection=k1={k1}:k2={k2}")
+        elif e.name == "ken_burns":
+            # 動的scale + 固定サイズcrop で (x,y,w,h) 矩形間をパン&ズーム
+            u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+            s_str = e.params["s"].to_ffmpeg(u_expr)
+            x_str = e.params["x"].to_ffmpeg(u_expr)
+            y_str = e.params["y"].to_ffmpeg(u_expr)
+            ow = e.params["w"]
+            oh = e.params["h"]
+            filters.append(
+                f"scale=w='trunc(iw*({s_str})/2)*2':h='trunc(ih*({s_str})/2)*2':eval=frame")
+            filters.append(f"crop={ow}:{oh}:x='{x_str}':y='{y_str}'")
+            # SEGVバリア: scale(eval=frame)後のバッファ分離（既存scale実装と同じ回避策）
+            filters.append("copy")
+        elif e.name == "drop_shadow":
+            # split→色付け+ぼかし→本体を影の上にoverlay（キャンバスは影が収まるよう拡張）
+            dxv = e.params.get("dx", 5)
+            dyv = e.params.get("dy", 5)
+            bl = e.params.get("blur", 8)
+            op_ = e.params.get("opacity", 0.5)
+            cr, cg, cb = _parse_color_rgb(e.params.get("color", "black"))
+            m = int(_math.ceil(3 * bl))  # gblurの裾野(約3σ)
+            left = _builtins.max(0, m - dxv)
+            right = _builtins.max(0, m + dxv)
+            top = _builtins.max(0, m - dyv)
+            bottom = _builtins.max(0, m + dyv)
+            p = f"{label_prefix}e{eff_idx}"
+            blur_part = f"gblur=sigma={bl}," if bl > 0 else ""
+            filters.append("format=rgba")
+            filters.append(
+                f"split[{p}a][{p}b];"
+                f"[{p}b]geq=r='{cr}':g='{cg}':b='{cb}':a='alpha(X\\,Y)*{op_}',"
+                f"{blur_part}"
+                f"pad=iw+{left + right}:ih+{top + bottom}:{left + dxv}:{top + dyv}:color=0x00000000[{p}s];"
+                f"[{p}s][{p}a]overlay={left}:{top}:eof_action=pass"
+            )
+        elif e.name == "outline":
+            # alpha膨張（dilationをwidth回連結）ベースの縁取り。
+            # 色付けした複製のalphaを膨張させ、本体をその上にoverlayする。
+            wd = e.params.get("width", 2)
+            cr, cg, cb = _parse_color_rgb(e.params.get("color", "white"))
+            p = f"{label_prefix}e{eff_idx}"
+            dil = ",".join(["dilation"] * wd)
+            filters.append("format=rgba")
+            filters.append(
+                f"split[{p}a][{p}b];"
+                f"[{p}b]pad=iw+{2 * wd}:ih+{2 * wd}:{wd}:{wd}:color=0x00000000,"
+                f"geq=r='{cr}':g='{cg}':b='{cb}':a='alpha(X\\,Y)',"
+                f"{dil}[{p}o];"
+                f"[{p}o][{p}a]overlay={wd}:{wd}:eof_action=pass"
+            )
     return filters, pad_size
 
 
@@ -3177,6 +3307,68 @@ def eq(*, brightness=0, contrast=1, saturation=1, gamma=1):
                      saturation=saturation, gamma=gamma)
 
 
+# --- Effect用バリデーションヘルパー ---
+
+_COLOR_NAME_RGB = {
+    "black": (0, 0, 0), "white": (255, 255, 255),
+    "red": (255, 0, 0), "green": (0, 128, 0), "lime": (0, 255, 0),
+    "blue": (0, 0, 255), "yellow": (255, 255, 0), "cyan": (0, 255, 255),
+    "magenta": (255, 0, 255), "gray": (128, 128, 128), "grey": (128, 128, 128),
+    "orange": (255, 165, 0), "purple": (128, 0, 128), "pink": (255, 192, 203),
+    "brown": (165, 42, 42), "navy": (0, 0, 128),
+}
+
+
+def _parse_color_rgb(color):
+    """色名/16進文字列を (R, G, B) タプルに変換（drop_shadow/outline のgeq色付け用）"""
+    if not isinstance(color, str) or not color:
+        raise ValueError(f"color には色名か16進(#RRGGBB)の文字列を指定してください: {color!r}")
+    s = color.strip().lower()
+    if s.startswith("#"):
+        s = s[1:]
+    elif s.startswith("0x"):
+        s = s[2:]
+    else:
+        if s in _COLOR_NAME_RGB:
+            return _COLOR_NAME_RGB[s]
+        raise ValueError(
+            f"未対応の色名です: '{color}'。"
+            f"対応色名: {', '.join(sorted(_COLOR_NAME_RGB))} または16進(#RRGGBB)")
+    if len(s) != 6 or any(c not in "0123456789abcdef" for c in s):
+        raise ValueError(f"16進カラーは #RRGGBB / 0xRRGGBB 形式で指定してください: '{color}'")
+    return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+
+def _validate_ffmpeg_color(func_name, color):
+    """ffmpegに渡す色指定（色名 or 16進）を検証し正規化して返す"""
+    if not isinstance(color, str) or not color:
+        raise ValueError(f"{func_name}: color には色名か16進の文字列を指定してください: {color!r}")
+    s = color.strip()
+    if s.startswith("#") or s.lower().startswith("0x"):
+        h = s[1:] if s.startswith("#") else s[2:]
+        if len(h) != 6 or any(c not in "0123456789abcdefABCDEF" for c in h):
+            raise ValueError(f"{func_name}: 16進カラーは #RRGGBB / 0xRRGGBB 形式です: '{color}'")
+        return "0x" + h.upper()
+    if not s.isalpha():
+        raise ValueError(f"{func_name}: 無効な色指定です: '{color}'")
+    return s.lower()
+
+
+def _require_number(func_name, param_name, value, lo=None, hi=None):
+    """定数数値パラメータの型・範囲検証（Expr/lambda不可）"""
+    if isinstance(value, Expr) or callable(value):
+        raise ValueError(
+            f"{func_name}: {param_name} には Expr/lambda は使えません（定数のみ）")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{func_name}: {param_name} は数値で指定してください: {value!r}")
+    if (lo is not None and value < lo) or (hi is not None and value > hi):
+        rng = f"{lo if lo is not None else ''}〜{hi if hi is not None else ''}"
+        raise ValueError(
+            f"{func_name}: {param_name} は {rng} の範囲で指定してください: {value}")
+    return value
+
+
 # --- Effect関数 ---
 
 def scale(value=1):
@@ -3306,6 +3498,180 @@ def shake(amplitude=0.02, frequency=10):
     return Effect("shake", amplitude=amplitude, frequency=frequency)
 
 
+def chroma_key(color="green", similarity=0.1, blend=0.0):
+    """クロマキーEffect: 指定色を透明化（chromakeyフィルタ）。
+
+    color: 色名 or 16進（#RRGGBB / 0xRRGGBB）
+    similarity: 透明化する色の類似度（1e-5〜1.0、大きいほど広範囲）
+    blend: 境界のブレンド量（0〜1）
+    """
+    color = _validate_ffmpeg_color("chroma_key", color)
+    _require_number("chroma_key", "similarity", similarity, 1e-5, 1.0)
+    _require_number("chroma_key", "blend", blend, 0.0, 1.0)
+    return Effect("chroma_key", color=color, similarity=similarity, blend=blend)
+
+
+def vignette(angle=None, strength=None):
+    """ビネットEffect（vignetteフィルタ）。
+
+    angle: レンズ角度(rad, 0〜PI/2, Expr/lambda可) または
+    strength: 強度(0〜1, Expr/lambda可)をangle=strength*PI/2に変換。
+    どちらか一方のみ指定（両方省略時はffmpegデフォルトのPI/5）。
+    注意: vignetteフィルタはアルファ非対応のため透明部分は失われる（全画面素材向け）。
+    """
+    if angle is not None and strength is not None:
+        raise ValueError("vignette: angle と strength は同時に指定できません")
+    if angle is None and strength is None:
+        angle_expr = Const(_math.pi / 5)
+    elif angle is not None:
+        angle_expr = _resolve_param(angle)
+    else:
+        angle_expr = _resolve_param(strength) * Const(_math.pi / 2)
+    return Effect("vignette", angle=angle_expr)
+
+
+def pixelize(size=16):
+    """モザイクEffect（pixelizeフィルタ）。size: ブロックサイズpx（1〜1024）。
+
+    ffmpegのpixelizeフィルタはサイズの式指定に非対応のため定数のみ。
+    """
+    if isinstance(size, Expr) or callable(size):
+        raise ValueError(
+            "pixelize: size に Expr/lambda は使えません"
+            "（ffmpeg pixelizeフィルタが式評価非対応のため定数のみ）")
+    _require_number("pixelize", "size", size, 1, 1024)
+    return Effect("pixelize", size=int(size))
+
+
+def glow(radius=10, intensity=1.0):
+    """発光Effect: split→gblur→blend=screen の合成チェーン。
+
+    radius: ぼかしのシグマ（0.1〜1024）
+    intensity: 発光の強さ（0〜1、blendのall_opacity）
+    """
+    _require_number("glow", "radius", radius, 0.1, 1024)
+    _require_number("glow", "intensity", intensity, 0.0, 1.0)
+    return Effect("glow", radius=radius, intensity=intensity)
+
+
+_LUT_EXTS = {".cube", ".3dl", ".dat", ".m3d", ".csp"}
+
+
+def lut(file):
+    """3D LUT Effect（lut3dフィルタ）。file: .cube等のLUTファイルパス。
+
+    ファイルの存在を構築時に検証し、内容(FFP)をフィンガープリントに含める。
+    """
+    if not isinstance(file, str) or not file:
+        raise ValueError("lut: file にはLUTファイルパスの文字列を指定してください")
+    if not os.path.exists(file):
+        raise ValueError(f"lut: LUTファイルが見つかりません: {file}")
+    ext = os.path.splitext(file)[1].lower()
+    if ext not in _LUT_EXTS:
+        raise ValueError(
+            f"lut: 未対応のLUT形式です: '{ext}'（対応: {', '.join(sorted(_LUT_EXTS))}）")
+    return Effect("lut", file=file)
+
+
+def glitch(strength=1.0, interval=None):
+    """グリッチEffect: rgbashift + noise のプリセット。
+
+    strength: 強度（0〜5、RGBずらし量とノイズ量に反映）
+    interval: 秒指定で間欠発動（各周期の先頭30%区間のみ有効）。Noneで常時。
+    """
+    _require_number("glitch", "strength", strength, 0.0, 5.0)
+    if interval is not None:
+        _require_number("glitch", "interval", interval, 0.01, None)
+    return Effect("glitch", strength=strength, interval=interval)
+
+
+def perspective_warp(x0, y0, x1, y1, x2, y2, x3, y3):
+    """透視変形Effect（perspectiveフィルタ, sense=destination）。
+
+    入力の4隅（左上, 右上, 左下, 右下）の移動先座標(px)を指定する。
+    """
+    for name, v in zip(("x0", "y0", "x1", "y1", "x2", "y2", "x3", "y3"),
+                       (x0, y0, x1, y1, x2, y2, x3, y3)):
+        _require_number("perspective_warp", name, v)
+    return Effect("perspective_warp", x0=x0, y0=y0, x1=x1, y1=y1,
+                  x2=x2, y2=y2, x3=x3, y3=y3)
+
+
+def lens(k1=0, k2=0):
+    """レンズ歪みEffect（lenscorrectionフィルタ）。
+
+    k1: 2次歪み係数（-1〜1、負で樽型・正で糸巻き型の補正）
+    k2: 4次歪み係数（-1〜1）
+    """
+    _require_number("lens", "k1", k1, -1.0, 1.0)
+    _require_number("lens", "k2", k2, -1.0, 1.0)
+    return Effect("lens", k1=k1, k2=k2)
+
+
+def ken_burns(from_rect, to_rect, easing=None):
+    """Ken Burns Effect: 2つの矩形 (x, y, w, h) 間を補間してパン&ズーム。
+
+    zoompanは使わず、動的scale + 固定サイズcropで実現する。
+    from_rect/to_rect: 元素材ピクセル座標の (x, y, w, h) タプル（同一アスペクト比）
+    easing: イージング関数（ease_in_out_quad等）。省略時は線形。
+    出力サイズは両矩形の最大寸法（偶数丸め）に正規化される。
+    """
+    rects = {}
+    for nm, rect in (("from_rect", from_rect), ("to_rect", to_rect)):
+        if not isinstance(rect, (tuple, list)) or len(rect) != 4:
+            raise ValueError(
+                f"ken_burns: {nm} は (x, y, w, h) の4要素タプルで指定してください: {rect!r}")
+        for i, v in enumerate(rect):
+            _require_number("ken_burns", f"{nm}[{i}]", v)
+        if rect[2] <= 0 or rect[3] <= 0:
+            raise ValueError(f"ken_burns: {nm} の w, h は正の値が必要です: {rect!r}")
+        rects[nm] = tuple(rect)
+    fx, fy, fw, fh = rects["from_rect"]
+    tx, ty, tw, th = rects["to_rect"]
+    # アスペクト比の一致検証（1%許容）
+    if _builtins.abs(fw / fh - tw / th) > 0.01 * (fw / fh):
+        raise ValueError(
+            f"ken_burns: from_rect と to_rect のアスペクト比が一致していません"
+            f"（from: {fw}x{fh} = {fw / fh:.4f}, to: {tw}x{th} = {tw / th:.4f}）。"
+            f"同じアスペクト比の矩形を指定してください。")
+    out_w = int(_math.ceil(_builtins.max(fw, tw) / 2) * 2)
+    out_h = int(_math.ceil(_builtins.max(fh, th) / 2) * 2)
+    e_expr = _resolve_param(easing) if easing is not None else Var("u")
+    w_expr = lerp(fw, tw, e_expr)
+    s_expr = Const(out_w) / w_expr          # 全体スケール係数
+    x_expr = lerp(fx, tx, e_expr) * s_expr  # スケール後座標でのcrop位置
+    y_expr = lerp(fy, ty, e_expr) * s_expr
+    return Effect("ken_burns", s=s_expr, x=x_expr, y=y_expr, w=out_w, h=out_h)
+
+
+def drop_shadow(dx=5, dy=5, blur=8, color="black", opacity=0.5):
+    """ドロップシャドウEffect: split→色付け+gblur→本体の背後にoverlay。
+
+    dx, dy: 影のオフセット(px)。blur: ぼかしシグマ（0でシャープな影）。
+    出力キャンバスは影が収まるよう自動拡張される。
+    """
+    _require_number("drop_shadow", "dx", dx)
+    _require_number("drop_shadow", "dy", dy)
+    _require_number("drop_shadow", "blur", blur, 0.0, 100.0)
+    _require_number("drop_shadow", "opacity", opacity, 0.0, 1.0)
+    _parse_color_rgb(color)  # 構築時に色を検証
+    return Effect("drop_shadow", dx=int(_builtins.round(dx)),
+                  dy=int(_builtins.round(dy)), blur=blur,
+                  color=color, opacity=opacity)
+
+
+def outline(width=2, color="white"):
+    """縁取りEffect: alpha膨張（dilationフィルタをwidth回連結）ベース。
+
+    色付けした複製のalphaをdilationで膨張させ、本体をその上にoverlayする。
+    width: 縁取り幅px（1〜16の整数、dilation 1回につき1px膨張）
+    """
+    if isinstance(width, bool) or not isinstance(width, int) or not (1 <= width <= 16):
+        raise ValueError(f"outline: width は 1〜16 の整数で指定してください: {width!r}")
+    _parse_color_rgb(color)  # 構築時に色を検証
+    return Effect("outline", width=width, color=color)
+
+
 # --- 音声エフェクト関数 ---
 
 def again(value=1.0):
@@ -3382,6 +3748,216 @@ class _PauseFactory:
 
 
 pause = _PauseFactory()
+
+
+# --- トランジション/スライドショー（xfade） ---
+
+# FFmpeg 8.0 の xfade transition 名（custom は式指定用のため除外）
+_XFADE_TRANSITIONS = {
+    "fade", "wipeleft", "wiperight", "wipeup", "wipedown",
+    "slideleft", "slideright", "slideup", "slidedown",
+    "circlecrop", "rectcrop", "distance", "fadeblack", "fadewhite", "radial",
+    "smoothleft", "smoothright", "smoothup", "smoothdown",
+    "circleopen", "circleclose", "vertopen", "vertclose",
+    "horzopen", "horzclose", "dissolve", "pixelize",
+    "diagtl", "diagtr", "diagbl", "diagbr",
+    "hlslice", "hrslice", "vuslice", "vdslice",
+    "hblur", "fadegrays", "wipetl", "wipetr", "wipebl", "wipebr",
+    "squeezeh", "squeezev", "zoomin", "fadefast", "fadeslow",
+    "hlwind", "hrwind", "vuwind", "vdwind",
+    "coverleft", "coverright", "coverup", "coverdown",
+    "revealleft", "revealright", "revealup", "revealdown",
+}
+
+
+def _validate_xfade_kind(func_name, kind):
+    if kind not in _XFADE_TRANSITIONS:
+        raise ValueError(
+            f"{func_name}: 未知のtransition '{kind}'。\n"
+            f"有効な名前: {', '.join(sorted(_XFADE_TRANSITIONS))}")
+
+
+def _source_signature(path):
+    """素材パスの署名を返す（キャッシュ生成物はパス署名、通常素材はFFP署名）"""
+    if _is_cache_artifact_path(path):
+        # キャッシュ生成物はパス自体が内容由来の鍵を含む（dry_runでは未生成でFFP不可）
+        return f"src={path.replace(chr(92), '/')}"
+    try:
+        return f"ffp={_file_fingerprint(path)}"
+    except OSError:
+        return f"src={path.replace(chr(92), '/')}"
+
+
+def _xfade_scale_chain(w, h):
+    """xfade入力の正規化フィルタ（共通サイズ・SAR・alpha付きフォーマット）"""
+    return (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x00000000,"
+            f"setsar=1,format=yuva444p")
+
+
+def _finalize_generated_object(cache_path, cmd, origin_sources, total_dur):
+    """xfade生成物のObject化共通処理（plan/dry_run/実生成の分岐、compute()と同機構）"""
+    proj = Project._current
+    # レイヤー依存として元素材を記録（キャッシュ鮮度検証から漏れるのを防ぐ）
+    if proj is not None and proj._current_layer_file:
+        proj._extra_layer_deps.setdefault(
+            proj._current_layer_file, []).extend(origin_sources)
+    if proj is not None and getattr(proj, '_mode', None) == "plan":
+        pass  # plan pass: 生成スキップ
+    elif os.path.exists(cache_path):
+        pass  # キャッシュ命中
+    elif proj is not None and getattr(proj, '_dry_run', False):
+        proj._pending_compute_cmds[cache_path] = cmd
+    else:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        _run_ffmpeg_to_cache(cmd, cache_path, timeout=600)
+    obj = Object(cache_path)
+    obj._origin_sources = list(origin_sources)
+    obj._resolved_length = total_dur
+    return obj
+
+
+def slideshow(images, each=3.0, transition="fade", t_dur=0.5, size=None):
+    """画像列をxfadeで連結した1本の合成Objectを生成（キャッシュ生成物）。
+
+    images: 画像パスのリスト（2枚以上）
+    each: 1枚あたりの表示秒数、t_dur: トランジション秒数（each未満）
+    transition: xfadeのtransition名、size: (w, h)。省略時はProjectの解像度。
+    合成尺は len(images) * each 秒。音声なし。
+    """
+    if not isinstance(images, (list, tuple)) or len(images) < 2:
+        raise ValueError("slideshow: images には2枚以上の画像パスのリストを指定してください")
+    for img in images:
+        if not isinstance(img, str):
+            raise ValueError(f"slideshow: images の要素はパス文字列のみ: {img!r}")
+        if not os.path.exists(img):
+            raise ValueError(f"slideshow: 画像が見つかりません: {img}")
+        if _detect_media_type(img) != "image":
+            raise ValueError(f"slideshow: 画像のみ指定できます: {img}")
+    _validate_xfade_kind("slideshow", transition)
+    _require_number("slideshow", "each", each, 0.1, None)
+    _require_number("slideshow", "t_dur", t_dur, 0.01, None)
+    if t_dur >= each:
+        raise ValueError(
+            f"slideshow: t_dur ({t_dur}) は each ({each}) より短くしてください")
+    proj = Project._current
+    if size is None:
+        w = proj.width if proj else 1280
+        h = proj.height if proj else 720
+    else:
+        if not isinstance(size, (tuple, list)) or len(size) != 2:
+            raise ValueError(f"slideshow: size は (w, h) タプルで指定してください: {size!r}")
+        w, h = int(size[0]), int(size[1])
+    fps = proj.fps if proj else 30
+    n = len(images)
+    total = n * each
+
+    # キャッシュ署名
+    sigs = ["slideshow"]
+    sigs.extend(_source_signature(img) for img in images)
+    sigs.extend([f"each={each}", f"tr={transition}", f"tdur={t_dur}",
+                 f"size={w}x{h}", f"fps={fps}", f"ev={_ENGINE_VER}"])
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    cache_path = os.path.join(_ARTIFACT_DIR, "xfade", f"{key}.mkv")
+
+    # コマンド構築: 各画像を each+t_dur 秒（最後は each 秒）でループ入力し xfade 連結
+    cmd = ["ffmpeg", "-y"]
+    for i, img in enumerate(images):
+        d = each if i == n - 1 else each + t_dur
+        cmd.extend(["-loop", "1", "-framerate", str(fps), "-t", str(d), "-i", img])
+    parts = []
+    for i in range(n):
+        parts.append(f"[{i}:v]{_xfade_scale_chain(w, h)}[s{i}]")
+    cur = "[s0]"
+    for i in range(1, n):
+        out = f"[x{i}]"
+        offset = each * i
+        parts.append(
+            f"{cur}[s{i}]xfade=transition={transition}:duration={t_dur}:offset={offset}{out}")
+        cur = out
+    cmd.extend(["-filter_complex", ";".join(parts), "-map", cur,
+                "-c:v", "ffv1", "-level", "3", "-pix_fmt", "yuva444p",
+                "-t", str(total), cache_path])
+    return _finalize_generated_object(cache_path, cmd, list(images), total)
+
+
+def transition(obj_a, obj_b, kind="fade", duration=1.0):
+    """2つのObjectをxfadeで1本に連結した合成Objectを生成。
+
+    obj_a, obj_b は素のObject（Transform/Effect未適用）のみ。加工済み素材は
+    先に compute() で素材化してから渡す。両Objectはこの合成に消費され、
+    Projectのタイムラインからは除外される。画像は事前に .time(秒) が必要。
+    合成尺は dur_a + dur_b - duration 秒。音声は含まれない。
+    """
+    for nm, o in (("obj_a", obj_a), ("obj_b", obj_b)):
+        if not isinstance(o, Object):
+            raise TypeError(f"transition: {nm} は Object のみ: {type(o)}")
+        if o.transforms or o.effects or o.audio_effects:
+            raise ValueError(
+                f"transition: {nm} に Transform/Effect が適用されています。"
+                f"先に compute() で素材化してから渡してください。")
+        if o.media_type not in ("image", "video"):
+            raise ValueError(f"transition: {nm} は画像/動画のみ対応: {o.media_type}")
+    _validate_xfade_kind("transition", kind)
+    _require_number("transition", "duration", duration, 0.01, None)
+    proj = Project._current
+    w = proj.width if proj else 1280
+    h = proj.height if proj else 720
+    fps = proj.fps if proj else 30
+
+    def _clip_dur(o, nm):
+        if o.duration is not None:
+            return o.duration
+        if o.media_type == "image":
+            raise ValueError(
+                f"transition: 画像 {nm} ('{o.source}') には事前に .time(秒) が必要です")
+        rl = getattr(o, '_resolved_length', None)
+        if rl:
+            return rl
+        return o.length()
+
+    dur_a = _clip_dur(obj_a, "obj_a")
+    dur_b = _clip_dur(obj_b, "obj_b")
+    if duration >= dur_a or duration >= dur_b:
+        raise ValueError(
+            f"transition: duration ({duration}) は各素材の尺"
+            f"（obj_a: {dur_a}, obj_b: {dur_b}）より短くしてください")
+    total = dur_a + dur_b - duration
+
+    # 両Objectはこの合成に消費される → Projectから除外
+    origin_sources = []
+    for o in (obj_a, obj_b):
+        if proj is not None and o in proj.objects:
+            proj.objects.remove(o)
+        origin_sources.extend(getattr(o, '_origin_sources', None) or [o.source])
+
+    # キャッシュ署名
+    sigs = ["transition",
+            _source_signature(obj_a.source), _source_signature(obj_b.source),
+            f"da={dur_a}", f"db={dur_b}", f"kind={kind}", f"dur={duration}",
+            f"size={w}x{h}", f"fps={fps}", f"ev={_ENGINE_VER}"]
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    cache_path = os.path.join(_ARTIFACT_DIR, "xfade", f"{key}.mkv")
+
+    # コマンド構築: 両素材を共通サイズ/fpsへ正規化し xfade で連結
+    cmd = ["ffmpeg", "-y"]
+    for o in (obj_a, obj_b):
+        if o.media_type == "image":
+            cmd.extend(["-loop", "1", "-framerate", str(fps), "-i", o.source])
+        else:
+            cmd.extend(_decoder_input_args(o.source, o.media_type, fps))
+    parts = []
+    for i, (o, d) in enumerate(((obj_a, dur_a), (obj_b, dur_b))):
+        parts.append(
+            f"[{i}:v]trim=duration={d},setpts=PTS-STARTPTS,"
+            f"{_xfade_scale_chain(w, h)},fps={fps}[t{i}]")
+    offset = dur_a - duration
+    parts.append(
+        f"[t0][t1]xfade=transition={kind}:duration={duration}:offset={offset}[tout]")
+    cmd.extend(["-filter_complex", ";".join(parts), "-map", "[tout]",
+                "-c:v", "ffv1", "-level", "3", "-pix_fmt", "yuva444p",
+                "-t", str(total), cache_path])
+    return _finalize_generated_object(cache_path, cmd, origin_sources, total)
 
 
 # --- イージング関数 ---

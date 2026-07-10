@@ -17,6 +17,7 @@ morph.py - 最適輸送 + ワープ場によるモーフィング動画生成
 import argparse
 import inspect
 import os
+import sys
 import numpy as np
 from PIL import Image
 from scipy.optimize import linear_sum_assignment
@@ -377,6 +378,198 @@ def generate_rgba_frames(path_a, path_b, out_dir, n_frames, blend_fn=None, **par
 
 
 # ============================================================
+# パーティクル分解・集合（explode / assemble）
+# ============================================================
+
+def _load_image_rgba(path: str) -> np.ndarray:
+    """単一画像をRGBA配列として読み込む"""
+    return np.array(Image.open(path).convert("RGBA"))
+
+
+def _prepare_particles(path_a, *, max_pixels=2000, speed=200.0,
+                       spread=1.0, swirl=0.0, seed=42, expand=0):
+    """パーティクル前処理（画像読み込み→ピクセル抽出→初速度計算）
+
+    extract_pixels / subsample を流用し、各粒子の初速度を
+    「重心からの放射方向 + ランダムジッター + 回転（接線方向）」で決める。
+
+    返値: arr, canvas, positions, colors, velocities
+      - arr: RGBA画像（expand 指定時は透明マージン付き）
+      - canvas: (w, h)
+      - positions: (N, 2) 粒子の初期位置 [px]
+      - colors: (N, 4) 粒子の色 RGBA（0〜255, float64）
+      - velocities: (N, 2) 初速度 [px/正規化時間]
+    """
+    arr = _load_image_rgba(path_a)
+
+    # 粒子が枠外で切れるのを緩和する透明マージン
+    expand = int(max(expand, 0))
+    if expand > 0:
+        arr = np.pad(arr, ((expand, expand), (expand, expand), (0, 0)))
+
+    h, w = arr.shape[:2]
+    canvas = (w, h)
+
+    positions, colors = extract_pixels(arr)
+    rng = np.random.default_rng(seed)  # 再現性のため seed 必須
+    positions, colors = subsample(positions, colors, max_pixels, rng)
+    n = len(positions)
+    print(f"  粒子数: {n:,}（max_pixels={max_pixels}）")
+
+    if n == 0:
+        return arr, canvas, positions, colors, np.empty((0, 2))
+
+    # 放射方向の単位ベクトル（重心から外向き。重心直上の点はランダム方向）
+    centroid = positions.mean(axis=0)
+    offset = positions - centroid
+    dist = np.linalg.norm(offset, axis=1, keepdims=True)
+    theta = rng.uniform(0.0, 2.0 * np.pi, size=n)
+    rand_unit = np.column_stack([np.cos(theta), np.sin(theta)])
+    unit = np.where(dist > 1e-9, offset / np.maximum(dist, 1e-9), rand_unit)
+
+    # 初速度 = 放射方向（大きさにばらつき） + ランダムジッター + 回転成分
+    radial_mag = speed * rng.uniform(0.5, 1.5, size=(n, 1))
+    velocities = unit * radial_mag
+    if spread != 0.0:
+        velocities = velocities + speed * spread * 0.5 * rng.normal(size=(n, 2))
+    if swirl != 0.0:
+        # 重心まわりの回転（接線方向速度 v_t = ω × r の線形近似）
+        perp = np.column_stack([-offset[:, 1], offset[:, 0]])
+        velocities = velocities + swirl * perp
+
+    return arr, canvas, positions, colors, velocities
+
+
+def _generate_particle_frames(path_a, out_dir, n_frames, blend_fn, *, reverse,
+                              max_pixels=2000, speed=200.0, gravity=300.0,
+                              spread=1.0, swirl=0.0, particle_size=2,
+                              seed=42, dissolve=0.25, expand=0):
+    """explode / assemble 共通のフレーム生成コア
+
+    explode: 進行度 p=0 で元画像そのまま → p=1 で完全飛散＋フェードアウト。
+    assemble は同じ軌道の時間反転（p を 1→0 に逆走）として実装し、
+    コードを共有する。
+
+    パラメータ:
+        max_pixels: 粒子数の上限（超過分はサブサンプリング）
+        speed: 放射方向の初速度スケール [px/正規化時間]
+        gravity: 重力加速度 [px/正規化時間^2]（+y が下方向）
+        spread: 初速度のランダム散らばり係数（0 で純粋な放射状）
+        swirl: 重心まわりの回転角速度 [rad/正規化時間]（正で時計回り）
+        particle_size: 粒子（円）の半径 [px]
+        seed: 乱数シード（default_rng に渡す。再現性のため固定）
+        dissolve: 元画像→粒子表現へクロスフェードする進行度区間（0〜dissolve）
+        expand: キャンバスの透明マージン [px]（枠外に飛ぶ粒子の切れ防止）
+    """
+    if blend_fn is None:
+        blend_fn = ease_in_out
+
+    # --- 前処理（読み込み→抽出→初速度） ---
+    arr, canvas, positions, colors, velocities = _prepare_particles(
+        path_a, max_pixels=max_pixels, speed=speed,
+        spread=spread, swirl=swirl, seed=seed, expand=expand,
+    )
+    w, h = canvas
+    img_pm = premultiply_alpha(arr)
+    r = max(int(particle_size), 1)
+
+    os.makedirs(out_dir, exist_ok=True)
+    mode = "assemble" if reverse else "explode"
+    print(f"パーティクルフレーム生成（{mode}）: {n_frames}フレーム, {w}x{h}")
+    for i in tqdm(range(n_frames), desc=f"{mode} フレーム生成"):
+        t = i / max(n_frames - 1, 1)
+        # 粒子位置は物理シミュレーションのため負値・overshoot は無意味。
+        # generate_rgba_frames と異なり進行度は [0,1] にクランプする
+        et = min(max(blend_fn(t), 0.0), 1.0)
+        # assemble は explode の時間反転（進行度を 1→0 に逆走）
+        p = 1.0 - et if reverse else et
+
+        if p <= 0.0:
+            # 進行度0 = 元画像そのまま（ピクセル一致を保証）
+            rgba = arr
+        else:
+            # 粒子位置: pos + v*p + 0.5*g*p^2（p を正規化時間として扱う）
+            cur = positions + velocities * p
+            cur[:, 1] += 0.5 * gravity * p * p
+            fade = 1.0 - p  # 進行度1で完全フェードアウト
+
+            # 粒子レイヤーを描画（RGBA、円で塗りつぶし）
+            layer = np.zeros((h, w, 4), dtype=np.uint8)
+            xi = np.rint(cur[:, 0]).astype(np.int64)
+            yi = np.rint(cur[:, 1]).astype(np.int64)
+            vis = (xi >= -r) & (xi < w + r) & (yi >= -r) & (yi < h + r)
+            for x, y, col in zip(xi[vis], yi[vis], colors[vis]):
+                a = col[3] * fade
+                if a < 1.0:
+                    continue  # ほぼ透明な粒子はスキップ
+                cv2.circle(layer, (int(x), int(y)), r,
+                           (int(col[0]), int(col[1]), int(col[2]), int(a)),
+                           thickness=-1, lineType=cv2.LINE_AA)
+
+            # 元画像→粒子表現のクロスフェード（事前乗算済み空間で合成）
+            ramp = 1.0 if dissolve <= 0.0 else min(p / dissolve, 1.0)
+            part_pm = premultiply_alpha(layer)
+            blended = (1.0 - ramp) * img_pm + ramp * part_pm
+
+            # unpremultiply → RGBA（generate_rgba_frames と同じ流儀）
+            alpha = blended[:, :, 3:4]
+            safe_alpha = np.maximum(alpha, 1.0)
+            rgb = blended[:, :, :3] / safe_alpha * 255.0
+            rgba = np.clip(np.dstack([rgb, alpha]), 0, 255).astype(np.uint8)
+
+        frame_path = os.path.join(out_dir, f"frame_{i:05d}.png")
+        Image.fromarray(rgba, "RGBA").save(frame_path)
+
+    print(f"完了: {out_dir} ({n_frames}フレーム)")
+
+
+# **params で受け付ける既知キー（タイポ検出用）。
+# _generate_particle_frames のキーワード専用引数から導出し、二重管理を避ける
+PARTICLE_PARAM_KEYS = frozenset(
+    inspect.signature(_generate_particle_frames).parameters) - {
+        "path_a", "out_dir", "n_frames", "blend_fn", "reverse"}
+
+
+def _check_particle_params(params):
+    """未知キーはタイポの可能性が高いため明示的にエラーにする"""
+    unknown = set(params) - PARTICLE_PARAM_KEYS
+    if unknown:
+        raise ValueError(
+            f"未知のパラメータ: {sorted(unknown)}"
+            f"（有効なキー: {sorted(PARTICLE_PARAM_KEYS)}）"
+        )
+
+
+def generate_explode_frames(path_a, out_dir, n_frames, blend_fn=None, **params):
+    """画像を粒子化して飛散させる RGBA PNG 連番を生成
+
+    t=0 で元画像そのまま → t=1 で完全飛散＋フェードアウト。
+
+    Args:
+        path_a: 入力画像パス
+        out_dir: 出力ディレクトリ（frame_00000.png 〜）
+        n_frames: フレーム数
+        blend_fn: 進行カーブ t→et（None で ease_in_out）
+        **params: max_pixels, speed, gravity, spread, swirl,
+                  particle_size, seed, dissolve, expand
+    """
+    _check_particle_params(params)
+    _generate_particle_frames(path_a, out_dir, n_frames, blend_fn,
+                              reverse=False, **params)
+
+
+def generate_assemble_frames(path_a, out_dir, n_frames, blend_fn=None, **params):
+    """飛散状態の粒子が集合して画像になる RGBA PNG 連番を生成
+
+    explode の時間反転。t=0 で完全飛散 → t=1 で元画像そのまま。
+    引数は generate_explode_frames と同一。
+    """
+    _check_particle_params(params)
+    _generate_particle_frames(path_a, out_dir, n_frames, blend_fn,
+                              reverse=True, **params)
+
+
+# ============================================================
 # メイン処理
 # ============================================================
 
@@ -451,7 +644,50 @@ def create_video(path_a, path_b, output_path, *,
     print(f"完了: {output_path}")
 
 
+def _particle_cli(mode, argv):
+    """explode / assemble サブコマンドの CLI 処理"""
+    p = argparse.ArgumentParser(
+        prog=f"morph.py {mode}",
+        description=("画像を粒子化して飛散させる連番PNG生成" if mode == "explode"
+                     else "飛散状態から集合して画像になる連番PNG生成"),
+    )
+    p.add_argument("image", help="入力画像（PNG）")
+    p.add_argument("out_dir", help="出力ディレクトリ（frame_00000.png 〜）")
+    p.add_argument("--frames", type=int, default=30,
+                   help="フレーム数（デフォルト: 30）")
+    p.add_argument("--max-pixels", type=int, default=2000,
+                   help="粒子数の上限（デフォルト: 2000）")
+    p.add_argument("--speed", type=float, default=200.0,
+                   help="放射方向の初速度スケール（デフォルト: 200）")
+    p.add_argument("--gravity", type=float, default=300.0,
+                   help="重力加速度（デフォルト: 300、+yが下方向）")
+    p.add_argument("--spread", type=float, default=1.0,
+                   help="初速度のランダム散らばり係数（デフォルト: 1.0）")
+    p.add_argument("--swirl", type=float, default=0.0,
+                   help="重心まわりの回転角速度 [rad]（デフォルト: 0）")
+    p.add_argument("--particle-size", type=int, default=2,
+                   help="粒子の半径 [px]（デフォルト: 2）")
+    p.add_argument("--seed", type=int, default=42,
+                   help="乱数シード（デフォルト: 42）")
+    p.add_argument("--dissolve", type=float, default=0.25,
+                   help="元画像→粒子のクロスフェード区間（デフォルト: 0.25）")
+    p.add_argument("--expand", type=int, default=0,
+                   help="キャンバスの透明マージン [px]（デフォルト: 0）")
+    a = p.parse_args(argv)
+
+    fn = generate_explode_frames if mode == "explode" else generate_assemble_frames
+    fn(a.image, a.out_dir, a.frames,
+       max_pixels=a.max_pixels, speed=a.speed, gravity=a.gravity,
+       spread=a.spread, swirl=a.swirl, particle_size=a.particle_size,
+       seed=a.seed, dissolve=a.dissolve, expand=a.expand)
+
+
 def main():
+    # explode / assemble サブコマンド（既存のモーフィングCLIとは独立）
+    if len(sys.argv) > 1 and sys.argv[1] in ("explode", "assemble"):
+        _particle_cli(sys.argv[1], sys.argv[2:])
+        return
+
     p = argparse.ArgumentParser(
         description="最適輸送 + ワープ場によるモーフィング動画生成"
     )
