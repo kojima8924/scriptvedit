@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+.pytest_cache/
+
+# scriptvedit キャッシュ
+__cache__/
+
+# レンダリング出力・検証フレーム(生成物)
+output.mp4
+check_frames/
+test/output/
+test/*.mp4
+test/frame*.png
+sample/output*.mp4
+sample/frame_*.png
+sample/thumb_*.png
+sample/video_frame_*.png
+sample/showcase_thumbnail.png
+sample/slides/
+
+# アーカイブ
+*.zip
+
+# 未参照の大容量素材(必要になったら個別に追跡する)
+free-video*.mp4
+flowerbg_noaudio.mp4
+guitar_noaudio.mp4
+
+# ライセンス未確認の素材
+sample/nc342423_*.mp3
+sample/computer_screen_programming.png
