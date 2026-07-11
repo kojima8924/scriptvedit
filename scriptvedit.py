@@ -685,7 +685,8 @@ def _run_ffmpeg_to_cache(cmd, cache_path, timeout=600):
     try:
         _run_ffmpeg(run_cmd, timeout=timeout)
         os.replace(tmp_path, cache_path)
-        _GEN_COUNTER[0] += 1  # render統計用: 生成した中間ファイル数
+        with _GEN_COUNTER_LOCK:  # 並列レイヤー生成からの同時更新をアトミック化
+            _GEN_COUNTER[0] += 1  # render統計用: 生成した中間ファイル数
     finally:
         # 失敗時に残った一時ファイルを削除（成功時はos.replace済みで存在しない）
         try:
@@ -732,6 +733,9 @@ _ENCODER_MAP = {
 
 # 生成した中間ファイル数のカウンタ（render統計用。render開始時にリセット）
 _GEN_COUNTER = [0]
+# _GEN_COUNTER の並列更新保護（並列レイヤー生成での過少計上を防ぐ）
+import threading as _threading
+_GEN_COUNTER_LOCK = _threading.Lock()
 
 # 有効な出力品質サフィックス（draft時にチェックポイント鍵へ混ぜ本番と分離）
 _ACTIVE_QUALITY = [""]
@@ -919,7 +923,14 @@ def _build_text_filters(obj, start, dur):
     if kind == "subtitles":
         parts = [f"subtitles=filename={_escape_ffpath(spec['srt'])}"]
         if spec.get("style"):
-            style = spec["style"].replace("\\", "\\\\").replace("'", "\\'")
+            raw = spec["style"]
+            # force_style は単一引用符で囲むため、'→\' ではクォートが閉じて
+            # filtergraph が壊れる。アポストロフィを含む style は早期に拒否する。
+            if "'" in raw:
+                raise ValueError(
+                    "subtitles: style にアポストロフィ(')は使用できません "
+                    f"(force_style のクォートが壊れます): {raw!r}")
+            style = raw.replace("\\", "\\\\")
             parts[0] += f":force_style='{style}'"
         return parts
 
@@ -938,10 +949,12 @@ def _build_text_filters(obj, start, dur):
             prefix = content[:i + 1]
             t_on = start + i / cps
             if i < n - 1:
+                # 右端 exclusive の半開区間（隣接窓の境界フレーム二重描画を防ぐ）
                 t_off = start + (i + 1) / cps
+                enable = f"gte(t\\,{t_on:.4f})*lt(t\\,{t_off:.4f})"
             else:
-                t_off = start + dur  # 最後の全文は終了まで保持
-            enable = f"between(t\\,{t_on:.4f}\\,{t_off:.4f})"
+                # 最後の全文は終了まで保持（上限はオーバーレイ側のenableで制御）
+                enable = f"gte(t\\,{t_on:.4f})"
             text_opt = f"textfile={_escape_ffpath(_ensure_textfile(prefix))}"
             filters.append(
                 _build_drawtext_filter(spec, text_opt, start, dur, enable=enable))
@@ -949,8 +962,11 @@ def _build_text_filters(obj, start, dur):
 
     if kind == "counter":
         # value = from_ + (to-from_)*u を drawtext の %{eif} で整数表示（inline展開）
+        # %{eif} は切り捨てのため、四捨五入相当に +0.5*sign(to-from_) を加えて
+        # 目標値 to に到達させる（u<1 でも to まで表示されるように）。
         u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
-        val_expr = spec["from_"] + (spec["to"] - spec["from_"]) * Var("u")
+        val_expr = (spec["from_"] + (spec["to"] - spec["from_"]) * Var("u")
+                    + 0.5 * sign(spec["to"] - spec["from_"]))
         val_ff = val_expr.to_ffmpeg(u_expr)
         eif = f"%{{eif\\:{val_ff}\\:d"
         if spec["width"] is not None:
@@ -1109,8 +1125,8 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
     opfp = _op_prefix_fingerprint(ops)
     sigs.append(opfp)
     sigs.append(f"q={quality}")
-    if _ACTIVE_QUALITY[0]:
-        sigs.append(f"rq={_ACTIVE_QUALITY[0]}")
+    # 注: 生成される中間物の内容は draft/本番で同一のため、_ACTIVE_QUALITY(rq)は
+    # 鍵に含めない（含めると本番↔draft で全キャッシュミスになり無駄な再生成が起きる）
     sigs.append(f"ev={_ENGINE_VER}")
     if duration is not None:
         sigs.append(f"dur={duration}")
@@ -1146,8 +1162,7 @@ def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     sigs.append(f"dur={duration}")
     sigs.append(f"fps={fps}")
     sigs.append(f"q={quality}")
-    if _ACTIVE_QUALITY[0]:
-        sigs.append(f"rq={_ACTIVE_QUALITY[0]}")
+    # 中間物は draft/本番で同一内容のため rq(_ACTIVE_QUALITY)は鍵に含めない
     sigs.append(f"ev={_ENGINE_VER}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
     src_hash = hashlib.sha256(src_path.replace("\\", "/").encode()).hexdigest()[:8]
@@ -1171,8 +1186,7 @@ def _particle_cache_path(img_path, particle_op, duration, fps, quality="final"):
     sigs.append(f"dur={duration}")
     sigs.append(f"fps={fps}")
     sigs.append(f"q={quality}")
-    if _ACTIVE_QUALITY[0]:
-        sigs.append(f"rq={_ACTIVE_QUALITY[0]}")
+    # 中間物は draft/本番で同一内容のため rq(_ACTIVE_QUALITY)は鍵に含めない
     sigs.append(f"ev={_ENGINE_VER}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
     src_hash = hashlib.sha256(img_path.replace("\\", "/").encode()).hexdigest()[:8]
@@ -1521,7 +1535,12 @@ class Project:
         return os.path.join(_ARTIFACT_DIR, "chapters", f"{key}.txt")
 
     def _write_chapters_metadata(self, path):
-        """FFMETADATA1形式のチャプターファイルを書き出す"""
+        """FFMETADATA1形式のチャプターファイルを書き出す（絶対時刻）。
+
+        部分レンダ(render(start,end))では出力側 -ss/-t により FFmpeg が
+        チャプター時刻を自動でシフト/クランプするため（実測: ffmpeg 8.0）、
+        ここでは常に絶対時刻で書き出す。手動で window 減算すると二重シフトになり、
+        窓開始時にアクティブなチャプターも失われるため行わない。"""
         markers = self._sorted_markers()
         total = self.duration if self.duration is not None else (
             markers[-1][0] + 1 if markers else 1)
@@ -1531,7 +1550,7 @@ class Project:
             end_ms = int((markers[i + 1][0] if i + 1 < len(markers) else total) * 1000)
             if end_ms <= start_ms:
                 end_ms = start_ms + 1
-            safe = label.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ")
+            safe = label.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\r", " ").replace("\n", " ")
             lines.append("[CHAPTER]")
             lines.append("TIMEBASE=1/1000")
             lines.append(f"START={start_ms}")
@@ -1657,7 +1676,17 @@ class Project:
             has_audio = any(s.get("codec_type") == "audio" for s in streams)
             duration_str = data.get("format", {}).get("duration")
             duration = float(duration_str) if duration_str else None
-            info = {"has_audio": has_audio, "duration": duration}
+            # 音声ストリームのサンプルレート（aloop の size 算出に使用）
+            sample_rate = None
+            for s in streams:
+                if s.get("codec_type") == "audio" and s.get("sample_rate"):
+                    try:
+                        sample_rate = int(s["sample_rate"])
+                    except (ValueError, TypeError):
+                        sample_rate = None
+                    break
+            info = {"has_audio": has_audio, "duration": duration,
+                    "sample_rate": sample_rate}
             self._probe_cache[path] = info
             return info
         except FileNotFoundError:
@@ -1726,6 +1755,7 @@ class Project:
             for item in self.objects[start_idx:end_idx]:
                 if isinstance(item, _AnchorMarker):
                     continue
+                # _ScenePad は resolve 後に start_time/duration を持つため通常計上
                 if item.duration is not None:
                     end = item.start_time + item.duration
                     max_dur = max(max_dur, end)
@@ -1744,6 +1774,20 @@ class Project:
                         self._anchors[item.name] = current_time
                         if old_val != current_time:
                             changed = True
+                        continue
+                    if isinstance(item, _ScenePad):
+                        # シーン開始+目標尺まで current_time を進める（遅延パディング）。
+                        # pad量を duration として保持し、末尾シーンのパディングも
+                        # 総尺(_calc_total_duration)に反映されるようにする。
+                        scene_start = self._anchors.get(
+                            f"scene:{item.scene_name}", 0)
+                        target_time = scene_start + item.target_duration
+                        item.start_time = current_time
+                        pad_amt = float(max(0.0, target_time - current_time))
+                        if item.duration != pad_amt:
+                            item.duration = pad_amt
+                            changed = True
+                        current_time += pad_amt
                         continue
                     item.start_time = current_time
                     # name anchor: X.start 登録
@@ -1788,6 +1832,18 @@ class Project:
 
     def render(self, output_path, *, dry_run=False, timeout=1800,
                start=None, end=None, draft=False, alpha=False):
+        # _ACTIVE_QUALITY を try/finally で復元（draft レンダ後に "draft" が
+        # 残留して別レンダの鍵に混入するのを防ぐ。dry_run早期returnや例外時も復元）
+        _prev_active_quality = _ACTIVE_QUALITY[0]
+        try:
+            return self._render_impl(
+                output_path, dry_run=dry_run, timeout=timeout,
+                start=start, end=end, draft=draft, alpha=alpha)
+        finally:
+            _ACTIVE_QUALITY[0] = _prev_active_quality
+
+    def _render_impl(self, output_path, *, dry_run=False, timeout=1800,
+                     start=None, end=None, draft=False, alpha=False):
         self._reset_runtime_state()
         self._dry_run = dry_run
         self._draft = bool(draft)
@@ -1861,6 +1917,8 @@ class Project:
         try:
             planned |= set(self._collect_checkpoint_cmds().keys())
             planned |= set(self._collect_cache_cmds().keys())
+            planned |= set(self._collect_web_cmds().keys())
+            planned |= set(self._pending_compute_cmds.keys())
         except Exception:
             planned = set()
         finally:
@@ -2099,6 +2157,13 @@ class Project:
         for item in objects:
             if isinstance(item, _AnchorMarker):
                 anchors[item.name] = current_time
+                continue
+            if isinstance(item, _ScenePad):
+                # シーン開始+目標尺まで進める（遅延パディング、キャッシュ用アンカー整合）
+                scene_start = anchors.get(f"scene:{item.scene_name}", 0)
+                target_time = scene_start + item.target_duration
+                if current_time < target_time:
+                    current_time = target_time
                 continue
             if item.duration is not None:
                 current_time += item.duration
@@ -2834,11 +2899,16 @@ class Project:
         """aloop フィルタ文字列を構築（元素材長からループ用サンプル数を決定）。
         aloopは無限ループ(loop=-1)し、後段のatrim/durationで尺を確定する。"""
         length = _probe_audio_length(obj.source)
-        # サンプルレート不明のため48kHz想定で1周期分＋余裕を確保（実SRが低くても安全側）
-        if length:
-            size = int(_math.ceil(length * 48000)) + 48000
+        # 実サンプルレートを取得（高SR素材でも1周期分を確実に確保するため）。
+        info = self._probe_media(obj.source)
+        sr = info.get("sample_rate") if info else None
+        if length and sr:
+            size = int(_math.ceil(length * sr)) + sr
+        elif length:
+            # SR不明時は大きめ（192kHz相当）で1周期分＋余裕を確保
+            size = int(_math.ceil(length * 192000)) + 192000
         else:
-            size = 48000 * 60  # 取得不能時のフォールバック（約1分）
+            size = 192000 * 60  # 取得不能時のフォールバック（約1分・192kHz相当）
         return f"aloop=loop=-1:size={size}"
 
     def _resolve_obj_duration(self, obj, fallback=5):
@@ -3121,7 +3191,12 @@ class Project:
             else:
                 args.append("-an")
             return args
-        # h264 / 指定エンコーダ
+        # h264 / 指定エンコーダ（yuv420p固定・透過非対応コンテナ）
+        if getattr(self, "_alpha", False):
+            raise ValueError(
+                f"alpha=True は透過対応の出力(.webm/.webp/.png)でのみ有効です。\n"
+                f"現在の出力形式({kind})では yuv420p 固定のため透明背景が黒潰れします。\n"
+                f"透過が必要なら .webm / .webp / 連番.png で出力してください。")
         args = ["-c:v", self._encoder_cv]
         if draft:
             args.extend(self._encoder_draft_args)
@@ -3544,15 +3619,20 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
             top = _builtins.max(0, m - dyv)
             bottom = _builtins.max(0, m + dyv)
             p = f"{label_prefix}e{eff_idx}"
-            blur_part = f"gblur=sigma={bl}," if bl > 0 else ""
+            # ぼかしは pad の後に適用（端まで不透明な素材でも影が枠外へにじむように）
+            blur_part = f",gblur=sigma={bl}" if bl > 0 else ""
             filters.append("format=rgba")
             filters.append(
                 f"split[{p}a][{p}b];"
                 f"[{p}b]geq=r='{cr}':g='{cg}':b='{cb}':a='alpha(X\\,Y)*{op_}',"
-                f"{blur_part}"
-                f"pad=iw+{left + right}:ih+{top + bottom}:{left + dxv}:{top + dyv}:color=0x00000000[{p}s];"
+                f"pad=iw+{left + right}:ih+{top + bottom}:{left + dxv}:{top + dyv}:color=0x00000000"
+                f"{blur_part}[{p}s];"
                 f"[{p}s][{p}a]overlay={left}:{top}:eof_action=pass"
             )
+            # scale等で固定サイズ化済み(pad_size設定済み)なら、影の拡張分を加算して
+            # overlay中央配置((W-pad_size[0])/2)のずれを防ぐ
+            if pad_size:
+                pad_size = (pad_size[0] + left + right, pad_size[1] + top + bottom)
         elif e.name == "outline":
             # alpha膨張（dilationをwidth回連結）ベースの縁取り。
             # 色付けした複製のalphaを膨張させ、本体をその上にoverlayする。
@@ -3568,6 +3648,9 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
                 f"{dil}[{p}o];"
                 f"[{p}o][{p}a]overlay={wd}:{wd}:eof_action=pass"
             )
+            # scale等で固定サイズ化済みなら、縁取りの拡張分(2*wd)を加算して中央配置ずれを防ぐ
+            if pad_size:
+                pad_size = (pad_size[0] + 2 * wd, pad_size[1] + 2 * wd)
     return filters, pad_size
 
 
@@ -3970,6 +4053,21 @@ class Pause:
         return self
 
 
+class _ScenePad:
+    """シーン末尾の遅延パディングマーカー（レンダリングなし）。
+
+    _resolve_anchors 実行時に「シーン開始時刻 + 目標尺」まで current_time を進める。
+    自動尺(.time()省略/until)の尺確定後に実 used が反映されるため、
+    exec 時点で即 pad するより正確（pad 過大で後続シーンがずれるのを防ぐ）。
+    """
+    def __init__(self, scene_name, target_duration):
+        self.scene_name = scene_name
+        self.target_duration = target_duration
+        self.duration = None
+        self.start_time = 0
+        self.priority = 0
+
+
 class Scene:
     """シーンのコンテキストマネージャ（p.scene() が返す）。
 
@@ -3994,21 +4092,21 @@ class Scene:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
             return False
-        # このシーンで進行した尺を集計し、duration までパディング
-        used = 0.0
+        # 目安の used（確定尺のみ）で明らかな超過だけ警告する。
+        # 実パディングは _ScenePad による遅延解決（自動尺/until 確定後に正確化）。
+        est_used = 0.0
         for o in self.project.objects[self._start_index:]:
-            if isinstance(o, _AnchorMarker):
+            if isinstance(o, (_AnchorMarker, _ScenePad)):
                 continue
             if getattr(o, "_advance", True) and getattr(o, "duration", None):
-                used += o.duration
-        pad = self.duration - used
-        if pad < -1e-6:
+                est_used += o.duration
+        if est_used - self.duration > 1e-6:
             warnings.warn(
-                f"scene '{self.name}': 内容尺 {used:.3f}s が duration "
+                f"scene '{self.name}': 内容尺 {est_used:.3f}s が duration "
                 f"{self.duration}s を超えています（シーンが重なります）")
-        elif pad > 1e-6:
-            pause.time(pad)  # 次シーン開始まで時間を進める
-        # 終端アンカー
+        # 遅延パディングマーカー（_resolve_anchors でシーン開始+duration まで進める）
+        self.project.objects.append(_ScenePad(self.name, self.duration))
+        # 終端アンカー（pad 後の時刻 = シーン開始 + duration に解決される）
         anchor(f"scene:{self.name}.end")
         return False
 
@@ -4727,15 +4825,40 @@ def assemble_from(source, blend=None, **particle_params):
 
 # --- パス・物理・ノイズ（move系Effect / Expr） ---
 
+# パス/キーフレームの区分式で許容する最大点数（ネスト式の肥大化を防ぐ）
+_MAX_PATH_POINTS = 128
+
+
+def _piecewise_tree(u, values, bounds):
+    """区分式を二分探索木で構築（ネスト深度 O(log n)、MEMORY規約準拠）。
+
+    values[i] は境界で区切られた各区間の値 Expr（len(values)==len(bounds)+1）。
+    bounds は昇順の分割点。u < bounds[mid] で左右に再帰分岐する。
+    線形右畳み込み（O(n)ネスト）を避け、深い if_ ネストによる式肥大を防ぐ。
+    """
+    u = _to_expr(u)
+
+    def build(vals, bnds):
+        if not bnds:
+            return vals[0]
+        mid = len(bnds) // 2
+        left = build(vals[:mid + 1], bnds[:mid])
+        right = build(vals[mid + 1:], bnds[mid + 1:])
+        return if_(lt(u, Const(bnds[mid])), left, right)
+
+    return build(list(values), list(bounds))
+
+
 def _piecewise_scalar_expr(u, points, easing=None):
     """(t, v) の点列から u∈[0,1] 上の区分線形補間 Expr を構築（keyframes同型）
 
-    points は t 昇順。区間ごとに lerp し、if_ で連結する。easing 指定時は
+    points は t 昇順。区間ごとに lerp し、二分探索木で連結する。easing 指定時は
     各区間のローカル進行度に適用する。
     """
     u = _to_expr(u)
-    result = Const(points[-1][1])
-    for i in range(len(points) - 2, -1, -1):
+    values = []
+    bounds = []
+    for i in range(len(points) - 1):
         t0, v0 = points[i]
         t1, v1 = points[i + 1]
         seg = t1 - t0
@@ -4744,8 +4867,10 @@ def _piecewise_scalar_expr(u, points, easing=None):
         local = clip((u - Const(t0)) / Const(seg), 0, 1)
         if easing is not None:
             local = easing(local)
-        result = if_(lt(u, Const(t1)), lerp(v0, v1, local), result)
-    return result
+        values.append(lerp(v0, v1, local))
+        bounds.append(t1)
+    values.append(Const(points[-1][1]))  # u>=最後の境界の既定値
+    return _piecewise_tree(u, values, bounds)
 
 
 def _validate_points(func, points, min_n=2):
@@ -4764,6 +4889,9 @@ def move_along(points, *, easing=None, anchor="center"):
     """
     _validate_points("move_along", points)
     n = len(points)
+    if n > _MAX_PATH_POINTS:
+        raise ValueError(
+            f"move_along: 点数は最大{_MAX_PATH_POINTS}点までです（指定={n}）")
     ts = [i / (n - 1) for i in range(n)]
     x_pts = [(ts[i], float(points[i][0])) for i in range(n)]
     y_pts = [(ts[i], float(points[i][1])) for i in range(n)]
@@ -4792,6 +4920,9 @@ def path_bezier(*points, anchor="center"):
     """
     _validate_points("path_bezier", points, min_n=4)
     n = len(points)
+    if n > _MAX_PATH_POINTS:
+        raise ValueError(
+            f"path_bezier: 制御点は最大{_MAX_PATH_POINTS}点までです（指定={n}）")
     if (n - 1) % 3 != 0:
         raise ValueError(
             f"path_bezier: 制御点は 3n+1 個必要です（p0..p3, +3点ずつ）。指定={n}")
@@ -4807,21 +4938,23 @@ def path_bezier(*points, anchor="center"):
 
 
 def _bezier_path_coord_rev(ctrl, seg_count):
-    """複数セグメントを逆順で if_ 連結（後段区間が外側になるよう構築）"""
+    """複数セグメントを二分探索木で連結（ネスト深度 O(log n)）。
+
+    最終セグメント(u>=(seg_count-1)/seg_count)が既定区間となる。
+    """
     u = Var("u")
-    result = None
-    for k in range(seg_count - 1, -1, -1):
+    values = []
+    bounds = []
+    for k in range(seg_count):
         i0 = 3 * k
         p0, p1, p2, p3 = ctrl[i0], ctrl[i0 + 1], ctrl[i0 + 2], ctrl[i0 + 3]
         t0 = k / seg_count
         t1 = (k + 1) / seg_count
         s = clip((_to_expr(u) - Const(t0)) / Const(t1 - t0), 0, 1)
-        seg = _bezier_segment_expr(s, p0, p1, p2, p3)
-        if result is None:
-            result = seg
-        else:
-            result = if_(lt(_to_expr(u), Const(t1)), seg, result)
-    return result
+        values.append(_bezier_segment_expr(s, p0, p1, p2, p3))
+        if k < seg_count - 1:
+            bounds.append(t1)
+    return _piecewise_tree(u, values, bounds)
 
 
 def throw(vx, vy, *, gravity=1.0, x0=0.5, y0=0.5, anchor="center"):
@@ -4957,6 +5090,12 @@ class Group:
         return self
 
     def time(self, duration=None, *, name=None):
+        """各メンバーを time() で「順次配置」する（メンバーが順番に並ぶ）。
+
+        注意: time() は各メンバーを直列に配置するため、グループ全体の尺は
+        メンバー数 N 倍（N*duration）になる。全メンバーを同一開始時刻に
+        「同時に重ねて」配置したい場合は stack() または show() を使うこと。
+        """
         # name は先頭Objectにのみ付与（アンカー重複を避ける）
         for i, o in enumerate(self.objects):
             o.time(duration, name=name if i == 0 else None)
@@ -4970,6 +5109,20 @@ class Group:
     def show(self, duration, *, priority=None):
         for o in self.objects:
             o.show(duration, priority=priority)
+        return self
+
+    def stack(self, duration, *, priority=None):
+        """全メンバーを同一開始時刻に重ねて配置し、タイムラインを duration だけ進める。
+
+        time() が各メンバーを順次配置（グループ尺 N 倍）するのに対し、stack() は
+        全メンバーを同時表示する。各メンバーは show() で配置（advance しない）し、
+        タイムライン全体は末尾に一度だけ pause を挟んで duration 進める。
+        """
+        for o in self.objects:
+            o.show(duration, priority=priority)
+        # メンバーは advance しないため、タイムラインを一度だけ duration 進める
+        if self.objects and Project._current is not None:
+            pause.time(duration)
         return self
 
 
@@ -5155,7 +5308,12 @@ def ken_burns(from_rect, to_rect, easing=None):
     out_w = int(_math.ceil(_builtins.max(fw, tw) / 2) * 2)
     out_h = int(_math.ceil(_builtins.max(fh, th) / 2) * 2)
     e_expr = _resolve_param(easing) if easing is not None else Var("u")
-    w_expr = lerp(fw, tw, e_expr)
+    # overshoot 系イージング(ease_out_back/elastic 等)は e>1 になり得る。
+    # e>1 だと w_expr>元幅 → scale後幅<crop幅 となり FFmpeg が
+    # "Invalid too big size for width" でレンダを中断する。
+    # スケール算出用の補間係数のみ [0,1] にクランプする（x/y パンには overshoot を残す）。
+    e_clamped = clip(e_expr, 0, 1)
+    w_expr = lerp(fw, tw, e_clamped)
     s_expr = Const(out_w) / w_expr          # 全体スケール係数
     x_expr = lerp(fx, tx, e_expr) * s_expr  # スケール後座標でのcrop位置
     y_expr = lerp(fy, ty, e_expr) * s_expr
@@ -5436,6 +5594,13 @@ def audio_sequence(*objs, crossfade=1.0):
             raise TypeError(f"audio_sequence: 音声Objectかパス文字列のみ: {type(o)}")
     n = len(sources)
     lengths = [_probe_audio_length(s) or 5.0 for s in sources]
+    # acrossfade は各入力が crossfade 以上の長さを要する。
+    # 素材長 < crossfade だと total が 0/負値になり後続配置が破綻するため拒否。
+    for s, ln in zip(sources, lengths):
+        if ln < crossfade:
+            raise ValueError(
+                f"audio_sequence: 素材長({ln:.3f}s)が crossfade({crossfade}s)未満です: {s}\n"
+                f"crossfade を短くするか、より長い素材を指定してください。")
     total = sum(lengths) - crossfade * (n - 1)
 
     sigs = ["audio_sequence"]
@@ -6200,11 +6365,15 @@ def keyframes(*args, easing=None):
         points = [(float(args[i]), float(args[i+1])) for i in range(0, len(args), 2)]
     if len(points) < 2:
         raise ValueError("keyframes: 最低2つのキーフレームが必要です")
+    if len(points) > _MAX_PATH_POINTS:
+        raise ValueError(
+            f"keyframes: キーフレームは最大{_MAX_PATH_POINTS}点までです（指定={len(points)}）")
     points.sort(key=lambda p: p[0])
     def _inner(u):
         u = _to_expr(u)
-        result = Const(points[-1][1])
-        for i in range(len(points) - 2, -1, -1):
+        values = []
+        bounds = []
+        for i in range(len(points) - 1):
             t0, v0 = points[i]
             t1, v1 = points[i + 1]
             seg_len = t1 - t0
@@ -6212,9 +6381,10 @@ def keyframes(*args, easing=None):
             local_t = clip((u - Const(t0)) / Const(seg_len), 0, 1)
             if easing is not None:
                 local_t = easing(local_t)
-            seg_val = lerp(v0, v1, local_t)
-            result = if_(lt(u, Const(t1)), seg_val, result)
-        return result
+            values.append(lerp(v0, v1, local_t))
+            bounds.append(t1)
+        values.append(Const(points[-1][1]))  # u>=最後の境界の既定値
+        return _piecewise_tree(u, values, bounds)
     return _inner
 
 
@@ -6443,15 +6613,34 @@ def cache_clear(cache_dir=_CACHE_DIR):
         print(f"キャッシュディレクトリはありません: {cache_dir}")
 
 
+# watch が監視する拡張子（レイヤー.py + 画像/音声/フォント/字幕/HTML等の素材）
+_WATCH_EXTENSIONS = {
+    ".py", ".html", ".htm", ".css", ".js", ".srt", ".ass", ".vtt",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+    ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac",
+    ".mp4", ".mov", ".webm", ".mkv",
+    ".ttf", ".otf", ".ttc",
+    ".cube",
+}
+# 監視から除外するディレクトリ名（キャッシュ/生成物）
+_WATCH_SKIP_DIRS = {"__cache__", "__pycache__", ".git", "output"}
+
+
 def _watch_targets(script_path):
-    """監視対象ファイル集合を返す（スクリプト自身 + 同ディレクトリの .py 依存レイヤー）"""
+    """監視対象ファイル集合を返す（スクリプト自身 + サブディレクトリを含む
+    .py レイヤーおよび画像/音声/フォント等の素材ファイル）。
+    キャッシュ/生成物ディレクトリは除外する。"""
     script_path = os.path.abspath(script_path)
     targets = {script_path}
     d = os.path.dirname(script_path)
     try:
-        for name in os.listdir(d):
-            if name.endswith(".py"):
-                targets.add(os.path.join(d, name))
+        for dirpath, dirs, files in os.walk(d):
+            # キャッシュ/生成物ディレクトリを探索対象から除外（in-place で剪定）
+            dirs[:] = [x for x in dirs if x not in _WATCH_SKIP_DIRS]
+            for name in files:
+                ext = os.path.splitext(name)[1].lower()
+                if ext in _WATCH_EXTENSIONS:
+                    targets.add(os.path.join(dirpath, name))
     except OSError:
         pass
     return targets

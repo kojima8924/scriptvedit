@@ -32,7 +32,7 @@
       "-i",
       "../onigiri_tenmusu.png",
       "-vf",
-      "scale=iw*0.5:ih*0.5,format=rgba,split[fxe0a][fxe0b];[fxe0b]geq=r='0':g='0':b='0':a='alpha(X/,Y)*0.6',gblur=sigma=6,pad=iw+36:ih+36:18:18:color=0x00000000[fxe0s];[fxe0s][fxe0a]overlay=10:10:eof_action=pass",
+      "scale=iw*0.5:ih*0.5,format=rgba,split[fxe0a][fxe0b];[fxe0b]geq=r='0':g='0':b='0':a='alpha(X/,Y)*0.6',pad=iw+36:ih+36:18:18:color=0x00000000,gblur=sigma=6[fxe0s];[fxe0s][fxe0a]overlay=10:10:eof_action=pass",
       "-c:v",
       "ffv1",
       "-level",

@@ -2233,7 +2233,11 @@ def test_alpha_webm_format():
 
 
 def test_draft_key_separation():
-    """draft と本番でチェックポイント鍵が分離される"""
+    """draft と本番でチェックポイント鍵が共有される（中間物は同一内容のため）
+
+    以前は draft 時に鍵へ rq=draft を混ぜて分離していたが、生成される中間物の
+    内容は draft/本番で同一のため、分離すると本番↔draft で全キャッシュミスに
+    なり無駄な再生成が起きる。よって鍵は共有されるのが正しい。"""
     from scriptvedit import _checkpoint_cache_path, _ACTIVE_QUALITY, resize
     ops = [("transform", resize(sx=0.5, sy=0.5))]
     _ACTIVE_QUALITY[0] = ""
@@ -2241,9 +2245,9 @@ def test_draft_key_separation():
     _ACTIVE_QUALITY[0] = "draft"
     draft_path = _checkpoint_cache_path("../onigiri_tenmusu.png", ops)
     _ACTIVE_QUALITY[0] = ""
-    if final_path != draft_path:
-        return True, "draft/final鍵分離OK"
-    return False, "鍵が同一（分離失敗）"
+    if final_path == draft_path:
+        return True, "draft/final鍵共有OK（無駄な再生成なし）"
+    return False, "鍵が分離している（rqが残存）"
 
 
 def test_voice_without_svtts():
@@ -2280,6 +2284,147 @@ def test_inspect_report_text():
         if isinstance(rep, str) and "タイムライン" in rep:
             return True, "レポート生成OK"
         return False, f"レポート不正: {type(rep)}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_alpha_on_mp4_rejected():
+    """alpha=True を .mp4(非透過コンテナ)で指定 → ValueError（黒潰れ防止）"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_alpha_mp4.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        p.render("_tmp_alpha.mp4", dry_run=True, alpha=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "alpha=True" in msg and (".webm" in msg or "透過" in msg):
+            return True, msg.split("\n")[0]
+        return False, f"メッセージが不適切: {msg}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_audio_sequence_short_crossfade():
+    """audio_sequence: 素材長 < crossfade → ValueError"""
+    try:
+        # Impact-38.mp3 は約31秒。crossfade=100 は素材長を超える
+        audio_sequence("../Impact-38.mp3", "../Impact-38.mp3", crossfade=100)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "crossfade" in msg and "素材長" in msg:
+            return True, msg.split("\n")[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_move_along_too_many_points():
+    """move_along: 128点超 → ValueError"""
+    pts = [(i / 200.0, 0.5) for i in range(200)]
+    try:
+        move_along(pts)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "128" in msg else (False, f"不適切: {msg}")
+
+
+def test_keyframes_too_many_points():
+    """keyframes: 128点超 → ValueError"""
+    args = []
+    for i in range(200):
+        args.append((i / 200.0, 0.5))
+    try:
+        keyframes(*args)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "128" in msg else (False, f"不適切: {msg}")
+
+
+def test_counter_reaches_target():
+    """counter: %{eif}式に四捨五入(+0.5*sign)が入り目標値に到達する"""
+    layer = (
+        "from scriptvedit import *\n"
+        "c = counter(0, 100, format='%d', x=0.5, y=0.5, size=48)\n"
+        "c.time(4)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_counter_reach.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp_counter.mp4", dry_run=True)
+        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        # 四捨五入項 +0.5 が eif 式に含まれること（100 が表示されるようになる）
+        if "eif" in s and "+0.5" in s:
+            return True, "四捨五入項 +0.5 を確認"
+        return False, f"四捨五入項が見つからない: {s[:160]}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_typewriter_halfopen_enable():
+    """typewriter: 隣接窓が半開区間(gte/lt)で境界二重描画を防ぐ"""
+    layer = (
+        "from scriptvedit import *\n"
+        "tw = typewriter('あいう', cps=5, x=0.1, y=0.5, size=48)\n"
+        "tw.time(2)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_tw_boundary.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp_tw.mp4", dry_run=True)
+        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        # 中間文字の drawtext enable が gte(t,..)*lt(t,..) の半開区間であること
+        # （オーバーレイ側の enable は between を使うため、drawtext の gte*lt を確認）
+        if "gte(t" in s and "lt(t" in s and "gte(t\\,0.2000)*lt(t" in s:
+            return True, "半開区間enable(gte*lt)を確認"
+        return False, f"半開区間になっていない: {s[:200]}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_ken_burns_overshoot_clamp():
+    """ken_burns: overshoot easing でも scale式が[0,1]クランプされ幅破綻しない"""
+    layer = (
+        "from scriptvedit import *\n"
+        "img = Object('../onigiri_tenmusu.png')\n"
+        "img.time(3) <= ken_burns((0,0,800,450),(100,60,400,225), easing=ease_out_back)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_kb_overshoot.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp_kb.mp4", dry_run=True)
+        # checkpoint の scale フィルタに clip( が入り、係数がクランプされること
+        cache = cmd.get("cache", {}) if isinstance(cmd, dict) else {}
+        for path, c in cache.items():
+            cs = " ".join(c) if isinstance(c, list) else str(c)
+            if "scale=w=" in cs and "crop=" in cs:
+                # scale部分(crop直前)に clip( が含まれる＝スケール係数クランプ
+                scale_part = cs[cs.index("scale=w="):cs.index("crop=")]
+                if "clip(" in scale_part:
+                    return True, "scale係数の[0,1]クランプを確認"
+                return False, f"scaleにclipなし: {scale_part[:160]}"
+        return False, "ken_burns checkpointが見つからない"
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -2423,6 +2568,14 @@ ALL_TESTS = [
     ("draft鍵分離", test_draft_key_separation),
     ("voice例外処理", test_voice_without_svtts),
     ("inspect レポート", test_inspect_report_text),
+    # --- 統合レビュー修正の追加検証 ---
+    ("alpha=True on mp4拒否", test_alpha_on_mp4_rejected),
+    ("audio_sequence crossfade過大", test_audio_sequence_short_crossfade),
+    ("move_along点数上限", test_move_along_too_many_points),
+    ("keyframes点数上限", test_keyframes_too_many_points),
+    ("counter目標到達(+0.5)", test_counter_reaches_target),
+    ("typewriter半開区間", test_typewriter_halfopen_enable),
+    ("ken_burns overshootクランプ", test_ken_burns_overshoot_clamp),
 ]
 
 
