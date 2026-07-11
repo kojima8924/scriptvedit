@@ -11,6 +11,7 @@ import ftplib
 import html
 import io
 import os
+import ssl
 import subprocess
 import sys
 import time
@@ -38,9 +39,38 @@ def git_cmd(*args):
         return ""
 
 
+class _TolerantFTP_TLS(ftplib.FTP_TLS):
+    """データ転送後の TLS unwrap 失敗を許容する FTP_TLS
+
+    ロリポップのFTPSはデータ転送完了後に TLS の close_notify を送らず
+    データ接続を切るため、標準の storbinary 内 conn.unwrap() が
+    ConnectionResetError / SSLError を投げる（転送自体は完了している）。
+    unwrap の失敗のみ握りつぶし、その後 voidresp() で完了応答(226)を
+    読んで制御チャネルの同期を保つ。
+    """
+
+    def storbinary(self, cmd, fp, blocksize=8192, callback=None, rest=None):
+        self.voidcmd("TYPE I")
+        with self.transfercmd(cmd, rest) as conn:
+            while True:
+                buf = fp.read(blocksize)
+                if not buf:
+                    break
+                conn.sendall(buf)
+                if callback:
+                    callback(buf)
+            # TLS close_notify を送らないサーバ対策: unwrap の失敗は無視する
+            if isinstance(conn, ssl.SSLSocket):
+                try:
+                    conn.unwrap()
+                except (OSError, ValueError, ssl.SSLError):
+                    pass
+        return self.voidresp()
+
+
 def ftp_connect():
     """FTPS接続（explicit TLS、パッシブモード）"""
-    ftp = ftplib.FTP_TLS()
+    ftp = _TolerantFTP_TLS()
     ftp.connect(FTP_HOST, 21, timeout=30)
     ftp.login(FTP_USER, FTP_PASS)  # login()が内部でAUTH TLSを実行
     ftp.prot_p()  # データチャネルも暗号化
