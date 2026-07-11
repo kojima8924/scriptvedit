@@ -19,6 +19,10 @@ __all__ = [
     "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline",
     "slideshow", "transition",
     "again", "afade", "adelete", "delete", "trim", "atrim", "atempo",
+    # テキスト・字幕（drawtext/subtitlesベース）
+    "text", "typewriter", "counter", "subtitles",
+    # オーディオ系
+    "duck_under", "loop", "audio_sequence", "sfx", "audio_viz",
     # アンカー/同期
     "anchor", "pause",
     # Expr
@@ -651,6 +655,220 @@ _BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "
                      "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline"}
 
 
+# --- テキスト/字幕（drawtext・subtitles）ヘルパー ---
+
+# 日本語表示用フォントの既定候補（Windows）。先頭から存在するものを採用。
+_DEFAULT_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/meiryo.ttc",
+    "C:/Windows/Fonts/YuGothM.ttc",
+    "C:/Windows/Fonts/msgothic.ttc",
+    "C:/Windows/Fonts/msmincho.ttc",
+]
+
+
+def _resolve_font(font):
+    """フォントパスを解決。font省略時は既定候補から存在するものを返す。
+    見つからない場合は日本語エラーで案内する。"""
+    if font is not None:
+        path = font.replace("\\", "/")
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"指定フォントが見つかりません: {font}\n"
+                f"日本語表示には .ttc/.ttf の実在パスを指定してください "
+                f"(例: C:/Windows/Fonts/meiryo.ttc)")
+        return path
+    for cand in _DEFAULT_FONT_CANDIDATES:
+        if os.path.exists(cand):
+            return cand
+    raise FileNotFoundError(
+        "既定の日本語フォントが見つかりませんでした。\n"
+        "font= に実在するフォントパスを明示してください "
+        "(例: font='C:/Windows/Fonts/meiryo.ttc')。\n"
+        f"探索した候補: {', '.join(_DEFAULT_FONT_CANDIDATES)}")
+
+
+def _escape_ffpath(path):
+    """フィルタグラフのファイルパスをエスケープ（\\→/、:→\\:）してクォート。
+    fontfile / subtitles=filename 用。"""
+    p = path.replace("\\", "/").replace(":", "\\:")
+    return f"'{p}'"
+
+
+def _escape_textfile_content(s):
+    """drawtext textfile の中身用エスケープ。ファイル内容には filtergraph の
+    引用符/区切りは作用せず、drawtext のテキスト展開(% と \\)のみ効くため、
+    \\→\\\\ と %→\\% だけをエスケープすればよい（:や'はそのまま literal 表示）。
+    実測で確認済み（単一引用符 inline は ' の literal 化が描画されず不可）。"""
+    return s.replace("\\", "\\\\").replace("%", "\\%")
+
+
+def _ensure_textfile(content):
+    """テキスト内容を content-addressed なキャッシュファイルに書き出しパスを返す。
+    drawtext の textfile= で参照する。任意の文字（'、:、% 等）を確実に表示できる。"""
+    body = _escape_textfile_content(content)
+    key = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+    path = os.path.join(_ARTIFACT_DIR, "text", f"{key}.txt")
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+    return path
+
+
+def _escape_counter_literal(s):
+    """counter の format 前後リテラル（inline text= 内）用エスケープ。
+    inline 値は単一引用符で包むが、FFmpeg 8.0 では引用符内でも : , が区切り
+    扱いになるためエスケープする。' は inline では確実に描画できないため拒否。"""
+    if "'" in s:
+        raise ValueError(
+            "counter: format のリテラル部分にアポストロフィ(')は使用できません。"
+            "アポストロフィを含む固定文字は text() を併用してください。")
+    return (s.replace("\\", "\\\\").replace("%", "\\%")
+             .replace(":", "\\:").replace(",", "\\,"))
+
+
+def _validate_text_size(func, size_expr):
+    """size は定数のみ許可。FFmpeg 8.0 の drawtext は fontsize を式にすると
+    SEGV(0xC0000005)する（copy/setsar バリアでも回避不可・実測）。
+    x/y/alpha のアニメーションは安全に利用できる。"""
+    if not isinstance(size_expr, Const):
+        raise ValueError(
+            f"{func}: size は定数のみ対応です（アニメーション不可）。\n"
+            f"FFmpeg 8.0 の drawtext は fontsize を式にすると SEGV するため、"
+            f"サイズ変化は非対応です。x/y/alpha はアニメーション可能です。")
+    return size_expr
+
+
+def _text_size_opt(size_expr, u_expr):
+    """fontsize オプション文字列を返す（size は定数のみ・_validate_text_size で担保）"""
+    return f"fontsize={int(size_expr.value)}"
+
+
+def _text_anchor_xy(x_expr, y_expr, u_expr, anchor):
+    """テキスト配置の x/y drawtext 式を返す。
+    anchor='center': (frac*W - text_w/2, frac*H - text_h/2)
+    anchor='left'  : (frac*W, frac*H)   ※左上基準
+    x/y は 0..1 のキャンバス比率。"""
+    xf = x_expr.to_ffmpeg(u_expr)
+    yf = y_expr.to_ffmpeg(u_expr)
+    if anchor == "left":
+        return f"x='({xf})*W'", f"y='({yf})*H'"
+    return f"x='({xf})*W-text_w/2'", f"y='({yf})*H-text_h/2'"
+
+
+def _build_drawtext_filter(spec, text_opt, start, dur, *, enable=None):
+    """1個の drawtext フィルタ文字列を構築（text/typewriter/counter 共通）。
+    text_opt: 完成済みの "textfile=..." または "text=..." オプション文字列。"""
+    u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+    font = _escape_ffpath(spec["font"])
+    x_opt, y_opt = _text_anchor_xy(spec["x"], spec["y"], u_expr, spec["anchor"])
+    opts = [f"fontfile={font}"]
+    opts.append(text_opt)
+    opts.append(_text_size_opt(spec["size"], u_expr))
+    opts.append(f"fontcolor={spec['color']}")
+    opts.append(x_opt)
+    opts.append(y_opt)
+    alpha_expr = spec["alpha"]
+    if not (isinstance(alpha_expr, Const) and alpha_expr.value == 1.0):
+        opts.append(f"alpha='clip({alpha_expr.to_ffmpeg(u_expr)}\\,0\\,1)'")
+    if spec.get("box"):
+        opts.append("box=1")
+        opts.append(f"boxcolor={spec['box_color']}")
+        opts.append(f"boxborderw={spec['box_border']}")
+    if enable is not None:
+        opts.append(f"enable='{enable}'")
+    return "drawtext=" + ":".join(opts)
+
+
+def _build_text_filters(obj, start, dur):
+    """media_type=='text' Object の映像フィルタ（drawtext/subtitles）を返す。
+    start/dur はタイムライン上の表示開始時刻/尺（u 正規化に使用）。"""
+    spec = obj._text_spec
+    kind = spec["kind"]
+
+    if kind == "subtitles":
+        parts = [f"subtitles=filename={_escape_ffpath(spec['srt'])}"]
+        if spec.get("style"):
+            style = spec["style"].replace("\\", "\\\\").replace("'", "\\'")
+            parts[0] += f":force_style='{style}'"
+        return parts
+
+    if kind == "text":
+        text_opt = f"textfile={_escape_ffpath(_ensure_textfile(spec['content']))}"
+        return [_build_drawtext_filter(spec, text_opt, start, dur)]
+
+    if kind == "typewriter":
+        content = spec["content"]
+        n = len(content)
+        if n == 0:
+            return []
+        cps = spec["cps"]
+        filters = []
+        for i in range(n):
+            prefix = content[:i + 1]
+            t_on = start + i / cps
+            if i < n - 1:
+                t_off = start + (i + 1) / cps
+            else:
+                t_off = start + dur  # 最後の全文は終了まで保持
+            enable = f"between(t\\,{t_on:.4f}\\,{t_off:.4f})"
+            text_opt = f"textfile={_escape_ffpath(_ensure_textfile(prefix))}"
+            filters.append(
+                _build_drawtext_filter(spec, text_opt, start, dur, enable=enable))
+        return filters
+
+    if kind == "counter":
+        # value = from_ + (to-from_)*u を drawtext の %{eif} で整数表示（inline展開）
+        u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+        val_expr = spec["from_"] + (spec["to"] - spec["from_"]) * Var("u")
+        val_ff = val_expr.to_ffmpeg(u_expr)
+        eif = f"%{{eif\\:{val_ff}\\:d"
+        if spec["width"] is not None:
+            eif += f"\\:{spec['width']}"
+        eif += "}"
+        prefix = _escape_counter_literal(spec["prefix"])
+        suffix = _escape_counter_literal(spec["suffix"])
+        text_opt = "text='" + prefix + eif + suffix + "'"
+        return [_build_drawtext_filter(spec, text_opt, start, dur)]
+
+    raise ValueError(f"未知のテキスト種別: {kind}")
+
+
+def _new_text_object(spec):
+    """media_type=='text' の Object を生成して現在のProjectに登録する。
+    実体ファイルを持たず、レンダ時に透明lavfi + drawtext/subtitles で描画する。"""
+    obj = Object.__new__(Object)
+    obj.source = spec["synthetic_source"]
+    obj.transforms = []
+    obj.effects = []
+    obj.audio_effects = []
+    obj.duration = None
+    obj._duration_auto = False
+    obj.start_time = 0
+    obj.priority = 0
+    obj.media_type = "text"
+    obj._until_anchor = None
+    obj._until_offset = 0.0
+    obj._anchor_name = None
+    obj._advance = True
+    obj._priority_override = None
+    obj._video_deleted = False
+    obj._audio_deleted = False
+    obj._web_source = None
+    obj._web_size = None
+    obj._web_fps = None
+    obj._web_data = {}
+    obj._web_name = None
+    obj._web_debug_frames = False
+    obj._web_deps = []
+    obj._has_video = True
+    obj._has_audio = False
+    obj._text_spec = spec
+    if Project._current is not None:
+        Project._current.objects.append(obj)
+    return obj
+
+
 def _file_fingerprint(path):
     """ファイルの(絶対パス, サイズ, mtime_ns)タプルを返す"""
     abs_path = os.path.abspath(path).replace("\\", "/")
@@ -947,6 +1165,7 @@ class Project:
         self._layer_sources = {}  # layer filename → [参照ソースパス]（キャッシュ鮮度検証用）
         self._extra_layer_deps = {}  # layer filename → [追加依存パス]（morph_toターゲット等）
         self._layer_meta_cache = {}  # anchors.jsonパス → パース済みメタ（二重読み防止）
+        self._loudnorm_target = None  # normalize_audio() 設定時のLUFS目標
         Project._current = self
 
     def configure(self, **kwargs):
@@ -960,6 +1179,12 @@ class Project:
             setattr(self, key, value)
         if "duration" in kwargs:
             self._configured_duration = kwargs["duration"]
+
+    def normalize_audio(self, target=-14):
+        """最終音声にloudnorm(EBU R128)を適用しラウドネスを正規化する。
+        target: 目標ラウドネス(LUFS)。既定 -14（配信向け）。"""
+        _require_number("normalize_audio", "target", target, -70, 0)
+        self._loudnorm_target = target
 
     def _reset_runtime_state(self):
         """render()用の実行時状態をリセット"""
@@ -1611,6 +1836,8 @@ class Project:
         for obj in self.objects:
             if not isinstance(obj, Object):
                 continue
+            if obj.media_type == "text":
+                continue  # テキスト系は実体ファイルを持たずベイク対象外
             bakeable_ops, _ = _split_ops(_build_unified_ops(obj))
             if not bakeable_ops:
                 continue
@@ -1625,6 +1852,8 @@ class Project:
         for obj in self.objects:
             if not isinstance(obj, Object):
                 continue
+            if obj.media_type == "text":
+                continue  # テキスト系は実体ファイルを持たずベイク対象外
             ops = _build_unified_ops(obj)
             bakeable_ops, live_ops = _split_ops(ops)
             if not bakeable_ops:
@@ -1904,6 +2133,28 @@ class Project:
         os.replace(tmp_json, json_path)
         print(f"  アンカー保存: {json_path}")
 
+    def _loop_trim_duration(self, obj, loop_effect):
+        """loop(until=...) の実効トリム尺を返す（until優先→duration→全体尺）"""
+        start = obj.start_time
+        until = loop_effect.params.get("until")
+        if until is not None:
+            return max(0.0, until - start)
+        if obj.duration is not None:
+            return obj.duration
+        total = self.duration or self._calc_total_duration()
+        return max(0.0, total - start)
+
+    def _build_aloop_filter(self, obj, loop_effect):
+        """aloop フィルタ文字列を構築（元素材長からループ用サンプル数を決定）。
+        aloopは無限ループ(loop=-1)し、後段のatrim/durationで尺を確定する。"""
+        length = _probe_audio_length(obj.source)
+        # サンプルレート不明のため48kHz想定で1周期分＋余裕を確保（実SRが低くても安全側）
+        if length:
+            size = int(_math.ceil(length * 48000)) + 48000
+        else:
+            size = 48000 * 60  # 取得不能時のフォールバック（約1分）
+        return f"aloop=loop=-1:size={size}"
+
     def _resolve_obj_duration(self, obj, fallback=5):
         """objのduration未設定/0のとき実長で補完（取得不能・0のときのみfallback）
 
@@ -1916,7 +2167,7 @@ class Project:
         resolved = getattr(obj, '_resolved_length', None)
         if resolved:
             return resolved
-        if obj.media_type != "image":
+        if obj.media_type not in ("image", "text"):
             # trim/atrim/atempoを反映した加工後長（チェックポイントベイクと同一基準）
             try:
                 length = obj.length()
@@ -1963,12 +2214,19 @@ class Project:
 
         if audio_objects:
             audio_labels = []
+            idx_by_id = {}  # id(obj) → audio_labels内index（duck_underのother参照用）
             for ai, obj in enumerate(audio_objects):
+                idx_by_id[id(obj)] = ai
                 input_idx = input_map[id(obj)]
                 dur = self._resolve_obj_duration(obj)
                 start = obj.start_time
 
                 a_filters = []
+                # loop（aloop）: atrim/adelayより前に置き、以降のトリムで尺を確定
+                loop_effect = next(
+                    (e for e in obj.audio_effects if e.name == "loop"), None)
+                if loop_effect is not None:
+                    a_filters.append(self._build_aloop_filter(obj, loop_effect))
                 # atrim/atempo前処理
                 a_pre = _build_audio_pre_filters(obj)
                 # auto atrim: obj.durationがあり、明示atrimがなければ自動トリム
@@ -1977,6 +2235,11 @@ class Project:
                 if not has_explicit_atrim and obj.duration is not None:
                     a_pre = [f"atrim=duration={obj.duration}",
                              "asetpts=PTS-STARTPTS"] + a_pre
+                # loop で until 指定かつ obj.duration 未設定なら until までトリム
+                if (loop_effect is not None and not has_explicit_atrim
+                        and obj.duration is None):
+                    lt = self._loop_trim_duration(obj, loop_effect)
+                    a_pre = [f"atrim=duration={lt}", "asetpts=PTS-STARTPTS"] + a_pre
                 a_filters.extend(a_pre)
                 # 音声エフェクト（again/afade）
                 a_filters.extend(_build_audio_effect_filters(obj, dur))
@@ -1994,6 +2257,33 @@ class Project:
                     a_label = f"[{input_idx}:a]"
                 audio_labels.append(a_label)
 
+            # duck_under（sidechaincompress）: other音声再生中に自音量を下げる。
+            # otherをasplitでミックス用/サイドチェーン用に分岐して供給する。
+            for ai, obj in enumerate(audio_objects):
+                duck = next(
+                    (e for e in obj.audio_effects if e.name == "duck_under"), None)
+                if duck is None:
+                    continue
+                other = duck.params["other"]
+                if other is obj:
+                    raise ValueError("duck_under: other に自分自身は指定できません")
+                if id(other) not in idx_by_id:
+                    raise ValueError(
+                        "duck_under: other が同じProjectの再生対象音声に含まれていません。"
+                        "other 側の音声が adelete 等で除外されていないか確認してください。")
+                oi = idx_by_id[id(other)]
+                other_ref = audio_labels[oi]
+                filter_parts.append(
+                    f"{other_ref}asplit[dmix{ai}][dside{ai}]")
+                audio_labels[oi] = f"[dmix{ai}]"
+                my_ref = audio_labels[ai]
+                p = duck.params
+                filter_parts.append(
+                    f"{my_ref}[dside{ai}]sidechaincompress="
+                    f"threshold={p['threshold']}:ratio={p['ratio']}"
+                    f":attack={p['attack']}:release={p['release']}[duck{ai}]")
+                audio_labels[ai] = f"[duck{ai}]"
+
             if len(audio_labels) == 1:
                 audio_out = audio_labels[0]
                 # フィルタなしの生入力参照（[N:a]）はフィルタグラフのラベルではないため、
@@ -2008,6 +2298,13 @@ class Project:
                 filter_parts.append(
                     f"{amix_in}amix=inputs={len(audio_labels)}:normalize=0{audio_out}"
                 )
+
+            # normalize_audio（loudnorm）: 最終音声にラウドネス正規化を適用
+            if self._loudnorm_target is not None and audio_out is not None:
+                ln_in = audio_out if audio_out.startswith("[") else f"[{audio_out}]"
+                filter_parts.append(
+                    f"{ln_in}loudnorm=I={self._loudnorm_target}:TP=-1.5:LRA=11[aout_ln]")
+                audio_out = "[aout_ln]"
 
         cmd = ["ffmpeg", "-y"]
         cmd.extend(inputs)
@@ -2059,6 +2356,12 @@ def _get_base_dimensions(obj):
     resizeに加えてcrop/pad/rotate(expand)のサイズ変化も反映する
     （scaleエフェクトのpadサイズ過小による実行時エラーを防ぐ）。
     """
+    if getattr(obj, "media_type", None) == "text":
+        # テキスト系はキャンバス全面（Project解像度）を基底サイズとする
+        proj = Project._current
+        if proj is not None:
+            return proj.width, proj.height
+        return None, None
     src_w, src_h = _get_media_dimensions(obj.source)
     if src_w is None:
         return None, None
@@ -2110,6 +2413,15 @@ def _decoder_input_args(source, media_type, fps):
 
 def _build_input_args(obj, fps):
     """メディア種別に応じたffmpeg入力引数を構築（本レンダ/レイヤーキャッシュ共通）"""
+    if obj.media_type == "text":
+        # テキスト系は実体ファイルを持たず、透明lavfiキャンバスを入力にする。
+        # drawtext/subtitles は _build_video_overlay_parts でpre-filterとして重畳。
+        proj = Project._current
+        w = proj.width if proj else 1920
+        h = proj.height if proj else 1080
+        d = obj.duration or getattr(obj, "_resolved_length", None) or 5
+        return ["-f", "lavfi",
+                "-i", f"color=c=black@0.0:s={w}x{h}:d={d}:r={fps},format=rgba"]
     return _decoder_input_args(obj.source, obj.media_type, fps)
 
 
@@ -2127,6 +2439,9 @@ def _build_video_overlay_parts(obj, input_idx, current_base, dur):
     # trim/setpts の後に挿入し、trim がクローンフレーム込みで尺を切らないようにする
     if obj.media_type != "image" and start > 0:
         obj_filters.append(f"tpad=start_duration={start}:start_mode=clone")
+    # テキスト系: tpad後（タイムライン時刻に整列した後）にdrawtext/subtitlesを重畳
+    if obj.media_type == "text":
+        obj_filters.extend(_build_text_filters(obj, start, dur))
     obj_filters.extend(_build_transform_filters(obj))
     eff_filters, pad_size = _build_effect_filters(
         obj, start, dur, base_dims=base_dims, label_prefix=f"fx{input_idx}")
@@ -2924,9 +3239,9 @@ class Object:
     def time(self, duration=None, *, name=None):
         """表示時間を設定。省略時は加工後長(length())で自動決定（layer exec後に確定）"""
         if duration is None:
-            if self.media_type == "image":
+            if self.media_type in ("image", "text"):
                 raise TypeError(
-                    "画像には time() 省略は使えません。time(seconds) を指定してください。")
+                    "画像/テキストには time() 省略は使えません。time(seconds) を指定してください。")
             self.duration = None
             self._duration_auto = True
         else:
@@ -3118,8 +3433,8 @@ class Object:
 
     def length(self):
         """加工後の再生時間を返す（ffprobe + 時間影響エフェクト反映）"""
-        if self.media_type == "image":
-            raise TypeError("画像にはlength()を使えません。動画/音声のみ対応です。")
+        if self.media_type in ("image", "text"):
+            raise TypeError("画像/テキストにはlength()を使えません。動画/音声のみ対応です。")
         if self.media_type == "web":
             if self.duration is None:
                 raise TypeError("web Objectにはduration引数が必須です")
@@ -3707,6 +4022,316 @@ def atrim(duration=None):
 def atempo(rate=1.0):
     """音声テンポ変更（時間影響あり）"""
     return AudioEffect("atempo", rate=rate)
+
+
+# --- テキスト系ファクトリ（映像Object, drawtext/subtitlesベース） ---
+
+_TEXT_ANCHORS = ("center", "left")
+
+
+def _text_synthetic_source(spec_key):
+    """テキストObject用の合成ソースパス（実体なし・署名/一意化用）"""
+    h = hashlib.sha256(spec_key.encode("utf-8")).hexdigest()[:12]
+    return f"text://{h}.txt"
+
+
+def text(content, *, x=0.5, y=0.5, size=48, color="white", font=None,
+         box=False, box_color="black@0.5", box_border=10,
+         alpha=1.0, anchor="center"):
+    """drawtextでテキストを直接描画する映像Object（透明キャンバス全面）。
+
+    x/y/alpha は 0..1 のキャンバス比率で Expr/lambda 可（liveアニメ）。
+    size は定数のみ（FFmpeg 8.0 drawtext の fontsize 式は SEGV のため）。
+    日本語表示にはfont指定を推奨（未指定はmeiryo等の既定候補を自動探索）。
+    タイムラインには image と同様 .time(秒) で配置する。
+    """
+    if anchor not in _TEXT_ANCHORS:
+        raise ValueError(f"text: anchor は {_TEXT_ANCHORS} のいずれか: {anchor!r}")
+    spec = {
+        "kind": "text",
+        "content": str(content),
+        "x": _resolve_param(x), "y": _resolve_param(y),
+        "size": _validate_text_size("text", _resolve_param(size)),
+        "alpha": _resolve_param(alpha),
+        "color": color, "font": _resolve_font(font),
+        "box": bool(box), "box_color": box_color, "box_border": box_border,
+        "anchor": anchor,
+    }
+    spec["synthetic_source"] = _text_synthetic_source(
+        f"text|{content}|{x}|{y}|{size}|{color}|{anchor}")
+    return _new_text_object(spec)
+
+
+def typewriter(content, *, cps=10, x=0.5, y=0.5, size=48, color="white",
+               font=None, box=False, box_color="black@0.5", box_border=10,
+               alpha=1.0, anchor="left"):
+    """textの派生。1文字ずつ表示（n個のdrawtextを各文字の表示時刻でenable）。
+    cps: 1秒あたりの表示文字数。既定anchorは左上（左揃えで打ち出す）。"""
+    if anchor not in _TEXT_ANCHORS:
+        raise ValueError(f"typewriter: anchor は {_TEXT_ANCHORS} のいずれか: {anchor!r}")
+    if cps <= 0:
+        raise ValueError(f"typewriter: cps は正の数を指定してください: {cps}")
+    spec = {
+        "kind": "typewriter",
+        "content": str(content), "cps": float(cps),
+        "x": _resolve_param(x), "y": _resolve_param(y),
+        "size": _validate_text_size("typewriter", _resolve_param(size)),
+        "alpha": _resolve_param(alpha),
+        "color": color, "font": _resolve_font(font),
+        "box": bool(box), "box_color": box_color, "box_border": box_border,
+        "anchor": anchor,
+    }
+    spec["synthetic_source"] = _text_synthetic_source(
+        f"tw|{content}|{cps}|{x}|{y}|{size}|{color}|{anchor}")
+    return _new_text_object(spec)
+
+
+def _parse_counter_format(fmt):
+    """counterのformatを (prefix, suffix, width) に分解。整数指定のみ対応。"""
+    i = fmt.find("%")
+    if i < 0:
+        raise ValueError(
+            f"counter: format に数値プレースホルダ(%d 等)が必要です: {fmt!r}")
+    j = i + 1
+    zero = False
+    if j < len(fmt) and fmt[j] == "0":
+        zero = True
+        j += 1
+    digits = ""
+    while j < len(fmt) and fmt[j].isdigit():
+        digits += fmt[j]
+        j += 1
+    if j >= len(fmt):
+        raise ValueError(f"counter: format の変換指定が不完全です: {fmt!r}")
+    conv = fmt[j]
+    if conv not in ("d", "i"):
+        raise ValueError(
+            f"counter: format は整数指定(%d, %03d 等)のみ対応です: {fmt!r}\n"
+            f"小数表示は未対応です。")
+    width = int(digits) if (zero and digits) else None
+    return fmt[:i], fmt[j + 1:], width
+
+
+def counter(from_, to, *, format="%d", x=0.5, y=0.5, size=48, color="white",
+            font=None, box=False, box_color="black@0.5", box_border=10,
+            alpha=1.0, anchor="center"):
+    """数値カウントアップ映像Object。drawtextの%{eif}式で from_→to を補間表示。
+    format は整数指定(%d, %03d 等)。前後のリテラル文字も表示可能。"""
+    if anchor not in _TEXT_ANCHORS:
+        raise ValueError(f"counter: anchor は {_TEXT_ANCHORS} のいずれか: {anchor!r}")
+    prefix, suffix, width = _parse_counter_format(format)
+    _escape_counter_literal(prefix)  # アポストロフィ等の早期検証（inline不可文字）
+    _escape_counter_literal(suffix)
+    spec = {
+        "kind": "counter",
+        "from_": _resolve_param(from_), "to": _resolve_param(to),
+        "prefix": prefix, "suffix": suffix, "width": width,
+        "x": _resolve_param(x), "y": _resolve_param(y),
+        "size": _validate_text_size("counter", _resolve_param(size)),
+        "alpha": _resolve_param(alpha),
+        "color": color, "font": _resolve_font(font),
+        "box": bool(box), "box_color": box_color, "box_border": box_border,
+        "anchor": anchor,
+    }
+    spec["synthetic_source"] = _text_synthetic_source(
+        f"counter|{from_}|{to}|{format}|{x}|{y}|{size}|{color}|{anchor}")
+    return _new_text_object(spec)
+
+
+def subtitles(srt_file, *, style=None):
+    """SRT字幕ファイルをsubtitlesフィルタで合成する映像Object。
+    style: ASSのforce_styleスタイル文字列（例 "FontName=Meiryo,FontSize=28"）。
+    SRTは自身のタイムコードで表示されるため .time(全体尺) で開始0に配置する想定。"""
+    if not isinstance(srt_file, str):
+        raise TypeError(f"subtitles: srt_file はパス文字列で指定してください: {srt_file!r}")
+    if not os.path.exists(srt_file):
+        raise FileNotFoundError(f"subtitles: 字幕ファイルが見つかりません: {srt_file}")
+    ext = os.path.splitext(srt_file)[1].lower()
+    if ext not in (".srt", ".ass", ".vtt"):
+        raise ValueError(
+            f"subtitles: 対応拡張子は .srt/.ass/.vtt です: {srt_file}")
+    spec = {
+        "kind": "subtitles",
+        "srt": srt_file,
+        "style": style,
+        # drawtext系オプションは未使用だが _new_text_object の一貫性のため保持
+        "x": Const(0.5), "y": Const(0.5), "size": Const(48), "alpha": Const(1.0),
+        "color": "white", "font": None, "box": False,
+        "box_color": "black@0.5", "box_border": 10, "anchor": "center",
+    }
+    try:
+        ffp = _file_fingerprint(srt_file)
+        spec["synthetic_source"] = _text_synthetic_source(
+            f"subs|{ffp[0]}|{ffp[1]}|{ffp[2]}|{style}")
+    except OSError:
+        spec["synthetic_source"] = _text_synthetic_source(f"subs|{srt_file}|{style}")
+    obj = _new_text_object(spec)
+    # SRTをレイヤー依存として登録（cache鮮度検証で字幕変更を検知）
+    proj = Project._current
+    if proj is not None and proj._current_layer_file:
+        proj._extra_layer_deps.setdefault(
+            proj._current_layer_file, []).append(srt_file)
+    return obj
+
+
+# --- オーディオ系ファクトリ ---
+
+def duck_under(other, *, ratio=8, threshold=0.05, attack=20, release=250):
+    """sidechaincompress で other（ナレーション等）再生中に自音量を下げるAudioEffect。
+    other は同じProjectに存在する音声Objectを指定する。"""
+    if not isinstance(other, Object):
+        raise TypeError(f"duck_under: other は音声Objectを指定してください: {type(other)}")
+    return AudioEffect("duck_under", other=other, ratio=ratio,
+                       threshold=threshold, attack=attack, release=release)
+
+
+def loop(until=None):
+    """aloop で音声を until 時刻までループさせるAudioEffect。
+    until 省略時は Project.duration までループする。"""
+    return AudioEffect("loop", until=until)
+
+
+def _probe_audio_length(path):
+    """音声/動画の長さを取得（取得不能時はNone）"""
+    proj = Project._current
+    if proj is not None:
+        info = proj._probe_media(path)
+        if info and info.get("duration"):
+            return info["duration"]
+    return None
+
+
+def _validate_audio_source(func, path):
+    if not isinstance(path, str):
+        raise TypeError(f"{func}: ソースはパス文字列で指定してください: {path!r}")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{func}: 音声ファイルが見つかりません: {path}")
+    if _detect_media_type(path) not in ("audio", "video"):
+        raise ValueError(f"{func}: 音声(または動画音声)のみ指定できます: {path}")
+
+
+def audio_sequence(*objs, crossfade=1.0):
+    """複数の音声を acrossfade で連結した1つの音声Objectを生成（キャッシュ生成物）。
+    objs は音声Object または音声パス文字列（2つ以上）。"""
+    if len(objs) < 2:
+        raise ValueError("audio_sequence: 2つ以上の音声を指定してください")
+    _require_number("audio_sequence", "crossfade", crossfade, 0.01, None)
+    proj = Project._current
+    sources = []
+    for o in objs:
+        if isinstance(o, Object):
+            if o.media_type != "audio":
+                raise ValueError(
+                    f"audio_sequence: 音声Objectのみ連結できます: {o.source}")
+            sources.append(o.source)
+            if proj is not None and o in proj.objects:
+                proj.objects.remove(o)  # 合成に消費（タイムラインから除外）
+        elif isinstance(o, str):
+            _validate_audio_source("audio_sequence", o)
+            sources.append(o)
+        else:
+            raise TypeError(f"audio_sequence: 音声Objectかパス文字列のみ: {type(o)}")
+    n = len(sources)
+    lengths = [_probe_audio_length(s) or 5.0 for s in sources]
+    total = sum(lengths) - crossfade * (n - 1)
+
+    sigs = ["audio_sequence"]
+    sigs.extend(_source_signature(s) for s in sources)
+    sigs.extend([f"cf={crossfade}", f"ev={_ENGINE_VER}"])
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    cache_path = os.path.join(_ARTIFACT_DIR, "aseq", f"{key}.m4a")
+
+    cmd = ["ffmpeg", "-y"]
+    for s in sources:
+        cmd.extend(["-i", s])
+    parts = []
+    cur = "[0:a]"
+    for i in range(1, n):
+        out = f"[axf{i}]"
+        parts.append(f"{cur}[{i}:a]acrossfade=d={crossfade}{out}")
+        cur = out
+    cmd.extend(["-filter_complex", ";".join(parts), "-map", cur,
+                "-c:a", "aac", "-b:a", "192k", cache_path])
+    return _finalize_generated_object(cache_path, cmd, list(sources), total)
+
+
+def sfx(source, at, *, volume=1.0):
+    """同一音源を複数時刻(at)に配置した1つの音声Objectを生成（adelay+amix合成）。
+    at は秒のリスト。生成Objectは開始0でタイムラインに配置する想定。"""
+    _validate_audio_source("sfx", source)
+    if not isinstance(at, (list, tuple)) or len(at) == 0:
+        raise ValueError("sfx: at には配置時刻(秒)のリストを指定してください")
+    for t in at:
+        _require_number("sfx", "at要素", t, 0, None)
+    _require_number("sfx", "volume", volume, 0, None)
+    srclen = _probe_audio_length(source) or 5.0
+    times = list(at)
+    n = len(times)
+    total = _builtins.max(times) + srclen
+
+    sigs = ["sfx", _source_signature(source),
+            "at=" + ",".join(str(t) for t in times),
+            f"vol={volume}", f"ev={_ENGINE_VER}"]
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    cache_path = os.path.join(_ARTIFACT_DIR, "sfx", f"{key}.m4a")
+
+    parts = ["[0:a]asplit=" + str(n) + "".join(f"[s{i}]" for i in range(n))]
+    delayed = []
+    for i, t in enumerate(times):
+        ms = int(t * 1000)
+        if ms > 0:
+            parts.append(f"[s{i}]adelay={ms}:all=1[d{i}]")
+        else:
+            parts.append(f"[s{i}]anull[d{i}]")
+        delayed.append(f"[d{i}]")
+    mix_in = "".join(delayed)
+    tail = f",volume={volume}" if volume != 1.0 else ""
+    if n == 1:
+        parts.append(f"{mix_in}anull{tail}[a]")
+    else:
+        parts.append(f"{mix_in}amix=inputs={n}:normalize=0{tail}[a]")
+    cmd = ["ffmpeg", "-y", "-i", source,
+           "-filter_complex", ";".join(parts), "-map", "[a]",
+           "-c:a", "aac", "-b:a", "192k", "-t", str(total), cache_path]
+    return _finalize_generated_object(cache_path, cmd, [source], total)
+
+
+def audio_viz(source, *, kind="waves", color="white", size=None, duration=None):
+    """音声を showwaves/showspectrum/showcqt で可視化した映像Objectを生成（キャッシュ生成物）。
+    kind: 'waves' | 'spectrum' | 'cqt'。"""
+    _validate_audio_source("audio_viz", source)
+    if kind not in ("waves", "spectrum", "cqt"):
+        raise ValueError(f"audio_viz: kind は 'waves'/'spectrum'/'cqt': {kind!r}")
+    proj = Project._current
+    fps = proj.fps if proj else 30
+    dur = duration or _probe_audio_length(source) or 5.0
+    if size is not None:
+        if not isinstance(size, (tuple, list)) or len(size) != 2:
+            raise ValueError(f"audio_viz: size は (w, h) タプル: {size!r}")
+        w, h = int(size[0]), int(size[1])
+    elif kind == "waves":
+        w, h = (proj.width if proj else 1280), 240
+    else:
+        w, h = (proj.width if proj else 1280), (proj.height if proj else 720)
+
+    if kind == "waves":
+        viz = f"showwaves=s={w}x{h}:mode=cline:rate={fps}:colors={color}"
+    elif kind == "spectrum":
+        viz = f"showspectrum=s={w}x{h}:slide=scroll:fps={fps}"
+    else:
+        viz = f"showcqt=s={w}x{h}:fps={fps}"
+
+    sigs = ["audio_viz", _source_signature(source),
+            f"kind={kind}", f"color={color}", f"size={w}x{h}",
+            f"fps={fps}", f"dur={dur}", f"ev={_ENGINE_VER}"]
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    cache_path = os.path.join(_ARTIFACT_DIR, "aviz", f"{key}.mkv")
+
+    cmd = ["ffmpeg", "-y", "-i", source,
+           "-filter_complex", f"[0:a]{viz}[v]", "-map", "[v]",
+           "-c:v", "ffv1", "-level", "3", "-pix_fmt", "yuv420p",
+           "-t", str(dur), cache_path]
+    return _finalize_generated_object(cache_path, cmd, [source], dur)
 
 
 # --- アンカー/同期 ---

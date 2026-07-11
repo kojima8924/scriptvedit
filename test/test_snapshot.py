@@ -483,6 +483,63 @@ def setup_test51():
     return p.render("test51.mp4", dry_run=True)
 
 
+def setup_test52():
+    """text Effect: drawtextエスケープ + x/y/size/alphaアニメ + box"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test52_text.py", priority=0)
+    return p.render("test52.mp4", dry_run=True)
+
+
+def setup_test53():
+    """typewriter: 1文字ずつdrawtext + enable"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test53_typewriter.py", priority=0)
+    return p.render("test53.mp4", dry_run=True)
+
+
+def setup_test54():
+    """counter: %{eif}数値カウントアップ + format"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test54_counter.py", priority=0)
+    return p.render("test54.mp4", dry_run=True)
+
+
+def setup_test55():
+    """subtitles: SRT字幕 + force_style"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test55_subtitles.py", priority=0)
+    return p.render("test55.mp4", dry_run=True)
+
+
+def setup_test56():
+    """audio_viz: showwaves可視化（キャッシュ生成物）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test56_audio_viz.py", priority=0)
+    return p.render("test56.mp4", dry_run=True)
+
+
+def setup_test57():
+    """audio_sequence + sfx（キャッシュ生成物） + normalize_audio(loudnorm)"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.normalize_audio(-14)
+    p.layer("test57_audio_bake.py", priority=0)
+    return p.render("test57.mp4", dry_run=True)
+
+
+def setup_test58():
+    """loop(aloop) + duck_under(sidechaincompress)"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test58_audio_fx.py", priority=0)
+    return p.render("test58.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -535,6 +592,13 @@ ALL_TESTS = [
     ("test49", setup_test49),
     ("test50", setup_test50),
     ("test51", setup_test51),
+    ("test52", setup_test52),
+    ("test53", setup_test53),
+    ("test54", setup_test54),
+    ("test55", setup_test55),
+    ("test56", setup_test56),
+    ("test57", setup_test57),
+    ("test58", setup_test58),
 ]
 
 

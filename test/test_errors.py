@@ -12,6 +12,8 @@ from scriptvedit import (
     Transform, TransformChain, Effect, EffectChain,
     _checkpoint_cache_path, _file_fingerprint, _web_cache_path,
     anchor, pause,
+    text, typewriter, counter, subtitles,
+    duck_under, loop, audio_sequence, sfx, audio_viz,
 )
 
 
@@ -1618,6 +1620,275 @@ def test_drop_shadow_filter_in_checkpoint():
             os.unlink(temp_path)
 
 
+def _mk_project():
+    p = Project()
+    p.configure(width=640, height=360, fps=30, background_color="black")
+    return p
+
+
+def test_text_font_missing():
+    """text: 存在しないフォント → FileNotFoundError"""
+    _mk_project()
+    try:
+        text("あ", font="C:/no/such/font.ttc")
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "フォント" in msg else (False, msg)
+
+
+def test_text_size_expr_rejected():
+    """text: size=Expr → ValueError（FFmpeg 8.0 fontsize式SEGV回避）"""
+    _mk_project()
+    try:
+        text("あ", size=lambda u: 40 + 20 * u, font="C:/Windows/Fonts/meiryo.ttc")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "定数" in msg else (False, msg)
+
+
+def test_text_bad_anchor():
+    """text: 未知のanchor → ValueError"""
+    _mk_project()
+    try:
+        text("あ", anchor="middle", font="C:/Windows/Fonts/meiryo.ttc")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "anchor" in msg else (False, msg)
+
+
+def test_text_time_omit():
+    """text: time()省略 → TypeError（画像/テキストは尺必須）"""
+    _mk_project()
+    t = text("あ", font="C:/Windows/Fonts/meiryo.ttc")
+    try:
+        t.time()
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "テキスト" in msg else (False, msg)
+
+
+def test_typewriter_bad_cps():
+    """typewriter: cps<=0 → ValueError"""
+    _mk_project()
+    try:
+        typewriter("あ", cps=0, font="C:/Windows/Fonts/meiryo.ttc")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "cps" in msg else (False, msg)
+
+
+def test_counter_float_format():
+    """counter: format=%f（小数）→ ValueError"""
+    _mk_project()
+    try:
+        counter(0, 10, format="%.1f", font="C:/Windows/Fonts/meiryo.ttc")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "整数" in msg else (False, msg)
+
+
+def test_counter_apostrophe_format():
+    """counter: formatリテラルにアポストロフィ → ValueError（inline不可）"""
+    _mk_project()
+    try:
+        counter(0, 10, format="it's %d", font="C:/Windows/Fonts/meiryo.ttc")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "アポストロフィ" in msg else (False, msg)
+
+
+def test_subtitles_missing_file():
+    """subtitles: SRTファイル不在 → FileNotFoundError"""
+    _mk_project()
+    try:
+        subtitles("__no_such__.srt")
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        msg = str(e)
+        return (True, msg) if "字幕" in msg else (False, msg)
+
+
+def test_subtitles_bad_ext():
+    """subtitles: 非対応拡張子 → ValueError"""
+    _mk_project()
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_subs.txt")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("x")
+    try:
+        subtitles(tmp)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "拡張子" in msg else (False, msg)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_duck_under_non_object():
+    """duck_under: other非Object → TypeError"""
+    try:
+        duck_under("not_an_object")
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        return (True, msg) if "other" in msg else (False, msg)
+
+
+def test_duck_under_other_not_in_project():
+    """duck_under: other が再生対象外 → ValueError（レンダ時）"""
+    layer_code = (
+        "from scriptvedit import *\n"
+        "narr = Object('../ビックリ音.mp3')\n"
+        "narr.time(2) <= adelete()\n"  # 音声を除外
+        "bgm = Object('../Impact-38.mp3')\n"
+        "bgm.time(3) <= duck_under(narr)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_duck.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        p.render("_tmp.mp4", dry_run=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "duck_under" in msg else (False, msg)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_audio_sequence_too_few():
+    """audio_sequence: 入力1つ → ValueError"""
+    _mk_project()
+    try:
+        audio_sequence("../Impact-38.mp3")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "2つ以上" in msg else (False, msg)
+
+
+def test_audio_sequence_non_audio():
+    """audio_sequence: 画像パス → ValueError"""
+    _mk_project()
+    try:
+        audio_sequence("../onigiri_tenmusu.png", "../Impact-38.mp3")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "音声" in msg else (False, msg)
+
+
+def test_sfx_missing_source():
+    """sfx: ソース不在 → FileNotFoundError"""
+    _mk_project()
+    try:
+        sfx("__no_such__.mp3", at=[0.5])
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        msg = str(e)
+        return (True, msg) if "見つかりません" in msg else (False, msg)
+
+
+def test_sfx_empty_at():
+    """sfx: at空リスト → ValueError"""
+    _mk_project()
+    try:
+        sfx("../ビックリ音.mp3", at=[])
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "at" in msg else (False, msg)
+
+
+def test_audio_viz_bad_kind():
+    """audio_viz: 未知kind → ValueError"""
+    _mk_project()
+    try:
+        audio_viz("../Impact-38.mp3", kind="bogus")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "kind" in msg else (False, msg)
+
+
+def test_audio_viz_missing_source():
+    """audio_viz: ソース不在 → FileNotFoundError"""
+    _mk_project()
+    try:
+        audio_viz("__no_such__.mp3")
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        msg = str(e)
+        return (True, msg) if "見つかりません" in msg else (False, msg)
+
+
+def test_normalize_audio_range():
+    """normalize_audio: target範囲外 → ValueError"""
+    p = _mk_project()
+    try:
+        p.normalize_audio(10)  # 0より大きいLUFSは不正
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "target" in msg else (False, msg)
+
+
+def test_text_drawtext_in_cmd():
+    """text: 生成コマンドに drawtext と textfile が出ること"""
+    layer_code = (
+        "from scriptvedit import *\n"
+        "t = text(\"日本語: 100% 'x'\", font='C:/Windows/Fonts/meiryo.ttc')\n"
+        "t.time(2) <= fade(lambda u: u)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_text.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp.mp4", dry_run=True)
+        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        if "drawtext" in s and "textfile=" in s:
+            return True, "drawtext+textfile 出力OK"
+        return False, "drawtext/textfile が見つからない"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_loudnorm_in_cmd():
+    """normalize_audio: 生成コマンドに loudnorm が出ること"""
+    layer_code = (
+        "from scriptvedit import *\n"
+        "bgm = Object('../Impact-38.mp3')\n"
+        "bgm.time(3)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_ln.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = _mk_project()
+        p.normalize_audio(-16)
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp.mp4", dry_run=True)
+        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        return (True, "loudnorm 出力OK") if "loudnorm=I=-16" in s else (False, "loudnorm欠落")
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -1707,6 +1978,27 @@ ALL_TESTS = [
     ("transition Object消費", test_transition_consumes_objects),
     ("glow filter in checkpoint", test_glow_filter_in_checkpoint),
     ("drop_shadow filter in checkpoint", test_drop_shadow_filter_in_checkpoint),
+    # --- テキスト/字幕/オーディオ系（新機能） ---
+    ("text フォント不在", test_text_font_missing),
+    ("text size式拒否", test_text_size_expr_rejected),
+    ("text 不正anchor", test_text_bad_anchor),
+    ("text time省略", test_text_time_omit),
+    ("typewriter cps不正", test_typewriter_bad_cps),
+    ("counter 小数format", test_counter_float_format),
+    ("counter アポストロフィformat", test_counter_apostrophe_format),
+    ("subtitles ファイル不在", test_subtitles_missing_file),
+    ("subtitles 拡張子不正", test_subtitles_bad_ext),
+    ("duck_under 非Object", test_duck_under_non_object),
+    ("duck_under other対象外", test_duck_under_other_not_in_project),
+    ("audio_sequence 入力不足", test_audio_sequence_too_few),
+    ("audio_sequence 非音声", test_audio_sequence_non_audio),
+    ("sfx ソース不在", test_sfx_missing_source),
+    ("sfx at空", test_sfx_empty_at),
+    ("audio_viz 不正kind", test_audio_viz_bad_kind),
+    ("audio_viz ソース不在", test_audio_viz_missing_source),
+    ("normalize_audio 範囲外", test_normalize_audio_range),
+    ("text drawtext出力", test_text_drawtext_in_cmd),
+    ("normalize_audio loudnorm出力", test_loudnorm_in_cmd),
 ]
 
 
