@@ -1,7 +1,7 @@
 ============================================================
   scriptvedit プロジェクト状況レポート (Claude Code → ChatGPT)
   作成日: 2026-02-11
-  最終更新: 2026-07-10
+  最終更新: 2026-07-11
 ============================================================
 
 ============================================================
@@ -12,14 +12,16 @@
   「1ファイル = 1レイヤー」アーキテクチャを採用。
   main.py がオーケストレータ、各レイヤーは独立した .py ファイル。
 
-  コアファイル: scriptvedit.py (約3900行)
+  コアファイル: scriptvedit.py (約6560行)
   ライセンス: なし（個人プロジェクト）
   環境: Windows 11 / Python 3.10 / ffmpeg 8.0-full_build
 
   ◆ ファイル構成
     scriptvedit/
-    ├── scriptvedit.py   ← コアライブラリ (約3900行)
-    ├── morph.py         ← 最適輸送モーフィングエンジン (約490行、morph_to用)
+    ├── scriptvedit.py   ← コアライブラリ (約6560行)
+    ├── morph.py         ← 最適輸送モーフ + パーティクルエンジン (約730行、morph_to/explode_to/assemble_from用)
+    ├── svinspect.py     ← タイムライン検査ビュー (約840行、HTMLガント/テキストレポート、標準ライブラリのみ)
+    ├── svtts.py         ← VOICEVOX連携TTS (約220行、tts/speakers/tts_duration + CLI、標準ライブラリのみ)
     ├── upload_to_server.py ← export結果のFTPSアップロードスクリプト
     ├── main.py          ← オーケストレータ (デモ用)
     ├── bg.py            ← 背景レイヤー (デモ用)
@@ -34,11 +36,11 @@
     │   └── diagram_svg.html   ← SVG図解テンプレート
     ├── sample/          ← ショーケース動画関連（スライド・素材・生成物）
     ├── test/
-    │   ├── test_snapshot.py   ← スナップショットテスト (38テスト)
-    │   ├── test_errors.py     ← エラーケーステスト (66テスト)
+    │   ├── test_snapshot.py   ← スナップショットテスト (73テスト)
+    │   ├── test_errors.py     ← エラーケーステスト (134テスト)
     │   ├── render_all.py      ← 全テスト動画の実レンダリング
-    │   ├── snapshots/         ← スナップショットJSON (test01〜test38)
-    │   ├── test01〜test38_main.py + レイヤーファイル群
+    │   ├── snapshots/         ← スナップショットJSON (test01〜test73)
+    │   ├── test01〜test73 の main/レイヤーファイル群
     │   ├── test19_scene.html  ← web Objectテスト用HTML
     │   └── *.png, *.jpg       ← テスト用素材（コミット済み）
     ├── *.png, *.jpg     ← 素材画像 (リポジトリルート直下、変更禁止)
@@ -64,12 +66,13 @@
     8a6630e キャッシュ再設計: policy/quality方式 + signatureベース
     （中略: FFmpeg 8.0対応・レンダリング窓・showcase作成等）
 
-  ◆ 直近のコミット履歴 (git log --oneline -5 相当、新しい順)
-    907022b レビュー指摘の一括修正: キャッシュ原子化・SEGVバリア・レイヤーキャッシュ統合ほか ← 最新
-    074215a リポジトリ衛生: .gitignore追加、テスト生成物の追跡解除、必須素材をコミット
-    a2dc420 sample/showcase から morph・BGM レイヤーを削除
-    eb32c4e HTMLスライド化 + テンポ1.5倍 + デモ領域枠追加 + ウォーターマーク更新
-    cc017bc morph_to素材をカフカ→テントウムシに変更 + ease_out_cubicで減速移動
+  ◆ 直近のコミット履歴 (git log --oneline -6 相当、新しい順)
+    fb470d9 Wave4: 出力形式・キャッシュ管理・開発体験14種 ← 最新
+    11a923e Wave3: タイムライン構成・パスアニメーション・Expr拡張14種
+    27d39f6 Wave2: テキスト・字幕・オーディオ機能10種
+    608fbb7 Wave1: 映像エフェクト11種 + xfadeトランジション + パーティクル/可視化/TTSモジュール
+    c41e078 ドキュメント更新: README に新機能節を追加、Report を現状に同期
+    907022b レビュー指摘の一括修正: キャッシュ原子化・SEGVバリア・レイヤーキャッシュ統合ほか
 
 ============================================================
 2. 主要クラスとAPI（全クラス・全ファクトリ関数の一覧と説明）
@@ -421,7 +424,7 @@
 10. テスト一覧
 ============================================================
 
-  ◆ スナップショットテスト (test_snapshot.py) - 38テスト
+  ◆ スナップショットテスト (test_snapshot.py) - 73テスト（snapshots test01〜test73）
     test01〜test22: 基本機能（DSL・キャッシュ・anchor/pause・web Object等）
     test23: move保存テスト（resize(force) + move + scaleでmoveが消えないことを確認）
     test24: video checkpointテスト（動画のtransform-only → .webm拡張子）
@@ -440,7 +443,7 @@
     test37: color_shift Effect
     test38: subtitle_box Webテンプレート
 
-  ◆ エラーケーステスト (test_errors.py) - 66テスト
+  ◆ エラーケーステスト (test_errors.py) - 134テスト
     主なカバレッジ:
     - DSL誤用（math.sin使用、未定義アンカー、configureタイポ、%P記法等）
     - キャッシュ/演算子（policy/quality演算子、chain糖衣、FFP変化検出、checkpoint署名）
@@ -451,7 +454,10 @@
     - live Effect（move保持、shake is live）
     - until offset / time(name=) / show系 / compute の各種検証
 
-  ※ test_snapshot.py 38件 + test_errors.py 66件 全PASS確認済み（2026-07-10時点）
+  ※ test_snapshot.py 73件 + test_errors.py 134件 全PASS確認済み（2026-07-11時点）
+  ※ test39〜test73 は Wave1〜4 の新機能（映像エフェクト・テキスト・オーディオ・
+     パスアニメ・explode/assemble・group/grid・部分レンダ・チャプター・GIF/draft/
+     連番PNG/thumbnail/並列キャッシュ/inspect/watch 等）をカバー
 
 ============================================================
 11. 過去の主要変更（チェックポイント致命点修正）
@@ -571,65 +577,72 @@
 
 # === ChatGPT向け連絡事項 ===
 
-## 最新の更新 (2026-07-10, コミット 907022b)
+## 最新の更新 (2026-07-11)
 
-レビュー指摘の一括修正を実施。要点:
+4ウェーブで約53機能を追加した（コミット 608fbb7 / 27d39f6 / 11a923e / fb470d9）。
+scriptvedit.py は約6560行、テストは test_snapshot 73件 / test_errors 134件 全PASS。
 
-◆ 高優先（FFmpeg 8.0対応・データ破壊防止）
-  - 全キャッシュ書き込みをアトミック化（_run_ffmpeg_to_cache: 一時パス+os.replace、
-    置換0件は即エラー）。anchors.json も同様
-  - scale(eval=frame)+rotate の SEGV バリアとして pad 直後に copy を挿入
-  - Windows コマンドライン長対策: フィルタ4000文字以上で一時ファイル+
-    -/filter_complex 構文に自動切替（_externalize_long_filters）
-  - tpad を trim/setpts の後に移動（trim尺がクローンフレーム込みで切れるバグ修正）
-  - レイヤーキャッシュと本レンダのフィルタ構築を共通化
-    （_build_video_overlay_parts/_build_input_args）。trim無視・webm alpha喪失・
-    priority順無視・音声無警告脱落（→警告化）を解消
-  - morph_to 直前の未ベイクopsを中間チェックポイントにベイク
-    （resize等がサイレント消失するバグ修正）。effect/動画ソース併用時は
-    最終フレームをRGBA PNG抽出してモーフ入力に
-  - dry_run と実レンダの morph キャッシュ鍵を統一（キャッシュ生成物は src= 署名に固定）
+◆ Wave1 (608fbb7): 映像エフェクト11種 + トランジション + 新規モジュール
+  - 映像Effect（全 bakeable、3経路共有）: chroma_key / vignette / pixelize / glow /
+    lut / glitch / perspective_warp / lens / ken_burns / drop_shadow / outline
+    ・vignette は Expr で live 駆動、lut は素材FFPをキャッシュ署名に反映、
+      ken_burns は scale(eval=frame)+crop+copy(SEGVバリア) で実現
+  - slideshow(images) / transition(a, b): xfade連結のキャッシュ生成物（58遷移対応）
+  - morph.py: generate_explode_frames / generate_assemble_frames（粒子飛散/集合、
+    物理軌道+seed再現性。assemble は explode の時間反転）
+  - svinspect.py: render_timeline(HTMLガント) / report_text(テキスト)
+  - svtts.py: VOICEVOX連携 tts() / speakers() / tts_duration() + CLI
 
-◆ duration解決の統一
-  - duration==0 のゼロ除算（ffmpeg EINVAL）修正、_resolve_obj_duration を
-    obj.length() ベースに（trim/atempo反映）、レイヤーキャッシュ経路も同一解決に統一
-  - dry_run 中の未生成予定パスへの probe を抑制（警告約65件→0、
-    実レンダとのコマンド乖離解消）
+◆ Wave2 (27d39f6): テキスト・字幕・オーディオ10種
+  - text / typewriter / counter / subtitles（透明lavfi+drawtext/subtitlesのlive描画、
+    日本語対応、textfile= 方式で : , ' % を確実にエスケープ）
+  - normalize_audio / duck_under（sidechaincompress）/ loop（aloop）/
+    audio_sequence（acrossfade）/ sfx（adelay+amix）/ audio_viz（showwaves等）
 
-◆ その他の修正
-  - shake() 単独（moveなし）で無効だったバグ修正
-  - _find_resume_point の署名不整合（チェックポイントキャッシュ永久ミス）修正
-  - レイヤーキャッシュ鮮度検証を新設（anchors.json に素材FFP記録、
-    compute元素材・morphターゲット・web依存も追跡）
-  - フィルタなし音声の -map "[N:a]"（不正ラベル）を -map N:a に修正
-  - adelay を all=1 化（3ch以上対応）、probe失敗の render 内キャッシュ化、
-    rotate() への時間依存式・画像+morph_to の duration未設定を明示エラー化
-  - webm デコーダ判定を _decoder_input_args に一元化、デッドコード削除
-  - render() に timeout 引数追加（デフォルト1800秒）
-  - morph_to のパラメータ検証を構築時に前倒し（タイポは即ValueError）、
-    複数 morph_to は明示エラー
+◆ Wave3 (11a923e): タイムライン構成・パスアニメーション・Expr拡張14種
+  - explode_to / assemble_from（morph_to と同じ終端フレーム機構、
+    _TERMINAL_FRAME_EFFECTS で末尾検証を一般化）
+  - scene / render(start=, end=) / group / grid・tile / marker+export_chapters / param
+  - move_along / path_bezier / throw / inertia / look_at / rotate_to(follow=) / perlin
+  - Expr.plot（アスキーグラフ）/ explain（dur由来+フィルタチェーン表示）
 
-◆ morph.py
-  - overshoot系イージングのワープ変形を復元（クランプはアルファ合成のみに）
-  - MORPH_PARAM_KEYS をシグネチャから導出
-  - max_pixels ハードエラーを実効サンプル数ベースの警告に緩和（既存スクリプト互換）
-  - writer.release() の finally 化、共通処理の _prepare_morph 抽出
+◆ Wave4 (fb470d9): 出力形式・キャッシュ管理・開発体験14種
+  - 拡張子自動判定（.gif=2パスパレット / .webp / .png連番 / .webm）/ render(draft=True)
+  - configure(preset=) shorts/reel/square/hd/4k / configure(encoder=) nvenc等の検出
+  - render(alpha=True) 透過VP9(yuva420p) / thumbnail(at, out) / configure(parallel=N)
+  - cache CLI（--stats / --gc --keep-days N / --clear）/ レンダ統計 /
+    p.inspect()（svinspect統合）/ voice()（svtts統合）
+  - watch モード（標準ライブラリのポーリング）/ 「もしかして」提案（difflib）
 
-## 既知の不具合
+## 既知の制約・注意点
 
-- morph.py の後方ワープは前方基準の変位場を流用した近似実装のため、
-  大変位のモーフでにじみが出ることがある（意図的に未修正。厳密には
-  逆方向変位場の再計算が必要だが、品質/コストのトレードオフで現状維持）
-- レイヤーキャッシュに音声は含まれない（映像のみ）。音声を含むレイヤーの
-  キャッシュ生成時は警告を出す方式で対応（ハードエラーにはしない）
+- drawtext の fontsize 式アニメは FFmpeg 8.0 で SEGV のため、text/typewriter/counter の
+  size は定数のみ（式指定は日本語エラーで案内）。x/y/alpha アニメは正常動作。
+  pixelize の size、outline の width も同様に定数のみ
+- レイヤーキャッシュは音声非対応（映像のみ）。音声を含むレイヤーのキャッシュ生成時は
+  ハードエラーにせず警告方式で回避策を案内する（透過VP9への音声多重化が高リスクのため）
+- assemble_from は単一画像の自ピクセル集合（morph のような2画像間の最適輸送ではなく、
+  source 自身の粒子が集合していくアニメ）。source は合成に消費され Project から自動除外
+- encoder=nvenc 等は ffmpeg -encoders で検出はされるが、実レンダの検証は libx264 で実施。
+  検出できても環境により利用不可なら警告付きで libx264 にフォールバックする
+- vignette フィルタはアルファ非対応（透明部分が失われる）→ 全画面素材向け
+- 透過出力（alpha=True）は .webm（VP9 yuva420p）を推奨。h264 / gif はアルファを保持できない
+- morph_to / explode_to / assemble_from は bakeable ops の末尾に1つだけ配置する
+- 統計集計が dry_run の破壊的 source 差し替えと衝突する問題は、状態スナップショット/
+  復元で修正済み
+
+## 依存関係
+
+- コア: Python 3.10+ / ffmpeg 8.0（PATH必須）
+- テンプレート・web Object: Playwright + Chromium
+- voice(): VOICEVOX エンジンを別途起動する必要がある（既定 127.0.0.1:50021）。svtts.py 経由
+- svinspect.py / svtts.py は標準ライブラリのみで動作（VOICEVOX との通信時を除く）
+- inspect() / voice() は scriptvedit.py と同じディレクトリに svinspect.py / svtts.py が必要
 
 ## その他
 
-- .gitignore を新設し、テスト生成物・キャッシュを追跡解除。テストに必要な
-  素材ファイルはコミット済みのため、フレッシュクローンでそのまま
-  test_snapshot.py / test_errors.py が実行可能になった
-- upload_to_server.py を FTPS 化（FTP_TLS + prot_p、export失敗時の中断、
-  mlsdベースの安全な再帰削除）
+- .gitignore でテスト生成物・キャッシュを追跡解除。テストに必要な素材はコミット済みのため、
+  フレッシュクローンでそのまま test_snapshot.py / test_errors.py を実行可能
 - テストは test/ ディレクトリから実行すること（素材の相対パス依存）
 
 ============================================================

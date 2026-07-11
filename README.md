@@ -503,6 +503,211 @@ HTML内で `window.renderFrame(state)` 関数を定義する。
 `p.layer(filename, priority=N)` の `priority` で重ね順を制御する。
 値が大きいほど手前に表示。記述順に依存しない。
 
+### 映像エフェクト
+
+Effectとして時間軸上に適用する映像加工。すべて bakeable（checkpoint に焼き込まれる）。
+`obj.time(N) <= effect` で適用する。
+
+```python
+img.time(4) <= chroma_key(color="green", similarity=0.1, blend=0.0)  # 指定色を透明化
+img.time(4) <= vignette(strength=0.6)          # 周辺減光（strength 0..1 か angle=rad）
+img.time(4) <= pixelize(size=16)               # モザイク（size定数のみ）
+img.time(4) <= glow(radius=10, intensity=1.0)  # 発光（split→gblur→screen合成）
+img.time(4) <= lut("film.cube")                # 3D LUT（.cube/.3dl等）
+img.time(4) <= glitch(strength=1.0, interval=None)  # RGBずれ+ノイズ（interval秒で間欠）
+img.time(4) <= perspective_warp(0,0, 640,20, 40,360, 600,340)  # 4隅(左上/右上/左下/右下)の移動先px
+img.time(4) <= lens(k1=-0.2, k2=0.0)           # レンズ歪み補正（-1〜1）
+img.time(4) <= ken_burns((0,0,640,360), (200,120,320,180), easing=ease_in_out_quad)  # パン&ズーム
+img.time(4) <= drop_shadow(dx=5, dy=5, blur=8, color="black", opacity=0.5)  # ドロップシャドウ
+img.time(4) <= outline(width=2, color="white") # 縁取り（width 1〜16の整数）
+```
+
+- `vignette` は `angle`（rad, 0〜π/2）か `strength`（0〜1）の一方のみ指定。アルファ非対応のため全画面素材向け
+- `pixelize` の `size`、`outline` の `width` は式アニメ非対応（定数のみ）
+- `ken_burns` は from/to 矩形 `(x, y, w, h)`（同一アスペクト比）を指定。出力は両矩形の最大寸法に正規化される
+- `lut` はファイルの存在を構築時に検証し、内容をキャッシュ署名に含める
+
+### トランジション・スライドショー
+
+複数素材を xfade で1本に連結した合成Objectを生成する（キャッシュ生成物、音声なし）。
+
+```python
+# 画像列をクロスフェードで連結（各3秒表示、遷移0.5秒）
+show = slideshow(["a.png", "b.png", "c.png"], each=3.0, transition="fade", t_dur=0.5, size=None)
+show.time(9) <= move(x=0.5, y=0.5, anchor="center")
+
+# 2素材をxfadeで連結（Objectはこの合成に消費され、Projectのタイムラインから除外される）
+a = Object("a.png"); a.time(3)
+b = Object("b.png"); b.time(3)
+clip = transition(a, b, kind="wiperight", duration=1.0)
+clip.time(clip.duration) <= move(x=0.5, y=0.5, anchor="center")
+```
+
+- `slideshow` の合成尺は `len(images) * each` 秒、`t_dur` は `each` 未満
+- `transition` の合成尺は `dur_a + dur_b - duration` 秒。画像は事前に `.time(秒)` が必要
+- どちらも xfade の遷移名（fade/wiperight/circleopen 等 58種）を受け付ける。加工済み素材は先に `compute()` で素材化する
+
+### テキスト・字幕
+
+drawtext / subtitles で文字を直接描画する映像Object。画像同様 `.time(秒)` で配置する。
+
+```python
+text("こんにちは", x=0.5, y=0.3, size=64, color="white", box=True).time(3)     # 静的テキスト
+typewriter("1文字ずつ表示", cps=10, x=0.1, y=0.5).time(4)                      # タイプライタ
+counter(0, 100, format="%03d", x=0.5, y=0.5, size=80).time(4)                 # 数値カウントアップ
+subtitles("subs.srt", style="FontName=Meiryo,FontSize=28").time(30)           # SRT/ASS/VTT字幕
+```
+
+- `x` / `y` / `alpha` は 0..1 のキャンバス比率で Expr/lambda 可（liveアニメ）
+- `size` は定数のみ（FFmpeg 8.0 の drawtext fontsize 式は SEGV のため）
+- 日本語は `font=` 指定を推奨（未指定時は meiryo 等の既定候補を自動探索）
+- `counter` の `format` は整数指定（`%d` / `%03d` 等）のみ。前後のリテラル文字も表示可能
+- `subtitles` は SRT 自身のタイムコードで表示されるため `.time(全体尺)` で開始0に配置する
+
+### オーディオ（拡張）
+
+```python
+p.normalize_audio(target=-14)                        # 最終音声をloudnorm(EBU R128)で正規化(LUFS)
+
+bgm.time() <= loop(until=None) & duck_under(narration, ratio=8)  # ループ + 自動ダッキング
+
+seq = audio_sequence("a.mp3", "b.mp3", crossfade=1.0)  # acrossfade連結（2つ以上）
+hit = sfx("click.wav", at=[0.5, 1.5, 3.0], volume=1.0) # 同一音源を複数時刻に配置
+viz = audio_viz("bgm.mp3", kind="waves", color="cyan") # 波形/スペクトルを映像化
+```
+
+- `normalize_audio` は Project メソッド。`duck_under` / `loop` は AudioEffect（`&` で連結、`~` で無効化）
+- `duck_under(other, *, ratio=8, threshold=0.05, attack=20, release=250)`: `other`（ナレーション等）再生中に自音量を下げる
+- `loop(until=None)`: 省略時は Project.duration までループ
+- `audio_sequence` / `sfx` / `audio_viz` はキャッシュ生成物（音声/映像Objectを返す）。`audio_viz` の `kind` は `"waves"` / `"spectrum"` / `"cqt"`
+
+### パーティクル（explode / assemble）
+
+`morph_to` と同じ終端フレーム機構でベイクされる生成系Effect。bakeable ops の末尾に配置する。
+
+```python
+img.time(3) <= explode_to(blend=lambda u: u)          # 自身が粒子化して飛散
+img.time(3) <= assemble_from(Object("logo.png"))      # source の粒子が集合して画像になる
+```
+
+- パーティクルパラメータ（`**particle_params`）: `max_pixels`, `speed`, `gravity`, `spread`, `swirl`, `particle_size`, `seed`, `dissolve`, `expand`
+- `assemble_from(source)` の `source` は集合アニメに消費され、Project のタイムラインから自動除外される
+- 生成エンジンは `morph.py`（`generate_explode_frames` / `generate_assemble_frames`）
+
+### タイムライン構成
+
+```python
+# シーン: with 内は相対時刻、シーンは時間軸上に順次配置される
+with scene("intro", 5):
+    title.time(3) <= fade(lambda u: u)
+
+# 部分レンダ: 時間窓 [start, end) のみ出力（式の t 基準は保持）
+p.render("clip.mp4", start=2.0, end=5.0)
+
+# group: 複数Objectへ Transform/Effect/time を一括適用
+group(a, b, c) <= move(x=0.5, y=0.5, anchor="center")
+group(a, b).time(3)
+
+# grid / tile: 画像を cols×rows に複製配置（背景パターン）
+bg.grid(4, 3, gap=8)              # または tile(bg, 4, 3, gap=8)
+
+# marker / チャプター: mp4 に FFMETADATA 埋め込み + YouTube 目次を書き出し
+p.marker(0, "オープニング"); p.marker(12, "本編")
+p.export_chapters("chapters.txt")
+
+# param: CLI / 環境変数で差し替え可能なテンプレート変数
+title_text = p.param("title", "デフォルト")   # --param title=... / SCRIPTVEDIT_PARAM_title
+```
+
+- `grid(cols, rows, *, gap=0)` は画像素材のみ。`marker` は `render()` 時にチャプターとして埋め込まれる
+- `param` は `default` の型（int/float/bool）に合わせて文字列値を変換する（バッチ生成用）
+
+### パスアニメーション・Expr拡張
+
+```python
+# パス移動（いずれも move 系 Effect。x/y は画面比率 0..1）
+obj.time(4) <= move_along([(0.1,0.5),(0.5,0.2),(0.9,0.5)], easing=ease_in_out_quad)  # 区分線形
+obj.time(4) <= path_bezier((0.1,0.5),(0.3,0.1),(0.7,0.9),(0.9,0.5))   # 3n+1点の3次ベジェ
+obj.time(4) <= throw(vx=0.4, vy=-0.6, gravity=1.0)      # 放物運動（+yが下）
+obj.time(4) <= inertia(vx=0.5, vy=0.0, damping=3.0)     # 慣性減速（指数減衰）
+
+# 進行方向追従回転（look_at / rotate_to(follow=)）
+path = move_along([(0.1,0.5),(0.9,0.5)])
+obj.time(4) <= path & look_at(path, offset_deg=90)      # パスの進行方向を向く
+obj.time(4) <= path & rotate_to(follow=path)            # look_at と同義
+
+# perlin: 手ブレ用の滑らかな擬似ノイズ「値式」（move/rotate_to 等に渡せる）
+obj.time(4) <= move(x=lambda u: 0.5 + perlin(u, amplitude=0.02),
+                    y=lambda u: 0.5 + perlin(u, seed=1, amplitude=0.02))
+
+# デバッグ表示
+(sin(Var("u") * PI)).plot()      # u=0..1 のアスキー折れ線グラフを表示（matplotlib非依存）
+p.explain(obj)                   # obj のフィルタチェーンと u 正規化の分母(dur)の由来を表示
+```
+
+- `perlin(u, *, octaves=2, seed=0, frequency=1.0, amplitude=1.0)`: 非整数周波数の sin 合成で不規則な揺れを作る（shake は規則的正弦）
+- `Expr.plot(samples=60, height=15, width=60)` は `u` のみに依存する式に使う
+
+### 出力形式
+
+`render()` の出力拡張子で形式を自動判定する。
+
+```python
+p.render("out.mp4")               # H.264 / AAC（既定）
+p.render("out.gif")               # GIF（2パスパレット）
+p.render("out.webp")              # アニメーション WebP
+p.render("out.png")               # 連番PNG（out.png → out_%05d.png）
+p.render("out.webm", alpha=True)  # 透過VP9（yuva420p）
+p.render("out.mp4", draft=True)   # ドラフト（半解像度・ultrafast・crf28。鍵は本番と分離）
+p.thumbnail(at=2.5, out="thumb.png")   # 指定時刻の1フレームをPNG抽出
+```
+
+`configure` で解像度プリセット / エンコーダ / 並列度を設定する。
+
+```python
+p.configure(preset="shorts")      # shorts/reel/square/hd/720p/2k/4k 等（w/h/fps を一括設定）
+p.configure(encoder="nvenc")      # nvenc/hevc_nvenc/qsv/hevc（利用不可なら libx264 へ警告付きフォールバック）
+p.configure(parallel=4)           # キャッシュ並列生成のワーカ数
+```
+
+- 透過出力（`alpha=True`）は `.webm`（VP9）を推奨。gif / h264 はアルファを保持できない
+- `encoder` は `ffmpeg -encoders` で検出のみ。検出できても環境により libx264 にフォールバックし得る
+
+### ツール・開発体験（DX）
+
+```python
+# 検査ビュー（svinspect 統合）
+p.inspect("timeline.html")        # HTMLガントチャートを書き出しパスを返す
+print(p.inspect())                # 省略時はテキストレポート文字列を返す
+
+# ファイル監視（標準ライブラリのポーリング。変更時に再実行）
+watch("main.py", out="out.mp4", interval=0.5, max_cycles=None)
+```
+
+キャッシュ管理・監視は CLI からも実行できる。
+
+```
+python scriptvedit.py cache --stats             # 種別ごとの件数・サイズ
+python scriptvedit.py cache --gc --keep-days 7  # 7日より古い生成物を削除
+python scriptvedit.py cache --clear             # キャッシュ全削除
+python scriptvedit.py watch main.py --out out.mp4
+```
+
+不明な設定キー・プリセット名・エンコーダ名・`audio_viz` の kind などは、difflib による「もしかして: ...?」候補付きのエラーになる。
+
+### 外部連携（VOICEVOX / svtts）
+
+`voice()` は VOICEVOX（`svtts.py` 経由）で日本語テキストを音声合成し、実長を `duration` に設定した音声Objectを返す。
+
+```python
+v = voice("こんにちは、世界", speaker=3, speed=1.0, pitch=0.0, volume=1.0)
+v.show(v.duration)                # 合成音声の長さで配置（字幕・タイムラインと自然に同期）
+```
+
+- VOICEVOX エンジンを別途起動しておく必要がある（既定 `127.0.0.1:50021`）
+- `svtts.speakers()` で話者スタイルID一覧を取得できる。合成 wav はキャッシュされる
+- `svinspect.py` / `svtts.py` は標準ライブラリのみで動作（VOICEVOX との通信時を除く）。`inspect()` / `voice()` は scriptvedit.py と同じディレクトリに配置する
+
 ## Object メソッド一覧
 
 | メソッド | シグネチャ | 説明 |
