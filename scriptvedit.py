@@ -1329,7 +1329,10 @@ def _apply_time_effects_to_duration(dur, effects):
             if f:
                 cur = cur / f
         elif name == "freeze_frame":
-            cur = cur + e.params.get("duration", 0.0)
+            # at がその時点の実効尺以上なら静止区間は成立しない（length()と整合）
+            at = e.params.get("at", 0.0)
+            if at < cur:
+                cur = cur + e.params.get("duration", 0.0)
     return cur
 
 
@@ -1611,7 +1614,11 @@ class Project:
             chapter_lines.append("0:00 イントロ")
         for t, label in markers:
             chapter_lines.append(f"{self._fmt_timestamp(t)} {label}")
+        # json の chapters も chapter_lines と同一ソースから生成する
+        # （先頭0:00章の欠落を防ぐ）
         chapters = [{"time": t, "label": label} for t, label in markers]
+        if not markers or markers[0][0] > 0.001:
+            chapters.insert(0, {"time": 0.0, "label": "イントロ"})
         tag_list = [str(t) for t in tags] if tags else []
 
         if path is None:
@@ -1809,8 +1816,26 @@ class Project:
                     except (ValueError, TypeError):
                         sample_rate = None
                     break
+            # ストリーム個別の尺（映像/音声でコンテナ尺と食い違う素材向け）。
+            # video_sequence 等が A/V ドリフトを避けるために使う。
+            def _stream_dur(s):
+                sd = s.get("duration")
+                try:
+                    return float(sd) if sd else None
+                except (ValueError, TypeError):
+                    return None
+            video_duration = None
+            audio_duration = None
+            for s in streams:
+                ct = s.get("codec_type")
+                if ct == "video" and video_duration is None:
+                    video_duration = _stream_dur(s)
+                elif ct == "audio" and audio_duration is None:
+                    audio_duration = _stream_dur(s)
             info = {"has_audio": has_audio, "duration": duration,
-                    "sample_rate": sample_rate}
+                    "sample_rate": sample_rate,
+                    "video_duration": video_duration,
+                    "audio_duration": audio_duration}
             self._probe_cache[path] = info
             return info
         except FileNotFoundError:
@@ -2082,6 +2107,14 @@ class Project:
         at = float(at)
         if at < 0:
             raise ValueError(f"thumbnail: at は0以上が必要です: {at}")
+        self._prepare_thumbnail_graph()
+        self._extract_frame(at, out, timeout=timeout)
+        print(f"完了: {out}")
+        return out
+
+    def _prepare_thumbnail_graph(self):
+        """thumbnail/storyboard 共通: プラン解決+レイヤーexec+checkpoint確保を
+        一度だけ行い、-ss 単フレーム抽出可能な確定済みグラフを構築する。"""
         self._reset_runtime_state()
         self._dry_run = False
         self._draft = False
@@ -2105,7 +2138,10 @@ class Project:
             self.duration = self._calc_total_duration()
         self._ensure_web_objects()
         self._ensure_checkpoints()
-        self._thumbnail_at = at
+
+    def _extract_frame(self, at, out, *, timeout=600):
+        """準備済みグラフに対し -ss + -frames:v 1 で1フレームだけ抽出する。"""
+        self._thumbnail_at = float(at)
         try:
             cmd = self._build_ffmpeg_cmd(out)
             print(f"サムネイル抽出 @{at}s: {out}")
@@ -2113,7 +2149,6 @@ class Project:
             _run_ffmpeg(cmd, timeout=timeout)
         finally:
             self._thumbnail_at = None
-        print(f"完了: {out}")
         return out
 
     def storyboard(self, out_path, *, cols=4, interval=None):
@@ -2141,9 +2176,10 @@ class Project:
         tmp_dir = os.path.join(_ARTIFACT_DIR, "storyboard", "_frames")
         os.makedirs(tmp_dir, exist_ok=True)
         try:
-            # 1枚目の抽出で総尺を確定させる（thumbnail()の副作用でself.durationが決まる）
-            first_path = os.path.join(tmp_dir, "frame_000.png")
-            self.thumbnail(0.0, first_path)
+            # プラン解決・レイヤーexec・checkpoint確保は一度だけ実施し、
+            # 各コマは確定済みグラフに対する -ss 単フレーム抽出だけをループする
+            # （thumbnail() を毎コマ呼ぶと全パイプラインがコマ数ぶん再実行される）。
+            self._prepare_thumbnail_graph()
             total = self.duration
             if not total or total <= 0:
                 raise RuntimeError("storyboard: タイムラインの総尺を確定できませんでした")
@@ -2155,10 +2191,10 @@ class Project:
                 times.append(t)
                 t += step
 
-            frame_paths = [(0.0, first_path)]
-            for i, tsec in enumerate(times[1:], start=1):
+            frame_paths = []
+            for i, tsec in enumerate(times):
                 fp = os.path.join(tmp_dir, f"frame_{i:03d}.png")
-                self.thumbnail(min(tsec, max(0.0, total - 0.001)), fp)
+                self._extract_frame(min(tsec, max(0.0, total - 0.001)), fp)
                 frame_paths.append((tsec, fp))
 
             thumbs = [Image.open(fp).convert("RGB") for _, fp in frame_paths]
@@ -3262,8 +3298,11 @@ class Project:
                 has_explicit_atrim = any(
                     e.name == "atrim" for e in obj.audio_effects)
                 if not has_explicit_atrim and obj.duration is not None:
-                    a_pre = [f"atrim=duration={obj.duration}",
-                             "asetpts=PTS-STARTPTS"] + a_pre
+                    # auto atrim は atempo（speed 追従含む）の後段に置く。
+                    # 先頭に前置すると atrim=(base/factor)→atempo=factor の順になり
+                    # 音声尺が base/factor² まで縮む不具合になるため末尾に回す。
+                    a_pre = a_pre + [f"atrim=duration={obj.duration}",
+                                     "asetpts=PTS-STARTPTS"]
                 # loop で until 指定かつ obj.duration 未設定なら until までトリム
                 if (loop_effect is not None and not has_explicit_atrim
                         and obj.duration is None):
@@ -3983,7 +4022,10 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
         elif e.name == "rounded":
             # 角丸: 角の中心からの距離が radius を超える画素のアルファを0に。
             # clip でX/Yを内側矩形にクランプ → 中央十字帯では距離0（常に表示）
-            r = e.params["radius"]
+            # r を実寸の半分(min(W,H)/2)で上限クランプ。r>寸法/2 だと内側矩形の
+            # クランプ範囲が反転してオブジェクト全体が透明化するため防ぐ。
+            radius = e.params["radius"]
+            r = f"min({radius}\\,min(W\\,H)/2)"
             corner = (f"lte(hypot(X-clip(X\\,{r}\\,W-1-{r})\\,"
                       f"Y-clip(Y\\,{r}\\,H-1-{r}))\\,{r})")
             filters.append("format=rgba")
@@ -4155,7 +4197,9 @@ def _estimate_effect_input_length(obj, upto_effect):
             if f:
                 cur = cur / f
         elif e.name == "freeze_frame":
-            cur = cur + e.params.get("duration", 0.0)
+            at = e.params.get("at", 0.0)
+            if at < cur:
+                cur = cur + e.params.get("duration", 0.0)
     return cur
 
 
@@ -4190,6 +4234,14 @@ def _build_video_pre_filters(obj, label_prefix="pre"):
             # trim 3分割 + loop(先頭フレーム複製) + concat のチェーン内サブグラフ
             at = e.params["at"]
             fdur = e.params["duration"]
+            # at がクリップ実長以上だと trim=start=at が空ストリームになり
+            # concat 失敗/末尾欠落を起こす。実効尺（前段trim/speed反映）と照合する。
+            eff_len = _estimate_effect_input_length(obj, e)
+            if eff_len is not None and at >= eff_len:
+                raise ValueError(
+                    f"freeze_frame: at={at}s がクリップ実効尺 {eff_len:.3f}s "
+                    f"以上です ('{obj.source}')。\n"
+                    f"素材長より前の時刻を指定してください。")
             p = f"{label_prefix}f{eff_idx}"
             filters.append(
                 f"split=3[{p}a][{p}b][{p}c];"
@@ -4983,7 +5035,12 @@ class Object:
                 if factor > 0:
                     result = result / factor
             elif e.name == "freeze_frame":
-                result = result + e.params.get("duration", 0.0)
+                # at がその時点の実効尺以上なら静止区間は成立しないため加算しない
+                # （_build_video_pre_filters 側では ValueError になるが、length()は
+                #   実尺との整合を保つため at>=尺 では +duration を計上しない）
+                at = e.params.get("at", 0.0)
+                if at < result:
+                    result = result + e.params.get("duration", 0.0)
         # 音声atrim/atempo
         for e in self.audio_effects:
             if e.name == "atrim":
@@ -5053,9 +5110,25 @@ class Object:
                         "  if (typeof window.showSlide === 'function') {"
                         "    window.showSlide(n);"
                         "  } else {"
-                        "    document.querySelectorAll('[id^=\"page-\"]').forEach(function(el) {"
-                        "      el.style.display = (el.id === ('page-' + n)) ? '' : 'none';"
+                        "    var els = document.querySelectorAll('[id^=\"page-\"]');"
+                        "    var target = document.getElementById('page-' + n);"
+                        "    if (!target) {"
+                        # ゼロ埋めid(page-01等)対応: 数値正規化で一致を探す
+                        "      els.forEach(function(el) {"
+                        "        var m = el.id.match(/^page-(\\d+)$/);"
+                        "        if (m && parseInt(m[1], 10) === parseInt(n, 10)) target = el;"
+                        "      });"
+                        "    }"
+                        "    var shown = 0;"
+                        "    els.forEach(function(el) {"
+                        "      var vis = (el === target);"
+                        "      el.style.display = vis ? '' : 'none';"
+                        "      if (vis) shown++;"
                         "    });"
+                        # 1つも表示されなければサイレント失敗を防ぐため例外にする
+                        "    if (shown === 0) {"
+                        "      throw new Error('slide: page-' + n + ' に一致する要素が見つかりません');"
+                        "    }"
                         "  }"
                         "  if (typeof window.renderFrame !== 'function') {"
                         "    window.renderFrame = function(state) {};"
@@ -6450,9 +6523,20 @@ def karaoke(lines, *, style=None):
         else:
             each = (t1 - t0) / len(tokens)
             word_durs = [each] * len(tokens)
-        k_text = "".join(
-            f"{{\\k{max(1, round(float(d) * 100))}}}{_escape_ass_text(tok)}"
-            for tok, d in zip(tokens, word_durs))
+        # \k はセンチ秒単位。各語独立に round(d*100) すると丸め誤差が累積して
+        # 総和が行尺とずれる。累積器方式で
+        # \k_i = round(cumsum_i*100) - round(cumsum_{i-1}*100) とし、
+        # 総和を round(cumsum_n*100) に一致させる。
+        k_parts = []
+        cum = 0.0
+        prev_cs = 0
+        for tok, d in zip(tokens, word_durs):
+            cum += float(d)
+            cs = round(cum * 100)
+            k = cs - prev_cs
+            prev_cs = cs
+            k_parts.append(f"{{\\k{k}}}{_escape_ass_text(tok)}")
+        k_text = "".join(k_parts)
         body_lines.append(
             f"Dialogue: 0,{_fmt_ass_time(t0)},{_fmt_ass_time(t1)},Karaoke,,0,0,0,,{k_text}")
 
@@ -6706,6 +6790,12 @@ def narrate(text_content, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0,
     wav = _svtts.tts(text_content, speaker=speaker, speed=speed, pitch=pitch,
                      **tts_kwargs)
     dur = _svtts.tts_duration(wav)
+    # dur<=0（空テキスト等）だと show(0) で current_time が進まず
+    # 連続 narrate が同じ開始点に重なるため明示エラーにする。
+    if dur <= 0:
+        raise ValueError(
+            f"narrate: 合成音声の長さが0以下でした（dur={dur}）。"
+            f"text_content が空でないか確認してください: {text_content!r}")
 
     text_obj = None
     if subtitle:
@@ -6805,8 +6895,12 @@ def beat_sync(audio_source, *, min_bpm=60, max_bpm=200):
     key = hashlib.sha256(key_str.encode("utf-8")).hexdigest()[:16]
     cache_path = os.path.join(_ARTIFACT_DIR, "beats", f"{key}.json")
     if os.path.exists(cache_path):
-        with open(cache_path, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(cache_path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            # 破損キャッシュは無視して再解析（self-heal）
+            pass
 
     try:
         result = _svbeat.detect_beats(
@@ -7125,7 +7219,25 @@ def video_sequence(*objs, transition="fade", t_dur=0.5):
             raise TypeError(
                 f"video_sequence: 動画Objectかパス文字列のみ指定できます: {type(o)}")
     n = len(sources)
-    lengths = [_probe_audio_length(s) or 5.0 for s in sources]
+
+    # 映像/音声ストリーム個別の尺を取得（コンテナ尺の全用途流用による
+    # A/V ドリフトを避ける）。取得不能時はコンテナ尺→5.0 にフォールバック。
+    def _stream_lengths(src):
+        vd = ad = None
+        cont = None
+        if proj is not None:
+            info = proj._probe_media(src)
+            if info is not None:
+                cont = info.get("duration")
+                vd = info.get("video_duration")
+                ad = info.get("audio_duration")
+        vd = vd or cont or 5.0
+        ad = ad or cont or vd
+        return vd, ad
+    stream_lengths = [_stream_lengths(s) for s in sources]
+    lengths = [v for v, _ in stream_lengths]       # 映像trim/offset/合成尺用
+    a_lengths = [a for _, a in stream_lengths]      # 音声atrim用
+
     # xfade は重なり区間 t_dur を要するため、最短クリップ未満を保証する
     for s, ln in zip(sources, lengths):
         if ln <= t_dur:
@@ -7142,6 +7254,13 @@ def video_sequence(*objs, transition="fade", t_dur=0.5):
                 return bool(info.get("has_audio"))
         return False
     all_audio = all(_has_audio(s) for s in sources)
+    # acrossfade も各音声が t_dur 超であることを要する
+    if all_audio:
+        for s, ln in zip(sources, a_lengths):
+            if ln <= t_dur:
+                raise ValueError(
+                    f"video_sequence: 音声実長({ln:.3f}s)が t_dur({t_dur}s)以下です: {s}\n"
+                    f"t_dur を短くするか、より長いクリップを指定してください。")
 
     w = proj.width if proj else 1280
     h = proj.height if proj else 720
@@ -7174,7 +7293,7 @@ def video_sequence(*objs, transition="fade", t_dur=0.5):
         acc = offset + lengths[i]
     maps = ["-map", cur]
     if all_audio:
-        for i, ln in enumerate(lengths):
+        for i, ln in enumerate(a_lengths):
             parts.append(f"[{i}:a]atrim=duration={ln},asetpts=PTS-STARTPTS[at{i}]")
         acur = "[at0]"
         for i in range(1, n):

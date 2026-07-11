@@ -115,17 +115,38 @@ def _check_ffmpeg():
         )
 
 
+def _save_actual(actual, save_actual):
+    """失敗時のデバッグ用に実フレームを PNG 保存する。
+
+    保存先の親ディレクトリが存在しなくても作成してから保存するため、
+    どの失敗分岐から呼んでも FileNotFoundError にならない。
+    save_actual が None の場合は何もしない。
+    """
+    if save_actual is None:
+        return
+    target = os.fspath(save_actual)
+    parent = os.path.dirname(os.path.abspath(target))
+    os.makedirs(parent, exist_ok=True)
+    Image.fromarray(actual, mode="RGB").save(target)
+
+
 # ---------------------------------------------------------------------------
 # フレーム抽出
 # ---------------------------------------------------------------------------
 
-def extract_frame(video_path, at, out_png=None):
+def extract_frame(video_path, at, out_png=None, *, accurate=True):
     """動画の指定時刻のフレームを RGB numpy 配列 (H, W, 3) として取得する。
 
     Args:
         video_path: 動画ファイルのパス
         at: 抽出時刻(秒)。float 可
         out_png: 指定した場合、フレームを PNG としてこのパスにも保存する
+        accurate: シーク精度と速度のトレードオフ(既定 True)。
+            True  → 出力側シーク(-i の後に -ss)。ffmpeg が対象時刻まで
+                    デコードするため start_time>0 や VFR でも指定時刻の
+                    フレームを正確に取得できる(やや低速)。
+            False → 入力側シーク(-i の前に -ss)。キーフレームへ高速に
+                    シークするが、start_time>0/VFR で 1 フレームずれ得る。
 
     Returns:
         np.ndarray: uint8 RGB 配列 (H, W, 3)
@@ -151,13 +172,24 @@ def extract_frame(video_path, at, out_png=None):
         os.close(fd)
         target = tmp_path
 
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-ss", f"{float(at):.6f}",
-        "-i", video_path,
-        "-frames:v", "1",
-        "-y", target,
-    ]
+    if accurate:
+        # 出力側シーク: 精度重視(指定時刻まで実デコード)
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", video_path,
+            "-ss", f"{float(at):.6f}",
+            "-frames:v", "1",
+            "-y", target,
+        ]
+    else:
+        # 入力側シーク: 速度重視(キーフレーム基準、1フレームずれ得る)
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{float(at):.6f}",
+            "-i", video_path,
+            "-frames:v", "1",
+            "-y", target,
+        ]
     try:
         result = subprocess.run(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -314,8 +346,7 @@ def assert_frame(video_path, at, expected, *, threshold=0.97, save_actual=None):
     expected_img = _load_image(expected)
 
     if actual.shape != expected_img.shape:
-        if save_actual is not None:
-            Image.fromarray(actual, mode="RGB").save(os.fspath(save_actual))
+        _save_actual(actual, save_actual)
         raise AssertionError(
             f"フレームサイズが期待画像と一致しません "
             f"(実際: {actual.shape[1]}x{actual.shape[0]}, "
@@ -326,11 +357,7 @@ def assert_frame(video_path, at, expected, *, threshold=0.97, save_actual=None):
 
     score = ssim(actual, expected_img)
     if score < threshold:
-        if save_actual is not None:
-            target = os.fspath(save_actual)
-            parent = os.path.dirname(os.path.abspath(target))
-            os.makedirs(parent, exist_ok=True)
-            Image.fromarray(actual, mode="RGB").save(target)
+        _save_actual(actual, save_actual)
         d = frame_diff(actual, expected_img)
         expected_desc = (
             os.fspath(expected) if isinstance(expected, (str, os.PathLike)) else "<ndarray>"

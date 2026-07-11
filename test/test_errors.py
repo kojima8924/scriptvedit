@@ -19,8 +19,9 @@ from scriptvedit import (
     mask, mask_wipe, opacity, blend_mode, rounded, pip,
     blur_background_fill, progress_bar,
     speed, reverse, freeze_frame, video_sequence,
-    _atempo_chain_rates,
+    _atempo_chain_rates, trim,
     narrate, Narration, karaoke, beat_sync, slide,
+    _build_video_pre_filters, _build_effect_filters, _ARTIFACT_DIR,
 )
 
 
@@ -2932,6 +2933,175 @@ def test_export_metadata_txt_format():
             os.remove(out)
 
 
+# --- 統合レビュー修正の検証（S1/S3/S7/S8/S11/S12/S13/S14/S15） ---
+
+def test_freeze_frame_at_beyond_clip():
+    """S3: freeze_frame の at がクリップ実効尺以上 → 構築時にValueError"""
+    _mk_project()
+    obj = Object("../fox_noaudio.mp4")
+    # trim(2) 後の実効尺は2s。at=5 はそれ以上なので空セグメントになる
+    obj <= trim(2) & freeze_frame(at=5.0, duration=1.0)
+    try:
+        _build_video_pre_filters(obj)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        ok = "freeze_frame" in msg and "at" in msg
+        return (True, msg.split("\n")[0]) if ok else (False, msg)
+
+
+def test_freeze_frame_at_beyond_length_no_overcount():
+    """S3: at>=実尺 のとき length() は +duration を計上しない"""
+    _mk_project()
+    obj = Object("../fox_noaudio.mp4")
+    # trim(2) で実尺2s、freeze at=5(>=2) → 静止区間は成立しないので尺は2sのまま
+    obj <= trim(2) & freeze_frame(at=5.0, duration=1.0)
+    ln = obj.length()
+    if abs(ln - 2.0) < 0.01:
+        return True, f"length={ln:.4f}（+duration計上なし）"
+    return False, f"length={ln}（期待2.0、+durationが誤って計上された）"
+
+
+def test_speed_auto_atrim_after_atempo():
+    """S1: speed の自動atrimはatempoの後段（音声尺がfactor²短縮されない）"""
+    import re
+    layer = os.path.join(os.path.dirname(__file__), "_tmp_s1_layer.py")
+    with open(layer, "w", encoding="utf-8") as f:
+        f.write("from scriptvedit import *\n"
+                "a = Object('../fox_noaudio.mp4')\n"
+                "a.time(2.0) <= speed(2.0) & move(x=0.5, y=0.5)\n")
+    p = _mk_project()
+    p.layer("_tmp_s1_layer.py")
+    try:
+        cmd = p.render("_tmp_s1.mp4", dry_run=True)
+        flat = str(cmd)
+        # 正: atempo → atrim の順。誤: atrim → atempo（旧バグ）
+        good = re.search(r"atempo=2\.0,atrim=duration=2\.0", flat)
+        bad = re.search(r"atrim=duration=[\d.]+,asetpts=PTS-STARTPTS,atempo", flat)
+        ok = (good is not None) and (bad is None)
+        return (True, "atempo→atrim順を確認") if ok else (False, flat[:400])
+    finally:
+        if os.path.exists(layer):
+            os.remove(layer)
+
+
+def test_rounded_radius_clamped_in_geq():
+    """S7: rounded の geq が半径を実寸(min(W,H)/2)で上限クランプする"""
+    _mk_project()
+    obj = Object("../onigiri_tenmusu.png")
+    obj <= rounded(40)
+    filters = _build_effect_filters(obj, 0.0, 4.0)
+    flat = str(filters)
+    # 生の "40" ではなく min(40, min(W,H)/2) 形式でクランプされていること
+    ok = "min(40" in flat and "min(W" in flat and "hypot" in flat
+    return (True, "半径クランプ式を確認") if ok else (False, flat[:300])
+
+
+def test_probe_stream_durations():
+    """S8: _probe_media が映像/音声ストリーム個別の尺を返す"""
+    p = _mk_project()
+    info = p._probe_media("../fox_noaudio.mp4")
+    if info is None:
+        return True, "スキップ（probe不能環境）"
+    # 映像ストリーム尺のキーが存在する（コンテナ尺と食い違ってもよい）
+    if "video_duration" not in info or "audio_duration" not in info:
+        return False, f"stream尺キーが無い: {list(info.keys())}"
+    return True, (f"container={info.get('duration')}, "
+                  f"video={info.get('video_duration')}, "
+                  f"audio={info.get('audio_duration')}")
+
+
+def test_narrate_zero_duration():
+    """S15: narrate の tts_duration=0 → ValueError（連続narrate重なり防止）"""
+    import svtts
+    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
+    svtts.tts = lambda text, **kw: os.path.join(
+        os.path.dirname(__file__), "..", "Impact-38.mp3")
+    svtts.tts_duration = lambda path: 0.0
+    try:
+        _mk_project()
+        narrate("", subtitle=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "0以下" in msg or "dur" in msg else (False, msg)
+    finally:
+        svtts.tts = orig_tts
+        svtts.tts_duration = orig_dur
+
+
+def test_karaoke_equal_split_sum_matches():
+    """S12: karaoke 均等割りの\\k総和が行尺(センチ秒)に一致する（丸め累積なし）"""
+    import re
+    # 7文字を2.0秒 → 均等割り。旧実装は round(2/7*100)*7=203cs で3cs超過
+    obj = karaoke([(0.0, 2.0, "こんにちは世界")])
+    ass_path = obj._text_spec["srt"]
+    with open(ass_path, encoding="utf-8") as f:
+        content = f.read()
+    ks = [int(x) for x in re.findall(r"\\k(\d+)", content)]
+    if sum(ks) == 200 and len(ks) == 7:
+        return True, f"\\k={ks} 総和={sum(ks)}cs（=2.00s）"
+    return False, f"\\k={ks} 総和={sum(ks)}cs（期待200）"
+
+
+def test_export_metadata_json_intro_chapter():
+    """S13: 先頭マーカーが0より後なら json chapters に0:00イントロ章が入る"""
+    import json as _json
+    p = _mk_project()
+    p.marker(2.0, "本編")     # 先頭マーカーが0:00より後
+    p.marker(4.5, "まとめ")
+    out = os.path.join(os.path.dirname(__file__), "_tmp_meta_intro.json")
+    try:
+        p.export_metadata(out, title="T")
+        with open(out, encoding="utf-8") as f:
+            data = _json.load(f)
+        ch = data["chapters"]
+        ok = (len(ch) == 3 and abs(ch[0]["time"]) < 1e-6
+              and ch[0]["label"] == "イントロ")
+        return (True, f"先頭章={ch[0]}") if ok else (False, f"chapters={ch}")
+    finally:
+        if os.path.exists(out):
+            os.remove(out)
+
+
+def test_beat_sync_corrupt_cache_self_heal():
+    """S11: 破損キャッシュJSONは無視して再解析（self-heal）"""
+    audio = os.path.join(os.path.dirname(__file__), "..", "Impact-38.mp3")
+    if not os.path.exists(audio):
+        return True, "スキップ（Impact-38.mp3が無い環境）"
+    try:
+        import svbeat  # noqa: F401
+    except ImportError:
+        return True, "スキップ（svbeat/numpy/scipy不在）"
+    import glob as _glob
+    beats_dir = os.path.join(_ARTIFACT_DIR, "beats")
+    # 一旦正常に解析してキャッシュを作る
+    beat_sync(audio, min_bpm=60, max_bpm=200)
+    caches = _glob.glob(os.path.join(beats_dir, "*.json"))
+    if not caches:
+        return False, "キャッシュJSONが生成されていない"
+    # キャッシュを破損させる
+    with open(caches[0], "w", encoding="utf-8") as f:
+        f.write("{ this is not valid json ")
+    try:
+        r = beat_sync(audio, min_bpm=60, max_bpm=200)  # 例外を投げず再解析
+    except Exception as e:
+        return False, f"破損キャッシュで例外: {type(e).__name__}: {e}"
+    ok = isinstance(r, dict) and "beats" in r
+    return (True, "破損キャッシュを無視して再解析") if ok else (False, f"結果不正: {r}")
+
+
+def test_slide_page_js_normalizes_id():
+    """S14: slide のページ切替JSがゼロ埋めid正規化と未表示検出を含む"""
+    import inspect
+    src = inspect.getsource(Object._render_web_frames)
+    checks = ["getElementById", "parseInt", "shown === 0", "throw new Error"]
+    missing = [c for c in checks if c not in src]
+    if not missing:
+        return True, "id正規化+未表示例外フックを確認"
+    return False, f"JSに不足: {missing}"
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -3119,6 +3289,17 @@ ALL_TESTS = [
     ("export_metadata JSON形式", test_export_metadata_json),
     ("export_metadata param由来title", test_export_metadata_title_from_param),
     ("export_metadata txt形式", test_export_metadata_txt_format),
+    # --- 統合レビュー修正の検証 ---
+    ("S3 freeze_frame at>=尺エラー", test_freeze_frame_at_beyond_clip),
+    ("S3 freeze at>=尺で尺不加算", test_freeze_frame_at_beyond_length_no_overcount),
+    ("S1 speed 自動atrim後置", test_speed_auto_atrim_after_atempo),
+    ("S7 rounded 半径クランプ", test_rounded_radius_clamped_in_geq),
+    ("S8 probe ストリーム個別尺", test_probe_stream_durations),
+    ("S15 narrate dur<=0エラー", test_narrate_zero_duration),
+    ("S12 karaoke \\k総和一致", test_karaoke_equal_split_sum_matches),
+    ("S13 export json先頭章", test_export_metadata_json_intro_chapter),
+    ("S11 beat_sync破損キャッシュ自己修復", test_beat_sync_corrupt_cache_self_heal),
+    ("S14 slide ページ切替JS正規化", test_slide_page_js_normalizes_id),
 ]
 
 

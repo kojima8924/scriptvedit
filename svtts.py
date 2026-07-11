@@ -175,7 +175,10 @@ def tts_duration(wav_path):
         rate = w.getframerate()
         if rate <= 0:
             raise ValueError(f"tts_duration: サンプルレートが不正です: {wav_path}")
-        return w.getnframes() / float(rate)
+        nframes = w.getnframes()
+        if nframes <= 0:
+            raise ValueError(f"tts_duration: フレーム数が 0 です(空の wav): {wav_path}")
+        return nframes / float(rate)
 
 
 def _main(argv=None):

@@ -221,9 +221,17 @@ def _grid_score(times, env, period, phase, duration):
 def _select_period(times, env, periods, duration):
     """周期候補ごとに最良位相のグリッド当てはめスコアを計算して 1 つ選ぶ。
 
-    倍/半テンポの曖昧性解決: 真のテンポと半テンポは「拍あたり平均 onset 強度」が
-    ほぼ等しくなるため、最高スコアの 90% 以上に入る候補のうち最速(最小周期)を選ぶ。
-    (倍テンポ候補は弱拍・無音位置を踏むため平均スコアが下がり除外される)
+    倍/半テンポの曖昧性解決:
+      - 半テンポ候補(周期 2P)は真テンポ P と同じ拍位置の部分集合しか踏まない
+        ため「拍あたり平均 onset 強度」がほぼ同一(スコア比≈1.0)になる。
+      - 倍テンポ候補(周期 P/2)は真の拍に加えてサブディビジョン位置も踏む
+        ため、そこが弱拍/無音なら平均スコアが下がる(スコア比 < 1.0)。
+    そこで「最高スコアの 96% 以上」に入る実質同点候補に絞り込み、その中で
+    最速(最小周期)を選ぶ。こうすると半テンポ(2P)は同点で残しても最小周期の
+    P が選ばれ、倍テンポ(P/2)はスコアが僅かに劣るため足切りされる。
+    閾値を 0.90 から 0.96 へ厳しくしたのは、8分ハイハット等でサブディビジョン
+    にもオンセットがある曲で P/2 が 0.90〜0.95 の僅差に入り込み、最速選択に
+    引っ張られて倍BPMを誤検出するのを防ぐため。
     """
     scores = []
     for period in periods:
@@ -234,7 +242,7 @@ def _select_period(times, env, periods, duration):
                 best = s
         scores.append(best)
     smax = max(scores)
-    eligible = [p for p, s in zip(periods, scores) if s >= 0.9 * smax]
+    eligible = [p for p, s in zip(periods, scores) if s >= 0.96 * smax]
     return min(eligible)
 
 def _refine_grid(times, env, period0, duration):
@@ -390,6 +398,10 @@ def beats_to_keyframes(beats, values, *, offset=0.0, decay=None, base=None,
     sel = [float(b) for b in beats
            if (t_start is None or b >= t_start) and (t_end is None or b <= t_end)]
     sel.sort()
+    if not sel:
+        raise ValueError(
+            f"beats_to_keyframes: 指定範囲 [t_start={t_start}, t_end={t_end}] "
+            "にビートがありません")
     if base is None:
         base = min(values)
     flat = []
