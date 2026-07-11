@@ -1,5 +1,6 @@
 import subprocess
 import os
+import sys
 import json
 import hashlib
 import math as _math
@@ -14,6 +15,8 @@ __all__ = [
     # ファクトリ関数
     "resize", "rotate", "crop", "pad", "blur", "eq",
     "scale", "fade", "move", "morph_to", "rotate_to",
+    "move_along", "path_bezier", "throw", "inertia", "look_at", "perlin",
+    "explode_to", "assemble_from", "group", "tile",
     "wipe", "zoom", "color_shift", "shake",
     "chroma_key", "vignette", "pixelize", "glow", "lut", "glitch",
     "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline",
@@ -24,7 +27,7 @@ __all__ = [
     # オーディオ系
     "duck_under", "loop", "audio_sequence", "sfx", "audio_viz",
     # アンカー/同期
-    "anchor", "pause",
+    "anchor", "pause", "scene",
     # Expr
     "Expr", "Const", "Var",
     # 数学関数
@@ -148,6 +151,50 @@ class Expr:
         """三角波: 0→1→0を周期的に繰り返す"""
         phase = _make_func("mod", [self * _to_expr(frequency), Const(1)])
         return Const(1) - _make_func("abs", [Const(2) * phase - Const(1)])
+
+    def plot(self, samples=60, height=15, width=60):
+        """u=0..1でサンプルしてターミナルにアスキーグラフを表示（デバッグ用）
+
+        matplotlib非依存。self.eval_at(u) をサンプルし、標準出力へ折れ線グラフ
+        を描画する。値域は自動スケーリング。描画した文字列を返す。
+        """
+        if samples < 2:
+            raise ValueError("plot: samples は2以上が必要です")
+        us = [i / (samples - 1) for i in range(samples)]
+        try:
+            ys = [float(self.eval_at(u)) for u in us]
+        except Exception as exc:
+            raise ValueError(
+                f"plot: 式を数値評価できません（uのみに依存する式が必要）: {exc}"
+            ) from exc
+        y_lo = _builtins.min(ys)
+        y_hi = _builtins.max(ys)
+        span = y_hi - y_lo
+        if span < 1e-12:
+            # 定数式: 中央に平坦な線を描く
+            span = 1.0
+            y_lo -= 0.5
+        # width列にリサンプリング（samples != width でも桁を揃える）
+        cols = width
+        grid = [[" "] * cols for _ in range(height)]
+        for cx in range(cols):
+            u = cx / (cols - 1)
+            # 最近傍サンプル
+            idx = int(_builtins.round(u * (samples - 1)))
+            y = ys[idx]
+            norm = (y - y_lo) / span
+            row = height - 1 - int(_builtins.round(norm * (height - 1)))
+            row = _builtins.min(height - 1, _builtins.max(0, row))
+            grid[row][cx] = "*"
+        lines = []
+        lines.append(f"  {y_hi:+.3f} +" + "-" * cols)
+        for r, cells in enumerate(grid):
+            lines.append("         |" + "".join(cells))
+        lines.append(f"  {y_lo:+.3f} +" + "-" * cols)
+        lines.append("         u=0" + " " * (cols - 6) + "u=1")
+        out = "\n".join(lines)
+        print(out)
+        return out
 
 
 class Const(Expr):
@@ -652,7 +699,11 @@ _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
 _ENGINE_VER = "7"
 _BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift",
                      "chroma_key", "vignette", "pixelize", "glow", "lut", "glitch",
-                     "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline"}
+                     "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline",
+                     "explode_to", "assemble_from"}
+
+# 終端フレーム生成Effect（bakeable末尾に1つだけ・映像を生成する）
+_TERMINAL_FRAME_EFFECTS = {"morph_to", "explode_to", "assemble_from"}
 
 
 # --- テキスト/字幕（drawtext・subtitles）ヘルパー ---
@@ -908,6 +959,12 @@ def _op_fingerprint_str(op):
             parts.append(f"tgt_ffp={tgt_ffp}")
         except OSError:
             parts.append(f"tgt_src={op._morph_target.source}")
+    # assemble_from: 集合元画像のFFPをsignatureに含める
+    if op.name == "assemble_from" and hasattr(op, '_assemble_source'):
+        try:
+            parts.append(f"asm_ffp={_file_fingerprint(op._assemble_source.source)}")
+        except OSError:
+            parts.append(f"asm_src={op._assemble_source.source}")
     # lut: LUTファイルのFFPをsignatureに含める（内容変更でキャッシュ無効化）
     if op.name == "lut":
         lut_file = op.params.get("file")
@@ -1015,6 +1072,29 @@ def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     return os.path.join(cache_dir, f"{key}.mkv")
 
 
+def _particle_cache_path(img_path, particle_op, duration, fps, quality="final"):
+    """explode_to/assemble_from の粒子アニメmkvキャッシュパスを計算
+
+    img_path: 粒子化する単一画像（explode=直前ソース, assemble=集合元）
+    """
+    if _is_cache_artifact_path(img_path):
+        sigs = [f"src={img_path.replace(chr(92), '/')}"]
+    else:
+        try:
+            sigs = [f"ffp={_file_fingerprint(img_path)}"]
+        except OSError:
+            sigs = [f"src={img_path.replace(chr(92), '/')}"]
+    sigs.append(f"op={_op_fingerprint_str(particle_op)}")
+    sigs.append(f"dur={duration}")
+    sigs.append(f"fps={fps}")
+    sigs.append(f"q={quality}")
+    sigs.append(f"ev={_ENGINE_VER}")
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    src_hash = hashlib.sha256(img_path.replace("\\", "/").encode()).hexdigest()[:8]
+    cache_dir = os.path.join(_ARTIFACT_DIR, "particle", src_hash)
+    return os.path.join(cache_dir, f"{key}.mkv")
+
+
 def _morph_input_frame_path(src_path):
     """morph入力用の最終フレームPNGの置き場所を導出
 
@@ -1047,27 +1127,30 @@ def _build_morph_frame_extract_cmd(src_path, frame_path):
 
 
 def _validate_morph_position(bakeable_ops):
-    """morph_toがbakeable opsの末尾に1つだけあることを検証"""
-    morph_indices = [i for i, (typ, op) in enumerate(bakeable_ops)
-                     if typ == "effect" and op.name == "morph_to"]
-    if not morph_indices:
+    """終端フレーム生成Effect(morph_to/explode_to/assemble_from)が
+    bakeable opsの末尾に1つだけあることを検証"""
+    term_indices = [i for i, (typ, op) in enumerate(bakeable_ops)
+                    if typ == "effect" and op.name in _TERMINAL_FRAME_EFFECTS]
+    if not term_indices:
         return
-    if len(morph_indices) > 1:
+    if len(term_indices) > 1:
+        names = [bakeable_ops[i][1].name for i in term_indices]
         raise ValueError(
-            f"morph_to は1つのObjectに1回しか適用できません"
-            f"（{len(morph_indices)}個指定されています: idx={morph_indices}）。\n"
-            f"複数段のモーフには compute() 等で中間素材を生成して分割してください。")
-    morph_idx = morph_indices[0]
-    # morph_to の後に他のbakeable opがあればエラー（policy='off'は実質ライブなのでスキップ）
-    for i in range(morph_idx + 1, len(bakeable_ops)):
+            f"morph_to/explode_to/assemble_from は1つのObjectに1回しか適用できません"
+            f"（{len(term_indices)}個指定: {names}, idx={term_indices}）。\n"
+            f"複数段には compute() 等で中間素材を生成して分割してください。")
+    term_idx = term_indices[0]
+    term_name = bakeable_ops[term_idx][1].name
+    # 終端Effectの後に他のbakeable opがあればエラー（policy='off'は実質ライブなのでスキップ）
+    for i in range(term_idx + 1, len(bakeable_ops)):
         after_op = bakeable_ops[i][1]
         if getattr(after_op, 'policy', 'auto') == "off":
             continue
         raise ValueError(
-            f"morph_to はbakeable opsの末尾に配置してください。"
-            f"morph_to(idx={morph_idx})の後に "
+            f"{term_name} はbakeable opsの末尾に配置してください。"
+            f"{term_name}(idx={term_idx})の後に "
             f"{after_op.name}(idx={i})があります。\n"
-            f"回避策: {after_op.name} を morph_to の前に移動するか、"
+            f"回避策: {after_op.name} を {term_name} の前に移動するか、"
             f"-{after_op.name}(...) で checkpoint対象から除外してください。")
 
 
@@ -1166,6 +1249,9 @@ class Project:
         self._extra_layer_deps = {}  # layer filename → [追加依存パス]（morph_toターゲット等）
         self._layer_meta_cache = {}  # anchors.jsonパス → パース済みメタ（二重読み防止）
         self._loudnorm_target = None  # normalize_audio() 設定時のLUFS目標
+        self._markers = []  # [(time, label)] チャプターマーカー
+        self._param_overrides = None  # p.param() 用の遅延パース済み上書き値
+        self._render_window = None  # 部分レンダの (start, end)
         Project._current = self
 
     def configure(self, **kwargs):
@@ -1185,6 +1271,219 @@ class Project:
         target: 目標ラウドネス(LUFS)。既定 -14（配信向け）。"""
         _require_number("normalize_audio", "target", target, -70, 0)
         self._loudnorm_target = target
+
+    # --- テンプレート変数 ---
+
+    def _parse_param_sources(self):
+        """CLI(--param name=value)と環境変数(SCRIPTVEDIT_PARAM_<name>)を収集"""
+        overrides = {}
+        argv = sys.argv[1:]
+        i = 0
+        while i < len(argv):
+            tok = argv[i]
+            if tok == "--param" and i + 1 < len(argv):
+                kv = argv[i + 1]
+                i += 2
+            elif tok.startswith("--param="):
+                kv = tok[len("--param="):]
+                i += 1
+            else:
+                i += 1
+                continue
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                overrides[k] = v
+        # 環境変数は CLI を上書きしない（CLI 優先）
+        for key, val in os.environ.items():
+            if key.startswith("SCRIPTVEDIT_PARAM_"):
+                name = key[len("SCRIPTVEDIT_PARAM_"):]
+                overrides.setdefault(name, val)
+        return overrides
+
+    def param(self, name, default=None):
+        """CLI/環境変数から差し替え可能なテンプレート変数を返す。
+
+        `--param name=値` または環境変数 SCRIPTVEDIT_PARAM_<name> で上書きできる。
+        default の型（int/float/bool）に合わせて文字列値を変換する。バッチ生成用。
+        """
+        if self._param_overrides is None:
+            self._param_overrides = self._parse_param_sources()
+        if name in self._param_overrides:
+            raw = self._param_overrides[name]
+        else:
+            # 大文字小文字を無視して再検索（Windowsの環境変数は大文字化されるため）
+            raw = next((v for k, v in self._param_overrides.items()
+                        if k.lower() == name.lower()), None)
+            if raw is None:
+                return default
+        if isinstance(default, bool):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        if isinstance(default, int):
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+        if isinstance(default, float):
+            try:
+                return float(raw)
+            except ValueError:
+                return default
+        return raw
+
+    # --- チャプターマーカー ---
+
+    def marker(self, time, label):
+        """タイムライン上のマーカーを記録（mp4チャプター/YouTube目次用）"""
+        _require_number("marker", "time", time, 0)
+        self._markers.append((float(time), str(label)))
+        return self
+
+    def _sorted_markers(self):
+        """重複除去 + 時刻昇順のマーカー列を返す"""
+        seen = set()
+        uniq = []
+        for t, label in self._markers:
+            key = (t, label)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append((t, label))
+        uniq.sort(key=lambda m: m[0])
+        return uniq
+
+    @staticmethod
+    def _fmt_timestamp(sec):
+        """秒 → H:MM:SS または M:SS（YouTube目次形式）"""
+        sec = int(sec)
+        h, rem = divmod(sec, 3600)
+        m, s = divmod(rem, 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+
+    def export_chapters(self, path):
+        """YouTube用のチャプター目次テキスト（0:00 ラベル形式）を出力する"""
+        markers = self._sorted_markers()
+        lines = []
+        # YouTube仕様上、先頭は 0:00 が必要。無ければ補う
+        if not markers or markers[0][0] > 0.001:
+            lines.append("0:00 イントロ")
+        for t, label in markers:
+            lines.append(f"{self._fmt_timestamp(t)} {label}")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return path
+
+    def _chapters_metadata_path(self):
+        """FFMETADATAチャプターファイルのキャッシュパス（内容由来の鍵）"""
+        total = self.duration if self.duration is not None else 0
+        sig = "||".join(f"{t}:{label}" for t, label in self._sorted_markers())
+        sig += f"||dur={total}||ev={_ENGINE_VER}"
+        key = hashlib.sha256(sig.encode()).hexdigest()[:16]
+        return os.path.join(_ARTIFACT_DIR, "chapters", f"{key}.txt")
+
+    def _write_chapters_metadata(self, path):
+        """FFMETADATA1形式のチャプターファイルを書き出す"""
+        markers = self._sorted_markers()
+        total = self.duration if self.duration is not None else (
+            markers[-1][0] + 1 if markers else 1)
+        lines = [";FFMETADATA1"]
+        for i, (t, label) in enumerate(markers):
+            start_ms = int(t * 1000)
+            end_ms = int((markers[i + 1][0] if i + 1 < len(markers) else total) * 1000)
+            if end_ms <= start_ms:
+                end_ms = start_ms + 1
+            safe = label.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ")
+            lines.append("[CHAPTER]")
+            lines.append("TIMEBASE=1/1000")
+            lines.append(f"START={start_ms}")
+            lines.append(f"END={end_ms}")
+            lines.append(f"title={safe}")
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+    # --- シーン ---
+
+    def scene(self, name, duration):
+        """シーンのコンテキストマネージャを返す（with p.scene("intro", 5): ...）。
+
+        with 内で定義したObjectはシーン相対の時刻になり、シーンは時間軸上に
+        順次配置される（既存の time anchor / pause 機構を土台に、シーン末尾を
+        duration までパディングする）。
+        """
+        return Scene(self, name, duration)
+
+    # --- デバッグ ---
+
+    def explain(self, obj):
+        """objに最終適用されるフィルタチェーンと u 正規化の分母(dur)を表示する。
+
+        「dur がどこ由来か」を明示し、u=(t-start)/dur の分母の出所を一目で
+        分かるようにする（デバッグ用）。表示文字列を返す。
+        """
+        if not isinstance(obj, Object):
+            raise TypeError("explain: 対象は Object が必要です")
+        start = getattr(obj, "start_time", 0)
+        # dur の出所を判定
+        if obj.duration:
+            dur = obj.duration
+            dur_src = "obj.duration（time()で明示指定）"
+        elif getattr(obj, "_resolved_length", None):
+            dur = obj._resolved_length
+            dur_src = "obj._resolved_length（ベイク時に確定）"
+        else:
+            try:
+                dur = self._resolve_obj_duration(obj)
+                dur_src = "length()/フォールバック（time()未指定）"
+            except Exception:
+                dur = None
+                dur_src = "未解決"
+        lines = []
+        lines.append(f"=== explain: {obj.source} ===")
+        lines.append(f"  media_type : {obj.media_type}")
+        lines.append(f"  start_time : {start}")
+        lines.append(f"  duration   : {obj.duration}")
+        lines.append(f"  u 正規化分母 dur = {dur}  ← {dur_src}")
+        lines.append(f"  u = clip((t-{start})/{dur}, 0, 1)")
+        # transform / effect フィルタ
+        try:
+            tfs = _build_transform_filters(obj)
+        except Exception as e:
+            tfs = [f"<transform構築エラー: {e}>"]
+        lines.append("  Transforms:")
+        if obj.transforms:
+            for t in obj.transforms:
+                lines.append(f"    - {t.name}: {t.params}")
+        else:
+            lines.append("    (なし)")
+        lines.append("  Effects:")
+        if obj.effects:
+            for e in obj.effects:
+                pd = {}
+                for k, v in e.params.items():
+                    pd[k] = (v.to_ffmpeg("u")[:40] + "…") if isinstance(v, Expr) else v
+                lines.append(f"    - {e.name}: {pd}")
+        else:
+            lines.append("    (なし)")
+        lines.append("  映像フィルタチェーン:")
+        try:
+            base_dims = _get_base_dimensions(obj)
+            eff_filters, pad_size = _build_effect_filters(
+                obj, start, dur or 5, base_dims=base_dims)
+            chain = _optimize_filter_chain(list(tfs) + list(eff_filters))
+            for f in chain:
+                lines.append(f"    {f}")
+            x_expr, y_expr = _build_move_exprs(obj, start, dur or 5, pad_size=pad_size)
+            lines.append(f"  overlay位置: x={x_expr}")
+            lines.append(f"               y={y_expr}")
+        except Exception as e:
+            lines.append(f"    <フィルタ構築エラー: {e}>")
+        out = "\n".join(lines)
+        print(out)
+        return out
 
     def _reset_runtime_state(self):
         """render()用の実行時状態をリセット"""
@@ -1349,10 +1648,22 @@ class Project:
                 if until_name and until_name not in self._anchors:
                     raise RuntimeError(f"未定義のアンカー: '{until_name}'")
 
-    def render(self, output_path, *, dry_run=False, timeout=1800):
+    def render(self, output_path, *, dry_run=False, timeout=1800,
+               start=None, end=None):
         self._reset_runtime_state()
         self._dry_run = dry_run
         self._pending_compute_cmds = {}
+        # 部分レンダの時間窓を検証・保持（式のt基準は保ちつつ窓外を出力しない）
+        if start is not None or end is not None:
+            s = 0.0 if start is None else float(start)
+            e = end if end is None else float(end)
+            if s < 0:
+                raise ValueError(f"render: start は0以上が必要です: {start}")
+            if e is not None and e <= s:
+                raise ValueError(f"render: end({end}) は start({start}) より後が必要です")
+            self._render_window = (s, e)
+        else:
+            self._render_window = None
         # cache="use" の事前検証
         self._validate_cache_specs()
         # Plan pass: アンカー解決（cache模擬、objects破棄）
@@ -1635,12 +1946,12 @@ class Project:
         画像 + duration未設定のまま進むと int(fps * None) の TypeError で
         原因が分かりにくいため、ここで日本語エラーを投げる。
         """
-        has_morph = any(t == "effect" and op.name == "morph_to"
-                        for t, op in bakeable_ops)
-        if has_morph and dur is None:
+        has_term = any(t == "effect" and op.name in _TERMINAL_FRAME_EFFECTS
+                       for t, op in bakeable_ops)
+        if has_term and dur is None:
             raise ValueError(
-                f"morph_to を含むObject ('{source}') には表示時間の指定が必要です。"
-                f"obj.time(秒数) で duration を設定してください。")
+                f"morph_to/explode_to/assemble_from を含むObject ('{source}') には"
+                f"表示時間の指定が必要です。obj.time(秒数) で duration を設定してください。")
 
     def _process_checkpoints(self, obj):
         """1つのObjectのチェックポイント処理（実レンダ）"""
@@ -1759,6 +2070,72 @@ class Project:
                             print(f"モーフキャッシュ保存: {morph_path}")
                             _run_ffmpeg_to_cache(cmd, morph_path, timeout=600)
                     current_source = morph_path
+                    current_media_type = "video"
+                elif typ == "effect" and op.name in ("explode_to", "assemble_from"):
+                    from morph import (generate_explode_frames,
+                                       generate_assemble_frames)
+                    if op.name == "explode_to":
+                        # explode: 直前の未ベイクopsを先にベイク（morphと同じ経路）
+                        if pos > 0:
+                            pre_ops = remaining_ops[:pos]
+                            pre_segment = executed + pre_ops
+                            pre_has_effects = any(t == "effect" for t, _ in pre_segment)
+                            pre_dur = dur if (pre_has_effects or is_video) else None
+                            pre_fps = fps if pre_dur is not None else None
+                            pre_quality = getattr(pre_ops[-1][1], 'quality', 'final')
+                            pre_path = _checkpoint_cache_path(
+                                original_source, pre_segment, pre_dur, pre_fps, pre_quality)
+                            if not os.path.exists(pre_path):
+                                pre_transforms = [o for t, o in pre_ops if t == "transform"]
+                                pre_effects = [o for t, o in pre_ops if t == "effect"]
+                                os.makedirs(os.path.dirname(pre_path), exist_ok=True)
+                                if pre_dur is None:
+                                    pre_cmd = self._build_checkpoint_image_cmd(
+                                        current_source, pre_transforms, pre_path, pre_quality)
+                                else:
+                                    pre_cmd = self._build_checkpoint_video_cmd(
+                                        current_source, current_media_type,
+                                        pre_transforms, pre_effects,
+                                        pre_path, pre_dur, fps, pre_quality)
+                                print(f"チェックポイント保存 (explode前処理): {pre_path}")
+                                _run_ffmpeg_to_cache(pre_cmd, pre_path, timeout=600)
+                            current_source = pre_path
+                            current_media_type = _detect_media_type(pre_path)
+                        img_path = current_source
+                        gen = generate_explode_frames
+                    else:  # assemble_from: 集合元画像を入力にする
+                        img_path = op._assemble_source.source
+                        gen = generate_assemble_frames
+                    # 粒子生成（PIL）は画像のみ: 動画ソースは最終フレームを抽出
+                    if _detect_media_type(img_path) == "video":
+                        frame_path = _morph_input_frame_path(img_path)
+                        if not os.path.exists(frame_path):
+                            frame_cmd = _build_morph_frame_extract_cmd(img_path, frame_path)
+                            os.makedirs(os.path.dirname(frame_path), exist_ok=True)
+                            print(f"粒子入力フレーム抽出: {frame_path}")
+                            _run_ffmpeg_to_cache(frame_cmd, frame_path, timeout=600)
+                        img_path = frame_path
+                    part_path = _particle_cache_path(img_path, op, dur, fps, quality)
+                    policy = getattr(op, 'policy', 'auto')
+                    need_render = (policy == "force") or not os.path.exists(part_path)
+                    if need_render:
+                        import tempfile
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            n_frames = int(fps * dur)
+                            blend_expr = op.params.get("blend")
+                            if blend_expr is not None and isinstance(blend_expr, Expr):
+                                blend_fn = lambda t, _e=blend_expr: _e.eval_at(t)
+                            else:
+                                blend_fn = None
+                            part_kw = {k: v for k, v in op.params.items() if k != "blend"}
+                            gen(img_path, tmpdir, n_frames, blend_fn=blend_fn, **part_kw)
+                            frame_pattern = os.path.join(tmpdir, "frame_%05d.png")
+                            os.makedirs(os.path.dirname(part_path), exist_ok=True)
+                            cmd = self._build_morph_webm_cmd(
+                                frame_pattern, part_path, dur, fps, quality)
+                            print(f"粒子キャッシュ保存: {part_path}")
+                            _run_ffmpeg_to_cache(cmd, part_path, timeout=600)
+                    current_source = part_path
                     current_media_type = "video"
                 else:
                     cache_path = _checkpoint_cache_path(
@@ -1947,6 +2324,44 @@ class Project:
                     cmd = self._build_morph_webm_cmd(
                         frame_pattern, morph_path, dur, fps, quality)
                     cmds[morph_path] = cmd
+                elif sp_typ == "effect" and sp_op.name in ("explode_to", "assemble_from"):
+                    # 粒子Effect分岐（実レンダの_process_checkpointsと同じ経路）
+                    if sp_op.name == "explode_to":
+                        pre_start = prev_sps[-1] + 1 if prev_sps else 0
+                        pre_ops = bakeable_ops[pre_start:sp_idx]
+                        if pre_ops:
+                            pre_segment = bakeable_ops[:sp_idx]
+                            pre_has_effects = any(t == "effect" for t, _ in pre_segment)
+                            pre_dur = dur if (pre_has_effects or is_video) else None
+                            pre_fps = fps if pre_dur is not None else None
+                            pre_quality = getattr(pre_ops[-1][1], 'quality', 'final')
+                            pre_path = _checkpoint_cache_path(
+                                original_source, pre_segment, pre_dur, pre_fps, pre_quality)
+                            pre_transforms = [o for t, o in pre_ops if t == "transform"]
+                            pre_effects = [o for t, o in pre_ops if t == "effect"]
+                            if pre_dur is None:
+                                pre_cmd = self._build_checkpoint_image_cmd(
+                                    current_source, pre_transforms, pre_path, pre_quality)
+                            else:
+                                pre_cmd = self._build_checkpoint_video_cmd(
+                                    current_source, current_media_type,
+                                    pre_transforms, pre_effects,
+                                    pre_path, pre_dur, fps, pre_quality)
+                            cmds[pre_path] = pre_cmd
+                            current_source = pre_path
+                            current_media_type = _detect_media_type(pre_path)
+                        img_path = current_source
+                    else:  # assemble_from
+                        img_path = sp_op._assemble_source.source
+                    if _detect_media_type(img_path) == "video":
+                        frame_path = _morph_input_frame_path(img_path)
+                        cmds[frame_path] = _build_morph_frame_extract_cmd(
+                            img_path, frame_path)
+                        img_path = frame_path
+                    part_path = _particle_cache_path(img_path, sp_op, dur, fps, quality)
+                    frame_pattern = os.path.join("__particle_frames__", "frame_%05d.png")
+                    cmds[part_path] = self._build_morph_webm_cmd(
+                        frame_pattern, part_path, dur, fps, quality)
                 else:
                     cache_path = _checkpoint_cache_path(
                         original_source, segment_ops, cp_dur, cp_fps, quality)
@@ -1975,6 +2390,16 @@ class Project:
             if last_typ == "effect" and last_op.name == "morph_to" and hasattr(last_op, '_morph_target'):
                 last_path = _morph_cache_path(
                     current_source, last_op, dur, fps,
+                    getattr(last_op, 'quality', 'final'))
+            elif last_typ == "effect" and last_op.name in ("explode_to", "assemble_from"):
+                if last_op.name == "assemble_from":
+                    img_path = last_op._assemble_source.source
+                else:
+                    img_path = current_source
+                if _detect_media_type(img_path) == "video":
+                    img_path = _morph_input_frame_path(img_path)
+                last_path = _particle_cache_path(
+                    img_path, last_op, dur, fps,
                     getattr(last_op, 'quality', 'final'))
             else:
                 last_seg = bakeable_ops[:last_sp + 1]
@@ -2309,18 +2734,42 @@ class Project:
         cmd = ["ffmpeg", "-y"]
         cmd.extend(inputs)
 
+        # チャプター: FFMETADATAを追加入力にして -map_metadata で埋め込む
+        meta_idx = None
+        if self._markers:
+            meta_path = self._chapters_metadata_path()
+            if not getattr(self, "_dry_run", False):
+                self._write_chapters_metadata(meta_path)
+            # メタ入力のストリーム index = 既存 -i 個数（color 1 + オブジェクト入力数）
+            meta_idx = 1 + len(sorted_objects)
+            cmd.extend(["-f", "ffmetadata", "-i", meta_path])
+
         if filter_parts:
             cmd.extend(["-filter_complex", ";".join(filter_parts)])
             cmd.extend(["-map", current_base])
             if audio_out:
                 cmd.extend(["-map", audio_out])
 
+        if meta_idx is not None:
+            cmd.extend(["-map_metadata", str(meta_idx)])
+
         cmd.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
         if audio_out:
             cmd.extend(["-c:a", "aac"])
         else:
             cmd.extend(["-an"])
-        cmd.extend(["-t", str(self.duration), output_path])
+
+        # 部分レンダ: 出力側 -ss/-t で窓を切り出す（フィルタのt基準は保つ）
+        window = getattr(self, "_render_window", None)
+        if window is not None:
+            w_start, w_end = window
+            w_end = self.duration if w_end is None else min(w_end, self.duration)
+            out_dur = max(0.0, w_end - w_start)
+            if w_start > 0:
+                cmd.extend(["-ss", str(w_start)])
+            cmd.extend(["-t", str(out_dur), output_path])
+        else:
+            cmd.extend(["-t", str(self.duration), output_path])
 
         return cmd
 
@@ -2391,6 +2840,12 @@ def _get_base_dimensions(obj):
             new_w = int(_math.ceil(src_w * c + src_h * s))
             new_h = int(_math.ceil(src_w * s + src_h * c))
             src_w, src_h = new_w, new_h
+        elif t.name == "grid":
+            cols = t.params["cols"]
+            rows = t.params["rows"]
+            gap = t.params.get("gap", 0)
+            src_w = src_w * cols + gap * (cols - 1)
+            src_h = src_h * rows + gap * (rows - 1)
     return src_w, src_h
 
 
@@ -2516,6 +2971,15 @@ def _build_transform_filters(obj):
             s = t.params.get("saturation", 1)
             g = t.params.get("gamma", 1)
             filters.append(f"eq=brightness={b}:contrast={c}:saturation={s}:gamma={g}")
+        elif t.name == "grid":
+            # 静止素材を cols×rows のグリッドに複製（背景パターン生成用）。
+            # -loop 1 の入力は全フレームが同一なので、tile フィルタで
+            # cols*rows フレームを並べると同一画像のグリッドになる。
+            cols = t.params["cols"]
+            rows = t.params["rows"]
+            gap = t.params.get("gap", 0)
+            filters.append(
+                f"tile={cols}x{rows}:padding={gap}:margin=0:color=0x00000000")
     return filters
 
 
@@ -3145,6 +3609,49 @@ class Pause:
         return self
 
 
+class Scene:
+    """シーンのコンテキストマネージャ（p.scene() が返す）。
+
+    with 内で定義したObjectはシーン相対の時刻になり、シーン終端を duration まで
+    パディングすることで、複数シーンが時間軸上に順次配置される。開始位置に
+    `scene:<name>` アンカーを張り、他レイヤーから参照できる。
+    """
+    def __init__(self, project, name, duration):
+        if duration is None or duration <= 0:
+            raise ValueError(f"scene '{name}': duration は正の値が必要です")
+        self.project = project
+        self.name = name
+        self.duration = duration
+        self._start_index = None
+
+    def __enter__(self):
+        # 開始位置にアンカー（他レイヤー/シーンからの参照点）
+        anchor(f"scene:{self.name}")
+        self._start_index = len(self.project.objects)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            return False
+        # このシーンで進行した尺を集計し、duration までパディング
+        used = 0.0
+        for o in self.project.objects[self._start_index:]:
+            if isinstance(o, _AnchorMarker):
+                continue
+            if getattr(o, "_advance", True) and getattr(o, "duration", None):
+                used += o.duration
+        pad = self.duration - used
+        if pad < -1e-6:
+            warnings.warn(
+                f"scene '{self.name}': 内容尺 {used:.3f}s が duration "
+                f"{self.duration}s を超えています（シーンが重なります）")
+        elif pad > 1e-6:
+            pause.time(pad)  # 次シーン開始まで時間を進める
+        # 終端アンカー
+        anchor(f"scene:{self.name}.end")
+        return False
+
+
 _WEB_KWARGS = {"duration", "size", "fps", "data", "name", "debug_frames", "deps"}
 
 
@@ -3525,6 +4032,20 @@ class Object:
                 # 失敗時もブラウザプロセスを残さない
                 browser.close()
 
+    def grid(self, cols, rows, *, gap=0):
+        """このObjectを cols×rows のグリッドに複製配置する Transform を追加。
+
+        出力サイズは (cols*iw + gap*(cols-1)) × (rows*ih + gap*(rows-1))。
+        背景パターン生成向け。静止画（-loop 1）を tile フィルタで並べる。
+        """
+        if self.media_type not in ("image",):
+            raise TypeError("grid() は画像素材にのみ使用できます")
+        if cols < 1 or rows < 1:
+            raise ValueError("grid: cols/rows は1以上が必要です")
+        self.transforms.append(
+            Transform("grid", cols=int(cols), rows=int(rows), gap=int(gap)))
+        return self
+
     def split(self):
         """(VideoView or None, AudioView or None) を返す"""
         v = VideoView(self) if self.has_video else None
@@ -3716,8 +4237,16 @@ def move(**kwargs):
 
 
 def rotate_to(deg=None, rad=None, *, from_deg=None, from_rad=None,
-              to_deg=None, to_rad=None, expand=True, fill="0x00000000"):
-    """時間依存回転Effect。deg/rad直接指定 or from/to でlerp。"""
+              to_deg=None, to_rad=None, follow=None, offset_deg=0.0,
+              expand=True, fill="0x00000000"):
+    """時間依存回転Effect。deg/rad直接指定 or from/to でlerp。
+
+    follow: move系Effect（move_along/path_bezier/throw等）を渡すと、
+      そのパスの進行方向を向く回転になる（look_at と同義）。offset_deg で
+      向きを補正する。
+    """
+    if follow is not None:
+        return look_at(follow, offset_deg=offset_deg, expand=expand, fill=fill)
     has_from_to = any(v is not None for v in (from_deg, from_rad, to_deg, to_rad))
     if has_from_to:
         fr = _to_expr(from_rad) if from_rad is not None else (
@@ -3773,6 +4302,318 @@ def morph_to(target, blend=None, **morph_params):
     eff = Effect("morph_to", blend=blend, **morph_params)
     eff._morph_target = target
     return eff
+
+
+def _check_particle_params(func, params):
+    """explode_to/assemble_from のパラメータのタイポを構築時に検出"""
+    try:
+        from morph import PARTICLE_PARAM_KEYS
+    except ImportError:
+        return
+    unknown = set(params) - set(PARTICLE_PARAM_KEYS)
+    if unknown:
+        raise ValueError(
+            f"{func}: 未知のパラメータ {sorted(unknown)}"
+            f"（有効なキー: {sorted(PARTICLE_PARAM_KEYS)}）")
+
+
+def explode_to(blend=None, **particle_params):
+    """パーティクル飛散Effect: 適用対象自身が粒子化して飛散する。
+
+    morph_to と同じ機構でベイクされる（中間フレーム抽出→mkvキャッシュ）。
+    bakeable opsの末尾に配置する必要がある。blend で進行カーブを指定できる。
+    particle_params: max_pixels, speed, gravity, spread, swirl,
+      particle_size, seed, dissolve, expand。
+    """
+    _check_particle_params("explode_to", particle_params)
+    if blend is None:
+        blend = _resolve_param(lambda u: u)
+    else:
+        blend = _resolve_param(blend)
+    return Effect("explode_to", blend=blend, **particle_params)
+
+
+def assemble_from(source, blend=None, **particle_params):
+    """パーティクル集合Effect: source の粒子が集合して画像になる。
+
+    適用したObjectは「source が集合していくアニメーション」に置き換わる
+    （source はモーフ同様Projectから消費される）。morph_to と同じベイク機構。
+    bakeable opsの末尾に配置する。
+    """
+    if not isinstance(source, Object):
+        raise TypeError(f"assemble_from の source は Object のみ: {type(source)}")
+    _check_particle_params("assemble_from", particle_params)
+    proj = Project._current
+    if proj is not None and source in proj.objects:
+        proj.objects.remove(source)
+        warnings.warn(
+            f"assemble_from: source '{source.source}' は集合アニメに消費されるため"
+            f"Projectから自動的に除外されました。")
+    # source素材をレイヤー依存として記録（objectsから外れるため鮮度検証に載せる）
+    if proj is not None and proj._current_layer_file:
+        src_deps = getattr(source, '_origin_sources', None) or [source.source]
+        proj._extra_layer_deps.setdefault(
+            proj._current_layer_file, []).extend(src_deps)
+    if blend is None:
+        blend = _resolve_param(lambda u: u)
+    else:
+        blend = _resolve_param(blend)
+    eff = Effect("assemble_from", blend=blend, **particle_params)
+    eff._assemble_source = source
+    return eff
+
+
+# --- パス・物理・ノイズ（move系Effect / Expr） ---
+
+def _piecewise_scalar_expr(u, points, easing=None):
+    """(t, v) の点列から u∈[0,1] 上の区分線形補間 Expr を構築（keyframes同型）
+
+    points は t 昇順。区間ごとに lerp し、if_ で連結する。easing 指定時は
+    各区間のローカル進行度に適用する。
+    """
+    u = _to_expr(u)
+    result = Const(points[-1][1])
+    for i in range(len(points) - 2, -1, -1):
+        t0, v0 = points[i]
+        t1, v1 = points[i + 1]
+        seg = t1 - t0
+        if seg <= 0:
+            continue
+        local = clip((u - Const(t0)) / Const(seg), 0, 1)
+        if easing is not None:
+            local = easing(local)
+        result = if_(lt(u, Const(t1)), lerp(v0, v1, local), result)
+    return result
+
+
+def _validate_points(func, points, min_n=2):
+    if not isinstance(points, (list, tuple)) or len(points) < min_n:
+        raise ValueError(f"{func}: 座標列は最低{min_n}点必要です")
+    for pt in points:
+        if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+            raise ValueError(f"{func}: 各点は (x, y) の2要素タプルが必要です: {pt!r}")
+
+
+def move_along(points, *, easing=None, anchor="center"):
+    """座標列 [(x0,y0), ...] に沿ったパスアニメーションの move Effect。
+
+    各点は u を等間隔に割り当てて区分線形補間する（x/y それぞれに適用）。
+    x/y は画面比率（0..1）。move の拡張なので既存の overlay 経路で描画される。
+    """
+    _validate_points("move_along", points)
+    n = len(points)
+    ts = [i / (n - 1) for i in range(n)]
+    x_pts = [(ts[i], float(points[i][0])) for i in range(n)]
+    y_pts = [(ts[i], float(points[i][1])) for i in range(n)]
+    x_expr = _piecewise_scalar_expr(Var("u"), x_pts, easing)
+    y_expr = _piecewise_scalar_expr(Var("u"), y_pts, easing)
+    eff = Effect("move", x=x_expr, y=y_expr, anchor=anchor)
+    eff._path_xy = (x_expr, y_expr)  # look_at 用にパスを保持
+    return eff
+
+
+def _bezier_segment_expr(s, p0, p1, p2, p3):
+    """3次ベジェの1座標式（s∈[0,1] は Expr）"""
+    s = _to_expr(s)
+    one = Const(1) - s
+    return (Const(p0) * one * one * one
+            + Const(3 * p1) * s * one * one
+            + Const(3 * p2) * s * s * one
+            + Const(p3) * s * s * s)
+
+
+def path_bezier(*points, anchor="center"):
+    """3次ベジェ曲線パスの move Effect。
+
+    制御点は (x,y) を 3n+1 個（p0,p1,p2,p3[,p4,p5,p6...]）。各セグメントは
+    直前セグメントの終点を始点に共有する。cubic_bezier イージングと同系の資産。
+    """
+    _validate_points("path_bezier", points, min_n=4)
+    n = len(points)
+    if (n - 1) % 3 != 0:
+        raise ValueError(
+            f"path_bezier: 制御点は 3n+1 個必要です（p0..p3, +3点ずつ）。指定={n}")
+    seg_count = (n - 1) // 3
+    xs = [float(p[0]) for p in points]
+    ys = [float(p[1]) for p in points]
+    # if_ 連結は右畳み込みのため、区間逆順で構築（_bezier_path_coord内で処理）
+    x_expr = _bezier_path_coord_rev(xs, seg_count)
+    y_expr = _bezier_path_coord_rev(ys, seg_count)
+    eff = Effect("move", x=x_expr, y=y_expr, anchor=anchor)
+    eff._path_xy = (x_expr, y_expr)
+    return eff
+
+
+def _bezier_path_coord_rev(ctrl, seg_count):
+    """複数セグメントを逆順で if_ 連結（後段区間が外側になるよう構築）"""
+    u = Var("u")
+    result = None
+    for k in range(seg_count - 1, -1, -1):
+        i0 = 3 * k
+        p0, p1, p2, p3 = ctrl[i0], ctrl[i0 + 1], ctrl[i0 + 2], ctrl[i0 + 3]
+        t0 = k / seg_count
+        t1 = (k + 1) / seg_count
+        s = clip((_to_expr(u) - Const(t0)) / Const(t1 - t0), 0, 1)
+        seg = _bezier_segment_expr(s, p0, p1, p2, p3)
+        if result is None:
+            result = seg
+        else:
+            result = if_(lt(_to_expr(u), Const(t1)), seg, result)
+    return result
+
+
+def throw(vx, vy, *, gravity=1.0, x0=0.5, y0=0.5, anchor="center"):
+    """物理ベース（初速+重力）の放物運動 move Effect。
+
+    位置は画面比率。u を正規化時間として
+      x(u) = x0 + vx*u,  y(u) = y0 + vy*u + 0.5*gravity*u^2
+    （+y が下方向）。move に統合されるため既存 overlay 経路で描画される。
+    """
+    u = Var("u")
+    x_expr = Const(x0) + Const(vx) * u
+    y_expr = Const(y0) + Const(vy) * u + Const(0.5 * gravity) * u * u
+    eff = Effect("move", x=x_expr, y=y_expr, anchor=anchor)
+    eff._path_xy = (x_expr, y_expr)
+    return eff
+
+
+def inertia(vx, vy, *, damping=3.0, x0=0.5, y0=0.5, anchor="center"):
+    """初速から指数減衰する慣性移動 move Effect（滑らかな減速）。
+
+    x(u) = x0 + vx*(1-exp(-damping*u))/damping。damping が大きいほど早く止まる。
+    """
+    if damping <= 0:
+        raise ValueError("inertia: damping は正の値が必要です")
+    u = Var("u")
+    decay = (Const(1) - exp(Const(-damping) * u)) / Const(damping)
+    x_expr = Const(x0) + Const(vx) * decay
+    y_expr = Const(y0) + Const(vy) * decay
+    eff = Effect("move", x=x_expr, y=y_expr, anchor=anchor)
+    eff._path_xy = (x_expr, y_expr)
+    return eff
+
+
+class _LookAtExpr(Expr):
+    """パス(x_expr, y_expr)の進行方向角(rad)を有限差分で求めるExpr。
+
+    to_ffmpeg では u を ±du ずらした座標式を atan2 に渡す。x はW比率、
+    y はH比率だが、アスペクト補正は行わず比率空間での方向を返す（近似）。
+    """
+    def __init__(self, x_expr, y_expr, offset_rad=0.0, du=1e-3):
+        self.x_expr = x_expr
+        self.y_expr = y_expr
+        self.offset_rad = offset_rad
+        self.du = du
+
+    def to_ffmpeg(self, u_expr):
+        up = f"(({u_expr})+{self.du})"
+        um = f"(({u_expr})-{self.du})"
+        dx = f"(({self.x_expr.to_ffmpeg(up)})-({self.x_expr.to_ffmpeg(um)}))"
+        dy = f"(({self.y_expr.to_ffmpeg(up)})-({self.y_expr.to_ffmpeg(um)}))"
+        return f"(atan2({dy}\\,{dx})+{self.offset_rad})"
+
+    def eval_at(self, u_value):
+        du = self.du
+        dx = self.x_expr.eval_at(u_value + du) - self.x_expr.eval_at(u_value - du)
+        dy = self.y_expr.eval_at(u_value + du) - self.y_expr.eval_at(u_value - du)
+        return _math.atan2(dy, dx) + self.offset_rad
+
+
+def look_at(path, *, offset_deg=0.0, expand=True, fill="0x00000000"):
+    """パスの進行方向を向く回転Effect（rotate_to のパス追従版）。
+
+    path: move系Effect（move_along/path_bezier/throw/inertia）または
+      (x_expr, y_expr) のタプル。パスの微分(有限差分)から角度を求める。
+    """
+    if isinstance(path, Effect) and hasattr(path, "_path_xy"):
+        x_expr, y_expr = path._path_xy
+    elif isinstance(path, (tuple, list)) and len(path) == 2:
+        x_expr, y_expr = _to_expr(path[0]), _to_expr(path[1])
+    else:
+        raise TypeError(
+            "look_at: path は move系Effect か (x_expr, y_expr) を渡してください")
+    offset_rad = offset_deg * _math.pi / 180.0
+    rad_expr = _LookAtExpr(x_expr, y_expr, offset_rad)
+    return Effect("rotate_to", rad=rad_expr, expand=expand, fill=fill)
+
+
+def perlin(u, *, octaves=2, seed=0, frequency=1.0, amplitude=1.0):
+    """sin合成による滑らかな擬似ノイズ Expr（手ブレカメラ等に使用）。
+
+    複数オクターブの sin を重ね合わせ、u∈[0,1] で滑らかに変動する値を返す。
+    出力はおおよそ [-amplitude, amplitude] に収まる。shake Effect が
+    規則的な正弦振動なのに対し、perlin は非整数周波数の重ね合わせで
+    不規則で自然な揺れを作る（値式なので move/rotate_to 等に渡せる）。
+    """
+    if octaves < 1:
+        raise ValueError("perlin: octaves は1以上が必要です")
+    u = _to_expr(u)
+    rng = __import__("random").Random(seed)
+    total = None
+    norm = 0.0
+    for k in range(octaves):
+        freq = frequency * (2 ** k) * (1 + 0.13 * (k + 1))  # 非整数比で周期性を崩す
+        phase = rng.uniform(0, 2 * _math.pi)
+        amp = 0.5 ** k
+        norm += amp
+        wave = sin(u * Const(2 * _math.pi * freq) + Const(phase)) * Const(amp)
+        total = wave if total is None else total + wave
+    return total * Const(amplitude / norm)
+
+
+def tile(obj, cols, rows, gap=0):
+    """obj を cols×rows のグリッドに複製配置（Object.grid の関数版）。obj を返す。"""
+    if not isinstance(obj, Object):
+        raise TypeError("tile: 第1引数は Object が必要です")
+    return obj.grid(cols, rows, gap=gap)
+
+
+class Group:
+    """複数Objectをまとめて同一Transform/Effectを一括適用するプロキシ。
+
+    使用例:
+        group(a, b, c) <= move(x=0.5, y=0.5)   # 各Objectへ委譲
+        group(a, b).time(3)                     # time/until も委譲
+    各適用は個々のObjectの __le__ / time / until へ転送する。
+    """
+    def __init__(self, *objects):
+        flat = []
+        for o in objects:
+            if isinstance(o, Group):
+                flat.extend(o.objects)
+            elif isinstance(o, Object):
+                flat.append(o)
+            else:
+                raise TypeError(f"group: Object のみ渡せます: {type(o)}")
+        if not flat:
+            raise ValueError("group: 最低1つのObjectが必要です")
+        self.objects = flat
+
+    def __le__(self, rhs):
+        for o in self.objects:
+            o.__le__(rhs)
+        return self
+
+    def time(self, duration=None, *, name=None):
+        # name は先頭Objectにのみ付与（アンカー重複を避ける）
+        for i, o in enumerate(self.objects):
+            o.time(duration, name=name if i == 0 else None)
+        return self
+
+    def until(self, name, offset=0.0):
+        for o in self.objects:
+            o.until(name, offset=offset)
+        return self
+
+    def show(self, duration, *, priority=None):
+        for o in self.objects:
+            o.show(duration, priority=priority)
+        return self
+
+
+def group(*objects):
+    """複数ObjectをまとめるGroupプロキシを返す（group(a,b,c) <= move(...)）。"""
+    return Group(*objects)
 
 
 def wipe(direction="left", progress=None):
@@ -4373,6 +5214,18 @@ class _PauseFactory:
 
 
 pause = _PauseFactory()
+
+
+def scene(name, duration):
+    """シーンのコンテキストマネージャ（アクティブProjectに対して動作）。
+
+    レイヤーファイル内で `with scene("intro", 5): ...` のように使う。
+    p.scene() と同義だが Project._current を暗黙に使う（anchor/pause と同様）。
+    """
+    proj = Project._current
+    if proj is None:
+        raise RuntimeError("scene()にはアクティブなProjectが必要です")
+    return Scene(proj, name, duration)
 
 
 # --- トランジション/スライドショー（xfade） ---

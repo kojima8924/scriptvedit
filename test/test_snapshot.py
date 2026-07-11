@@ -540,6 +540,73 @@ def setup_test58():
     return p.render("test58.mp4", dry_run=True)
 
 
+def setup_test59():
+    """move_along / path_bezier / throw / look_at のパスアニメ"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test59_paths.py", priority=0)
+    return p.render("test59.mp4", dry_run=True)
+
+
+def setup_test60():
+    """explode_to: 粒子飛散（morph同機構でmkvキャッシュ生成物）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test60_explode.py", priority=0)
+    return p.render("test60.mp4", dry_run=True)
+
+
+def setup_test61():
+    """assemble_from: 粒子集合（source消費+mkvキャッシュ生成物）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test61_assemble.py", priority=0)
+    return p.render("test61.mp4", dry_run=True)
+
+
+def setup_test62():
+    """group（一括適用）+ grid/tile（グリッド複製）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test62_group_grid.py", priority=0)
+    return p.render("test62.mp4", dry_run=True)
+
+
+def setup_test63():
+    """scene: シーンの順次配置（シーン相対時刻）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test63_scene.py", priority=0)
+    return p.render("test63.mp4", dry_run=True)
+
+
+def setup_test64():
+    """perlin ノイズによる手ブレ風 move"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test64_perlin.py", priority=0)
+    return p.render("test64.mp4", dry_run=True)
+
+
+def setup_test65():
+    """marker + チャプター（FFMETADATA埋め込み）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.marker(0, "イントロ")
+    p.marker(2.0, "本編")
+    p.marker(4.5, "まとめ")
+    p.layer("test65_chapters.py", priority=0)
+    return p.render("test65.mp4", dry_run=True)
+
+
+def setup_test66():
+    """部分レンダ（時間窓 start=1.5, end=4.0）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test66_window.py", priority=0)
+    return p.render("test66.mp4", dry_run=True, start=1.5, end=4.0)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -599,6 +666,14 @@ ALL_TESTS = [
     ("test56", setup_test56),
     ("test57", setup_test57),
     ("test58", setup_test58),
+    ("test59", setup_test59),
+    ("test60", setup_test60),
+    ("test61", setup_test61),
+    ("test62", setup_test62),
+    ("test63", setup_test63),
+    ("test64", setup_test64),
+    ("test65", setup_test65),
+    ("test66", setup_test66),
 ]
 
 

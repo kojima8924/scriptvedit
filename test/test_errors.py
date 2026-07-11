@@ -4,6 +4,8 @@ sys.path.insert(0, "..")
 from scriptvedit import (
     _resolve_param, Project, P, Object, VideoView, AudioView,
     again, move, fade, resize, rotate, rotate_to, morph_to, AudioEffect, AudioEffectChain,
+    explode_to, assemble_from, move_along, path_bezier, throw, inertia, look_at, perlin,
+    group, tile, scene, keyframes,
     subtitle, subtitle_box, bubble, diagram, circle, label,
     crop, pad, blur, eq, wipe, zoom, color_shift, shake, scale,
     chroma_key, vignette, pixelize, glow, lut, glitch,
@@ -1889,6 +1891,231 @@ def test_loudnorm_in_cmd():
             os.unlink(tmp)
 
 
+def test_explode_to_not_last():
+    """explode_to の後に bakeable op → エラー"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(2) <= explode_to()\n"
+        "o <= scale(1.2)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_expl.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        p.render("_tmp.mp4", dry_run=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return (True, str(e).split("\n")[0]) if "explode_to" in str(e) else (False, str(e)[:60])
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_explode_to_needs_duration():
+    """explode_to を含む画像に time() 未指定 → エラー"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o <= explode_to()\n"
+        "o <= move(x=0.5, y=0.5)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_expl2.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        p.render("_tmp.mp4", dry_run=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return (True, str(e).split("\n")[0]) if "時間" in str(e) else (False, str(e)[:60])
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_assemble_from_non_object():
+    """assemble_from の source が非Object → TypeError"""
+    try:
+        assemble_from("notanobject")
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        return True, str(e)[:60]
+
+
+def test_two_terminal_effects():
+    """morph_to と explode_to を同時指定 → エラー"""
+    layer = (
+        "from scriptvedit import *\n"
+        "tgt = Object('../figure_cafe.png')\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(2) <= morph_to(tgt)\n"
+        "o <= explode_to()\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_two.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        p.render("_tmp.mp4", dry_run=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return (True, str(e).split("\n")[0]) if "1回" in str(e) else (False, str(e)[:60])
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_move_along_too_few():
+    """move_along: 点が1つ → ValueError"""
+    try:
+        move_along([(0.5, 0.5)])
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return True, str(e)[:60]
+
+
+def test_path_bezier_bad_count():
+    """path_bezier: 制御点数が 3n+1 でない → ValueError"""
+    try:
+        path_bezier((0, 0), (1, 1), (0.5, 0.5))  # 3点 → 不正
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return True, str(e)[:60]
+
+
+def test_group_non_object():
+    """group: 非Object → TypeError"""
+    try:
+        group(Object("../onigiri_tenmusu.png"), "x")
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        return True, str(e)[:60]
+
+
+def test_grid_on_non_image():
+    """grid: 音声素材 → TypeError"""
+    try:
+        o = Object("../Impact-38.mp3")
+        o.grid(2, 2)
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        return True, str(e)[:60]
+
+
+def test_render_window_bad_range():
+    """render: end <= start → ValueError"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(3) <= move(x=0.5, y=0.5)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_win.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        p.render("_tmp.mp4", dry_run=True, start=3, end=2)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return (True, str(e).split("\n")[0]) if "end" in str(e) else (False, str(e)[:60])
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_inertia_bad_damping():
+    """inertia: damping<=0 → ValueError"""
+    try:
+        inertia(0.5, 0.0, damping=0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return True, str(e)[:60]
+
+
+def test_perlin_bad_octaves():
+    """perlin: octaves<1 → ValueError"""
+    try:
+        perlin(0.5, octaves=0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return True, str(e)[:60]
+
+
+def test_look_at_bad_path():
+    """look_at: パス以外 → TypeError"""
+    try:
+        look_at("notapath")
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        return True, str(e)[:60]
+
+
+def test_param_cli_override():
+    """p.param: --param name=値 で上書きされる"""
+    old = list(sys.argv)
+    try:
+        sys.argv = ["x", "--param", "greeting=こんにちは"]
+        p = _mk_project()
+        val = p.param("greeting", "無題")
+        return (True, val) if val == "こんにちは" else (False, f"取得値={val}")
+    finally:
+        sys.argv = old
+
+
+def test_marker_in_cmd():
+    """p.marker: 生成コマンドに ffmetadata/-map_metadata が出る"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(4) <= move(x=0.5, y=0.5)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_mrk.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.marker(0, "A")
+        p.marker(2, "B")
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp.mp4", dry_run=True)
+        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        ok = "ffmetadata" in s and "-map_metadata" in s
+        return (True, "チャプター埋め込みOK") if ok else (False, "ffmetadata欠落")
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_explode_produces_particle_cache():
+    """explode_to: dry_runでparticle .mkv キャッシュコマンドが出る"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(2) <= explode_to()\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_pc.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        res = p.render("_tmp.mp4", dry_run=True)
+        if not isinstance(res, dict):
+            return False, "cacheコマンドが返りませんでした"
+        has_particle = any("particle" in k.replace("\\", "/") and k.endswith(".mkv")
+                           for k in res["cache"])
+        return (True, "particleキャッシュOK") if has_particle else (False, "particle欠落")
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -1999,6 +2226,22 @@ ALL_TESTS = [
     ("normalize_audio 範囲外", test_normalize_audio_range),
     ("text drawtext出力", test_text_drawtext_in_cmd),
     ("normalize_audio loudnorm出力", test_loudnorm_in_cmd),
+    # --- 構成・タイムライン・Expr拡張（新機能） ---
+    ("explode_to末尾でない", test_explode_to_not_last),
+    ("explode_to duration必須", test_explode_to_needs_duration),
+    ("assemble_from非Object", test_assemble_from_non_object),
+    ("終端Effect2個", test_two_terminal_effects),
+    ("move_along点不足", test_move_along_too_few),
+    ("path_bezier点数不正", test_path_bezier_bad_count),
+    ("group非Object", test_group_non_object),
+    ("grid非画像", test_grid_on_non_image),
+    ("render窓範囲不正", test_render_window_bad_range),
+    ("inertia damping不正", test_inertia_bad_damping),
+    ("perlin octaves不正", test_perlin_bad_octaves),
+    ("look_at不正パス", test_look_at_bad_path),
+    ("param CLI上書き", test_param_cli_override),
+    ("marker埋め込み出力", test_marker_in_cmd),
+    ("explode particleキャッシュ", test_explode_produces_particle_cache),
 ]
 
 
