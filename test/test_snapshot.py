@@ -663,6 +663,94 @@ def setup_test73():
     return p.render("test73.mp4", dry_run=True)
 
 
+def setup_test74():
+    """from_project: ネストコンポジション（サブProject→透過webm素材化）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test74_nested.py", priority=0)
+    return p.render("test74.mp4", dry_run=True)
+
+
+def setup_test75():
+    """mask: 画像輝度をアルファとして乗算（movie= + scale2ref + alphamerge）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test75_mask.py", priority=0)
+    return p.render("test75.mp4", dry_run=True)
+
+
+def setup_test76():
+    """mask_wipe: マスク輝度しきい値ワイプ（既定線形 + Expr進行）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test76_mask_wipe.py", priority=0)
+    return p.render("test76.mp4", dry_run=True)
+
+
+def setup_test77():
+    """opacity: 定数(colorchannelmixer) + Expr(geq live)"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test77_opacity.py", priority=0)
+    return p.render("test77.mp4", dry_run=True)
+
+
+def setup_test78():
+    """blend_mode: screen/multiply（blend+maskedmerge合成経路）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test78_blend_mode.py", priority=0)
+    return p.render("test78.mp4", dry_run=True)
+
+
+def setup_test79():
+    """pip プリセット + rounded 角丸"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test79_pip_rounded.py", priority=0)
+    return p.render("test79.mp4", dry_run=True)
+
+
+def setup_test80():
+    """blur_background_fill: ぼかし背景敷き（キャンバス全面化）"""
+    p = Project()
+    p.configure(width=720, height=1280, fps=30, background_color="black")
+    p.layer("test80_blur_bg_fill.py", priority=0)
+    return p.render("test80.mp4", dry_run=True)
+
+
+def setup_test81():
+    """progress_bar: 動画全体の進行バー（geq + T/総尺）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test81_progress_bar.py", priority=0)
+    return p.render("test81.mp4", dry_run=True)
+
+
+def setup_test82():
+    """speed: 再生速度（setpts + length()反映 + atempo自動追従）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test82_speed.py", priority=0)
+    return p.render("test82.mp4", dry_run=True)
+
+
+def setup_test83():
+    """reverse + freeze_frame: 逆再生と一時停止（時間系liveサブグラフ）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test83_reverse_freeze.py", priority=0)
+    return p.render("test83.mp4", dry_run=True)
+
+
+def setup_test84():
+    """video_sequence: 動画クリップのxfade連結（キャッシュ生成物）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test84_video_sequence.py", priority=0)
+    return p.render("test84.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -737,6 +825,17 @@ ALL_TESTS = [
     ("test71", setup_test71),
     ("test72", setup_test72),
     ("test73", setup_test73),
+    ("test74", setup_test74),
+    ("test75", setup_test75),
+    ("test76", setup_test76),
+    ("test77", setup_test77),
+    ("test78", setup_test78),
+    ("test79", setup_test79),
+    ("test80", setup_test80),
+    ("test81", setup_test81),
+    ("test82", setup_test82),
+    ("test83", setup_test83),
+    ("test84", setup_test84),
 ]
 
 

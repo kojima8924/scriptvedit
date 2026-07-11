@@ -1,0 +1,77 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=1280x720:d=2:r=30",
+    "-c:v",
+    "libvpx-vp9",
+    "-i",
+    "__cache__/artifacts/subproject/245371d9a10dddc0.webm",
+    "-filter_complex",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,2)'[v1]",
+    "-map",
+    "[v1]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "2",
+    "test74.mp4"
+  ],
+  "cache": {
+    "__cache__/artifacts/subproject/245371d9a10dddc0.webm": {
+      "main": [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black@0.0:s=640x360:d=2:r=30,format=rgba",
+        "-loop",
+        "1",
+        "-r",
+        "30",
+        "-i",
+        "__cache__/artifacts/checkpoint/2fdb2eec/e0b5e20634356795.png",
+        "-filter_complex",
+        "[0:v][1:v]overlay=trunc((0.2+(0.6000000000000001*clip((t-0)/2/,0/,1)))*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,2)'[v1]",
+        "-map",
+        "[v1]",
+        "-c:v",
+        "libvpx-vp9",
+        "-pix_fmt",
+        "yuva420p",
+        "-b:v",
+        "0",
+        "-crf",
+        "24",
+        "-auto-alt-ref",
+        "0",
+        "-an",
+        "-t",
+        "2",
+        "__cache__/artifacts/subproject/245371d9a10dddc0.webm"
+      ],
+      "cache": {
+        "__cache__/artifacts/checkpoint/2fdb2eec/e0b5e20634356795.png": [
+          "ffmpeg",
+          "-y",
+          "-i",
+          "../onigiri_tenmusu.png",
+          "-vf",
+          "scale=iw*0.5:ih*0.5",
+          "-frames:v",
+          "1",
+          "-pix_fmt",
+          "rgba",
+          "__cache__/artifacts/checkpoint/2fdb2eec/e0b5e20634356795.png"
+        ]
+      }
+    }
+  }
+}

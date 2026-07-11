@@ -24,7 +24,12 @@ __all__ = [
     "wipe", "zoom", "color_shift", "shake",
     "chroma_key", "vignette", "pixelize", "glow", "lut", "glitch",
     "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline",
-    "slideshow", "transition",
+    "slideshow", "transition", "video_sequence",
+    # 合成・コンポジション
+    "mask", "mask_wipe", "opacity", "blend_mode", "rounded", "pip",
+    "blur_background_fill", "progress_bar",
+    # 時間操作（映像）
+    "speed", "reverse", "freeze_frame",
     "again", "afade", "adelete", "delete", "trim", "atrim", "atempo",
     # テキスト・字幕（drawtext/subtitlesベース）
     "text", "typewriter", "counter", "subtitles",
@@ -783,10 +788,19 @@ _ENGINE_VER = "7"
 _BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift",
                      "chroma_key", "vignette", "pixelize", "glow", "lut", "glitch",
                      "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline",
-                     "explode_to", "assemble_from"}
+                     "explode_to", "assemble_from",
+                     "mask", "mask_wipe", "opacity", "rounded"}
 
 # 終端フレーム生成Effect（bakeable末尾に1つだけ・映像を生成する）
 _TERMINAL_FRAME_EFFECTS = {"morph_to", "explode_to", "assemble_from"}
+
+# 時間操作系の live Effect（setpts/reverse/concat による時間変形）。
+# チェックポイントベイクの表示尺基準と食い違うため bakeable にはしない
+# （ベイク済みソースに対して毎レンダ live で適用する）。
+_TIME_LIVE_EFFECTS = {"speed", "reverse", "freeze_frame"}
+
+# reverse Effect の実効尺上限（全フレームをメモリに保持するため長尺は危険）
+_REVERSE_MAX_SEC = 30.0
 
 
 # --- テキスト/字幕（drawtext・subtitles）ヘルパー ---
@@ -919,6 +933,27 @@ def _build_text_filters(obj, start, dur):
     start/dur はタイムライン上の表示開始時刻/尺（u 正規化に使用）。"""
     spec = obj._text_spec
     kind = spec["kind"]
+
+    if kind == "progress_bar":
+        # 動画全体の進行バー: 透明キャンバスに geq で帯を描画。
+        # 進行は t/総尺（clip(T/total, 0, 1)）で毎フレーム更新する。
+        proj = Project._current
+        total = proj.duration if proj and proj.duration else dur
+        h = spec["height"]
+        yfrac = spec["y"]
+        br, bgc, bb, ba = spec["bar_rgba"]
+        tr, tg, tb, ta = spec["track_rgba"]
+        top = f"({yfrac}*(H-{h}))"
+        prog = f"clip(T/{total}\\,0\\,1)"
+        bar = f"lte(X\\,W*{prog})"
+        band = f"gte(Y\\,{top})*lt(Y\\,{top}+{h})"
+        return [
+            "format=rgba",
+            f"geq=r='if({bar}\\,{br}\\,{tr})'"
+            f":g='if({bar}\\,{bgc}\\,{tg})'"
+            f":b='if({bar}\\,{bb}\\,{tb})'"
+            f":a='({band})*if({bar}\\,{ba}\\,{ta})'",
+        ]
 
     if kind == "subtitles":
         parts = [f"subtitles=filename={_escape_ffpath(spec['srt'])}"]
@@ -1067,6 +1102,13 @@ def _op_fingerprint_str(op):
             parts.append(f"lut_ffp={_file_fingerprint(lut_file)}")
         except (OSError, TypeError):
             parts.append(f"lut_src={lut_file}")
+    # mask/mask_wipe: マスク画像のFFPをsignatureに含める（内容変更でキャッシュ無効化）
+    if op.name in ("mask", "mask_wipe"):
+        mask_img = op.params.get("image")
+        try:
+            parts.append(f"mask_ffp={_file_fingerprint(mask_img)}")
+        except (OSError, TypeError):
+            parts.append(f"mask_src={mask_img}")
     return "|".join(parts)
 
 
@@ -1270,6 +1312,24 @@ def _split_ops(ops):
     return bakeable, live
 
 
+def _apply_time_effects_to_duration(dur, effects):
+    """時間系 live Effect（speed/freeze_frame）を尺に反映した表示尺を返す。
+
+    speed: 尺 / factor、freeze_frame: 尺 + duration、reverse: 変化なし。
+    effects の並び順に適用する。
+    """
+    cur = dur
+    for e in effects:
+        name = getattr(e, "name", None)
+        if name == "speed":
+            f = e.params.get("factor", 1.0)
+            if f:
+                cur = cur / f
+        elif name == "freeze_frame":
+            cur = cur + e.params.get("duration", 0.0)
+    return cur
+
+
 def _web_cache_path(obj, project):
     """Web Objectのsignatureベースキャッシュパスを計算"""
     sigs = []
@@ -1328,6 +1388,9 @@ def _layer_cache_paths(filename, project=None):
 
 class Project:
     _current = None
+    # レイヤー実行中のProjectスタック（from_projectでの親特定用。
+    # レイヤー内で sub = Project() すると _current が奪われるため別管理）
+    _exec_stack = []
 
     def __init__(self):
         self.width = 1920
@@ -1714,10 +1777,16 @@ class Project:
         # exec中にmorph_to等が積む追加依存をリセット（plan/renderの再実行で重複させない）
         self._extra_layer_deps[filename] = []
         Project._current = self
-        with open(filename, encoding="utf-8") as f:
-            code = f.read()
-        namespace = {}
-        exec(compile(code, filename, "exec"), namespace)
+        Project._exec_stack.append(self)
+        try:
+            with open(filename, encoding="utf-8") as f:
+                code = f.read()
+            namespace = {}
+            exec(compile(code, filename, "exec"), namespace)
+        finally:
+            Project._exec_stack.pop()
+            # レイヤー内で sub = Project() された場合に _current を奪還する
+            Project._current = self
         end_idx = len(self.objects)
         self._layers.append((start_idx, end_idx, priority))
         for obj in self.objects[start_idx:end_idx]:
@@ -2247,6 +2316,34 @@ class Project:
                 f"morph_to/explode_to/assemble_from を含むObject ('{source}') には"
                 f"表示時間の指定が必要です。obj.time(秒数) で duration を設定してください。")
 
+    def _checkpoint_bake_duration(self, obj, original_source):
+        """チェックポイントのベイク尺を決定する。
+
+        speed/reverse/freeze_frame 等の live 時間系Effectが残るObjectは、
+        表示尺(duration)ではなくソース基準の実長(trimのみ反映)でベイクする。
+        表示尺でベイクすると、後段の時間系Effect適用でソース素材が
+        不足/過剰になる（例: speed(2)で表示尺5s → 元素材10sが必要）ため。
+        """
+        is_video = _detect_media_type(original_source) in ("video",)
+        has_time_live = any(
+            getattr(e, "name", None) in _TIME_LIVE_EFFECTS for e in obj.effects)
+        if is_video and has_time_live:
+            info = self._probe_media(original_source)
+            base = info.get("duration") if info else None
+            if base is None:
+                base = getattr(obj, "_resolved_length", None) or obj.duration
+            if base:
+                cur = base
+                for e in obj.effects:
+                    if e.name == "trim" and e.params.get("duration") is not None:
+                        cur = _builtins.min(cur, e.params["duration"])
+                return cur
+        dur = obj.duration
+        # video + duration未指定 → obj.length() で補完
+        if dur is None and is_video:
+            dur = obj.length()
+        return dur
+
     def _process_checkpoints(self, obj):
         """1つのObjectのチェックポイント処理（実レンダ）"""
         ops = _build_unified_ops(obj)
@@ -2266,10 +2363,7 @@ class Project:
 
         original_source = obj.source
         original_media_type = obj.media_type
-        dur = obj.duration
-        # video + duration未指定 → obj.length() で補完
-        if dur is None and _detect_media_type(original_source) in ("video",):
-            dur = obj.length()
+        dur = self._checkpoint_bake_duration(obj, original_source)
         fps = self.fps
         self._require_morph_duration(bakeable_ops, dur, original_source)
 
@@ -2464,9 +2558,11 @@ class Project:
 
         # Objectを更新: source差し替え、残余bakeable ops + live opsを再設定
         # 差し替え前に解決した実長を保持（差し替え後のprobe依存を排除し、
-        # dry_runと実レンダで式を一致させる）
+        # dry_runと実レンダで式を一致させる）。
+        # live 時間系Effect（speed/freeze_frame）が残る場合は表示尺に換算する
         if dur:
-            obj._resolved_length = dur
+            obj._resolved_length = _apply_time_effects_to_duration(
+                dur, [op for t, op in live_ops if t == "effect"])
         obj.source = current_source
         obj.media_type = current_media_type
         obj.transforms = [op for t, op in remaining_ops if t == "transform"]
@@ -2539,10 +2635,7 @@ class Project:
                 continue
 
             original_source = obj.source
-            dur = obj.duration
-            # video + duration未指定 → obj.length() で補完
-            if dur is None and _detect_media_type(original_source) in ("video",):
-                dur = obj.length()
+            dur = self._checkpoint_bake_duration(obj, original_source)
             fps = self.fps
             self._require_morph_duration(bakeable_ops, dur, original_source)
             current_source = original_source
@@ -2704,9 +2797,11 @@ class Project:
                     dur if (last_has_eff or last_is_video) else None,
                     fps if (last_has_eff or last_is_video) else None,
                     getattr(last_op, 'quality', 'final'))
-            # 差し替え前に解決した実長を保持（未生成予定パスへのprobe fallback防止）
+            # 差し替え前に解決した実長を保持（未生成予定パスへのprobe fallback防止）。
+            # live 時間系Effect（speed/freeze_frame）が残る場合は表示尺に換算する
             if dur:
-                obj._resolved_length = dur
+                obj._resolved_length = _apply_time_effects_to_duration(
+                    dur, [op for t, op in live_ops if t == "effect"])
             obj.source = last_path
             obj.media_type = _detect_media_type(last_path)
             remaining = bakeable_ops[last_sp + 1:]
@@ -3310,7 +3405,12 @@ def _build_input_args(obj, fps):
         proj = Project._current
         w = proj.width if proj else 1920
         h = proj.height if proj else 1080
-        d = obj.duration or getattr(obj, "_resolved_length", None) or 5
+        d = obj.duration or getattr(obj, "_resolved_length", None)
+        if d is None and getattr(obj, "_text_spec", {}).get("kind") == "progress_bar":
+            # progress_bar は duration 未設定で動画全体に表示するため、
+            # 入力キャンバスも全体尺で生成する（5s固定だとEOF後にバーが消える）
+            d = proj.duration if proj and proj.duration else None
+        d = d or 5
         return ["-f", "lavfi",
                 "-i", f"color=c=black@0.0:s={w}x{h}:d={d}:r={fps},format=rgba"]
     return _decoder_input_args(obj.source, obj.media_type, fps)
@@ -3324,7 +3424,7 @@ def _build_video_overlay_parts(obj, input_idx, current_base, dur):
     """
     start = obj.start_time
     base_dims = _get_base_dimensions(obj)
-    obj_filters = list(_build_video_pre_filters(obj))
+    obj_filters = list(_build_video_pre_filters(obj, label_prefix=f"pre{input_idx}"))
     # ビデオ入力が start_time > 0 の場合、tpad で先頭にフレームを追加
     # (overlay有効化前にフレームが消費されるのを防ぐ)
     # trim/setpts の後に挿入し、trim がクローンフレーム込みで尺を切らないようにする
@@ -3348,12 +3448,43 @@ def _build_video_overlay_parts(obj, input_idx, current_base, dur):
 
     x_expr, y_expr = _build_move_exprs(obj, start, dur, pad_size=pad_size)
 
-    enable_str = ""
+    enable_expr = None
     if obj.duration is not None:
         end = start + obj.duration
-        enable_str = f":enable='between(t\\,{start}\\,{end})'"
+        enable_expr = f"between(t\\,{start}\\,{end})"
+    enable_str = f":enable='{enable_expr}'" if enable_expr else ""
 
     out_label = f"[v{input_idx}]"
+    blend_eff = next((e for e in obj.effects if e.name == "blend_mode"), None)
+    if blend_eff is not None and blend_eff.params.get("mode") != "normal":
+        # blend_mode: overlayフィルタは合成モード非対応のため、
+        # このオブジェクトのみ「透明キャンバスへ通常overlayした全面フレーム」を
+        # blend=cN_mode=<mode> でベースと合成し、オブジェクトのアルファ領域だけ
+        # maskedmerge で採用する経路に切り替える。
+        # （blendはアルファ非考慮のため、透明領域まで合成されるのを防ぐ）
+        proj = Project._current
+        cw = proj.width if proj else 1920
+        ch = proj.height if proj else 1080
+        cfps = proj.fps if proj else 30
+        cdur = (proj.duration if proj and proj.duration else None) or (start + dur)
+        mode = blend_eff.params["mode"]
+        q = f"bm{input_idx}"
+        # 1) 透明キャンバスへ通常overlay（位置/enableは通常経路と同一）
+        parts.append(f"color=c=black@0.0:s={cw}x{ch}:r={cfps}:d={cdur}[{q}c]")
+        parts.append(
+            f"[{q}c]{obj_label}overlay={x_expr}:{y_expr}:eof_action=pass{enable_str},"
+            f"format=rgba,split[{q}o1][{q}o2]")
+        # 2) アルファ抽出（maskedmergeのマスク。gbrapに揃えて全plane一致）
+        parts.append(f"[{q}o2]alphaextract,format=gbrap[{q}m]")
+        parts.append(f"[{q}o1]format=gbrap[{q}oc]")
+        # 3) 全面blend（obj=top, base=bottom。c3=アルファは指定せずtopを透過）
+        parts.append(f"{current_base}format=gbrap,split[{q}b1][{q}b2]")
+        parts.append(
+            f"[{q}oc][{q}b1]blend=c0_mode={mode}:c1_mode={mode}:c2_mode={mode}[{q}bl]")
+        # 4) オブジェクトのアルファ領域のみ合成結果を採用（enable外はベース素通し）
+        merge_enable = f"=enable='{enable_expr}'" if enable_expr else ""
+        parts.append(f"[{q}b2][{q}bl][{q}m]maskedmerge{merge_enable}{out_label}")
+        return parts, out_label
     parts.append(
         f"{current_base}{obj_label}overlay={x_expr}:{y_expr}:eof_action=pass{enable_str}{out_label}"
     )
@@ -3433,7 +3564,10 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
     filters = []
     pad_size = None
     for eff_idx, e in enumerate(obj.effects):
-        if e.name in ("move", "trim", "delete", "morph_to", "shake"):
+        if e.name in ("move", "trim", "delete", "morph_to", "shake",
+                      "blend_mode", "speed", "reverse", "freeze_frame"):
+            # blend_mode は overlay合成段（_build_video_overlay_parts）、
+            # speed/reverse/freeze_frame は前処理（_build_video_pre_filters）で処理
             continue
         if e.name == "scale":
             scale_expr = e.params.get("value", Const(1))
@@ -3651,6 +3785,92 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
             # scale等で固定サイズ化済みなら、縁取りの拡張分(2*wd)を加算して中央配置ずれを防ぐ
             if pad_size:
                 pad_size = (pad_size[0] + 2 * wd, pad_size[1] + 2 * wd)
+        elif e.name == "mask":
+            # 画像の輝度をアルファとして乗算。追加 -i 入力の配線を避けるため
+            # movie= ソースをチェーン内サブグラフで読み込む。
+            # マスクは scale2ref で素材サイズへ自動スケールし、
+            # blend='A*B/255' で元アルファと乗算 → alphamerge で書き戻す。
+            img = _escape_ffpath(e.params["image"])
+            p = f"{label_prefix}e{eff_idx}"
+            filters.append("format=rgba")
+            filters.append(
+                f"split[{p}a][{p}b];"
+                f"[{p}b]alphaextract[{p}oa];"
+                f"movie=filename={img}[{p}mi];"
+                f"[{p}mi][{p}oa]scale2ref[{p}ms][{p}oa2];"
+                f"[{p}ms]format=gray[{p}mg];"
+                f"[{p}oa2][{p}mg]blend=all_expr='A*B/255':eof_action=repeat[{p}na];"
+                f"[{p}a][{p}na]alphamerge"
+            )
+        elif e.name == "mask_wipe":
+            # マスク画像の輝度をしきい値に使うワイプ
+            # （輝度 <= progress*255 の画素から順に現れる）。
+            # 注意: movie= の1フレーム入力をそのまま blend に渡すと
+            # framesync の T 評価が壊れる（実測: 約5倍速で進行）ため、
+            # loop+fps+setpts でメイン入力と同じタイムベースに正規化する。
+            # 無限ループは全レンダ経路の -t 指定で確実に打ち切られる。
+            prog_expr = e.params.get("progress", Const(1))
+            u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
+            prog_str = prog_expr.to_ffmpeg(u_expr)
+            img = _escape_ffpath(e.params["image"])
+            proj = Project._current
+            m_fps = proj.fps if proj else 30
+            p = f"{label_prefix}e{eff_idx}"
+            filters.append("format=rgba")
+            filters.append(
+                f"split[{p}a][{p}b];"
+                f"[{p}b]alphaextract[{p}oa];"
+                f"movie=filename={img},loop=loop=-1:size=1,fps={m_fps},"
+                f"setpts=N/({m_fps}*TB)[{p}mi];"
+                f"[{p}mi][{p}oa]scale2ref[{p}ms][{p}oa2];"
+                f"[{p}ms]format=gray[{p}mg];"
+                f"[{p}oa2][{p}mg]blend="
+                f"all_expr='if(lte(B\\,255*({prog_str}))\\,A\\,0)'"
+                f":eof_action=repeat[{p}na];"
+                f"[{p}a][{p}na]alphamerge"
+            )
+        elif e.name == "opacity":
+            # 不透明度: 定数は colorchannelmixer（高速）、Expr は geq で live 変化
+            val = e.params.get("value", Const(1.0))
+            filters.append("format=rgba")
+            if isinstance(val, Const):
+                filters.append(f"colorchannelmixer=aa={val.value}")
+            else:
+                u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
+                ffmpeg_str = val.to_ffmpeg(u_expr)
+                filters.append(
+                    f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)'"
+                    f":a='alpha(X\\,Y)*clip({ffmpeg_str}\\,0\\,1)'"
+                )
+        elif e.name == "rounded":
+            # 角丸: 角の中心からの距離が radius を超える画素のアルファを0に。
+            # clip でX/Yを内側矩形にクランプ → 中央十字帯では距離0（常に表示）
+            r = e.params["radius"]
+            corner = (f"lte(hypot(X-clip(X\\,{r}\\,W-1-{r})\\,"
+                      f"Y-clip(Y\\,{r}\\,H-1-{r}))\\,{r})")
+            filters.append("format=rgba")
+            filters.append(
+                f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)'"
+                f":a='alpha(X\\,Y)*{corner}'"
+            )
+        elif e.name == "blur_background_fill":
+            # 縦動画変換の定番: ぼかした自分自身をキャンバス全面に敷き、
+            # 中央に本体を fit で重ねる（出力はキャンバスサイズ固定）
+            proj = Project._current
+            cw = proj.width if proj else 1920
+            ch = proj.height if proj else 1080
+            sigma = e.params.get("blur", 20)
+            p = f"{label_prefix}e{eff_idx}"
+            filters.append("format=rgba")
+            filters.append(
+                f"split[{p}a][{p}b];"
+                f"[{p}b]scale={cw}:{ch}:force_original_aspect_ratio=increase,"
+                f"crop={cw}:{ch},gblur=sigma={sigma}[{p}bg];"
+                f"[{p}a]scale={cw}:{ch}:force_original_aspect_ratio=decrease[{p}fg];"
+                f"[{p}bg][{p}fg]overlay=(W-w)/2:(H-h)/2:eof_action=pass"
+            )
+            # 出力はキャンバスサイズ固定 → overlay中央配置の基準を更新
+            pad_size = (cw, ch)
     return filters, pad_size
 
 
@@ -3770,16 +3990,98 @@ def _optimize_filter_chain(filters):
     return result
 
 
-def _build_video_pre_filters(obj):
-    """trim等の前処理フィルタ"""
-    filters = []
+def _estimate_effect_input_length(obj, upto_effect):
+    """時間系Effect直前の実効尺を推定する（probe不能時はNone）。
+
+    reverse の長尺ガード用。obj.source の実長に、upto_effect より前の
+    trim/speed/freeze_frame を並び順に適用した値を返す。
+    """
+    proj = Project._current
+    base = None
+    if proj is not None and getattr(obj, "media_type", None) not in ("image", "text"):
+        info = proj._probe_media(obj.source)
+        if info:
+            base = info.get("duration")
+    if base is None:
+        base = getattr(obj, "_resolved_length", None)
+    if not base:
+        return None
+    cur = base
     for e in obj.effects:
+        if e is upto_effect:
+            break
+        if e.name == "trim" and e.params.get("duration") is not None:
+            cur = _builtins.min(cur, e.params["duration"])
+        elif e.name == "speed":
+            f = e.params.get("factor", 1.0)
+            if f:
+                cur = cur / f
+        elif e.name == "freeze_frame":
+            cur = cur + e.params.get("duration", 0.0)
+    return cur
+
+
+def _build_video_pre_filters(obj, label_prefix="pre"):
+    """trim/speed/reverse/freeze_frame 等の時間系前処理フィルタ（記述順に適用）
+
+    label_prefix: freeze_frame の複合サブグラフ（split/concat）の中間ラベル接頭辞。
+    複数入力を扱う本レンダでは入力indexを含めて一意化する。
+    """
+    filters = []
+    for eff_idx, e in enumerate(obj.effects):
         if e.name == "trim":
             d = e.params.get("duration")
             if d is not None:
                 filters.append(f"trim=duration={d}")
                 filters.append("setpts=PTS-STARTPTS")
+        elif e.name == "speed":
+            factor = e.params.get("factor", 1.0)
+            filters.append(f"setpts=PTS/{factor}")
+        elif e.name == "reverse":
+            # reverse は全フレームをメモリに保持するため長尺を明示エラーにする
+            eff_len = _estimate_effect_input_length(obj, e)
+            if eff_len is not None and eff_len > _REVERSE_MAX_SEC:
+                raise ValueError(
+                    f"reverse: 実効尺 {eff_len:.1f}s が上限 {_REVERSE_MAX_SEC:.0f}s "
+                    f"を超えています ('{obj.source}')。\n"
+                    f"reverse は全フレームをメモリに保持するため長尺には使えません。"
+                    f"trim() で対象区間を短くしてから適用してください。")
+            filters.append("reverse")
+        elif e.name == "freeze_frame":
+            # 指定時刻のフレームで duration 秒静止 → 続きを再生（総尺 +duration）
+            # trim 3分割 + loop(先頭フレーム複製) + concat のチェーン内サブグラフ
+            at = e.params["at"]
+            fdur = e.params["duration"]
+            p = f"{label_prefix}f{eff_idx}"
+            filters.append(
+                f"split=3[{p}a][{p}b][{p}c];"
+                f"[{p}a]trim=duration={at},setpts=PTS-STARTPTS[{p}s1];"
+                f"[{p}b]trim=start={at},setpts=PTS-STARTPTS,"
+                f"loop=loop=-1:size=1,trim=duration={fdur},setpts=PTS-STARTPTS[{p}s2];"
+                f"[{p}c]trim=start={at},setpts=PTS-STARTPTS[{p}s3];"
+                f"[{p}s1][{p}s2][{p}s3]concat=n=3:v=1:a=0"
+            )
     return filters
+
+
+def _atempo_chain_rates(rate):
+    """atempoの有効範囲(0.5〜100)を超えるレートを複数段に分解する。
+    範囲内はそのまま1段で返す（既存出力との互換維持）。"""
+    try:
+        r = float(rate)
+    except (TypeError, ValueError):
+        return [rate]
+    if r <= 0 or 0.5 <= r <= 100.0:
+        return [rate]  # 範囲内（or 不正値はffmpegに検出させる）
+    rates = []
+    while r < 0.5:
+        rates.append(0.5)
+        r /= 0.5
+    while r > 100.0:
+        rates.append(100.0)
+        r /= 100.0
+    rates.append(_builtins.round(r, 6))
+    return rates
 
 
 def _build_audio_pre_filters(obj):
@@ -3793,7 +4095,8 @@ def _build_audio_pre_filters(obj):
                 filters.append("asetpts=PTS-STARTPTS")
         elif e.name == "atempo":
             rate = e.params.get("rate", 1.0)
-            filters.append(f"atempo={rate}")
+            for r in _atempo_chain_rates(rate):
+                filters.append(f"atempo={r}")
     return filters
 
 
@@ -4241,6 +4544,23 @@ class Object:
             self._priority_override = priority
         return self
 
+    def _append_effect(self, e):
+        """Effect追加の共通経路（delete処理・時間系の検証・speedの音声追従）"""
+        if e.name == "delete":
+            self._video_deleted = True
+            return
+        if e.name in _TIME_LIVE_EFFECTS and self.media_type in ("image", "text", "web"):
+            raise ValueError(
+                f"{e.name}: 時間操作Effectは動画素材にのみ適用できます"
+                f"（{self.media_type} には適用不可）: {self.source}")
+        self.effects.append(e)
+        if e.name == "speed" and not self._audio_deleted:
+            # 音声付き動画のテンポを自動追従させる（atempo）。
+            # length()での二重計上を防ぐためフラグを付ける
+            ae = AudioEffect("atempo", rate=e.params.get("factor", 1.0))
+            ae._auto_from_speed = True
+            self.audio_effects.append(ae)
+
     def __le__(self, rhs):
         """<= 演算子: Transform/Effect/AudioEffect等を適用"""
         if isinstance(rhs, _DisabledAudioEffect):
@@ -4250,16 +4570,10 @@ class Object:
         elif isinstance(rhs, TransformChain):
             self.transforms.extend(rhs.transforms)
         elif isinstance(rhs, Effect):
-            if rhs.name == "delete":
-                self._video_deleted = True
-            else:
-                self.effects.append(rhs)
+            self._append_effect(rhs)
         elif isinstance(rhs, EffectChain):
             for e in rhs.effects:
-                if e.name == "delete":
-                    self._video_deleted = True
-                else:
-                    self.effects.append(e)
+                self._append_effect(e)
         elif isinstance(rhs, AudioEffect):
             if rhs.name == "adelete":
                 self._audio_deleted = True
@@ -4279,9 +4593,10 @@ class Object:
 
     def compute(self, duration=None):
         """タイムライン外で素材を生成。PNG(静止) or WebM(動画)を返す"""
-        # live effects チェック
+        # live effects チェック（時間系 speed/reverse/freeze_frame は
+        # _build_compute_video_cmd の前処理フィルタでベイクできるため許可）
         for e in self.effects:
-            if e.name in ("move", "delete", "shake"):
+            if e.name in ("move", "delete", "shake", "blend_mode"):
                 raise ValueError(
                     f"compute() では live Effect '{e.name}' は使用できません。"
                     f"bakeable Effect のみ使用可能です。")
@@ -4332,6 +4647,107 @@ class Object:
         self.transforms = []
         self.effects = []
         return self
+
+    @staticmethod
+    def from_project(sub_project, *, cache="auto"):
+        """ネストコンポジション（プリコンポーズ）: サブProjectを透過webm素材化して
+        1つのObjectとして親タイムラインに配置する。
+
+        sub_project: layer() 登録済みの Project。render(alpha=True) 機構で
+        透過webmキャッシュ生成物を作り、そのwebmをsourceとするObjectを返す。
+        キャッシュ鍵は configure + レイヤーファイルFFP群 + レイヤーが参照する
+        素材FFP群から導出する（素材更新で自動再生成）。dry_run 対応。
+        cache: 'auto'（キャッシュがあれば再利用）/ 'force'（常に再生成）。
+        """
+        if not isinstance(sub_project, Project):
+            raise TypeError(
+                f"from_project: sub_project には Project を指定してください: "
+                f"{type(sub_project)}")
+        if cache not in ("auto", "force"):
+            hint = _suggest_hint(cache, ("auto", "force"))
+            raise ValueError(
+                f"from_project: cache は 'auto' か 'force' のいずれか: {cache!r}{hint}")
+        # 親 = 現在レイヤーを実行中のProject（sub = Project() が _current を
+        # 奪うため、_exec_stack から特定する）。レイヤー外では復元先のみ保持
+        parent = Project._exec_stack[-1] if Project._exec_stack else None
+        if sub_project is parent:
+            raise ValueError("from_project: 親Project自身は指定できません")
+        if not sub_project._layer_specs:
+            raise ValueError(
+                "from_project: sub_project に layer() が登録されていません。"
+                "sub.layer('xxx.py') でレイヤーを登録してから渡してください。")
+        # サブProjectをdry_runで解決し、総尺・依存素材を確定する
+        # （Project._current が切り替わるため必ず親へ復元する）
+        try:
+            sub_project.render("__from_project_probe__.webm",
+                               dry_run=True, alpha=True)
+        finally:
+            Project._current = parent
+        total = sub_project.duration
+
+        # 署名: configure + レイヤーファイルFFP群 + レイヤー参照素材FFP群
+        sigs = ["from_project",
+                f"cfg={sub_project.width}x{sub_project.height}"
+                f"@{sub_project.fps}|bg={sub_project.background_color}"
+                f"|dur={total}"]
+        layer_files = []
+        for spec in sub_project._layer_specs:
+            sigs.append(
+                f"layer={_source_signature(spec['filename'])}|p={spec['priority']}")
+            layer_files.append(spec["filename"])
+        dep_sources = []
+        for srcs in sub_project._layer_sources.values():
+            dep_sources.extend(srcs)
+        dep_sources = sorted(set(dep_sources))
+        for src in dep_sources:
+            sigs.append(f"dep={_source_signature(src)}")
+        sigs.append(f"ev={_ENGINE_VER}")
+        key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+        cache_path = os.path.join(_ARTIFACT_DIR, "subproject", f"{key}.webm")
+
+        parent_mode = getattr(parent, "_mode", None) if parent else None
+        parent_dry = bool(getattr(parent, "_dry_run", False)) if parent else False
+        if parent is not None and parent_mode == "plan":
+            pass  # plan pass: 生成スキップ（尺解決のみ）
+        elif cache == "auto" and os.path.exists(cache_path):
+            pass  # キャッシュ命中
+        elif parent_dry:
+            # dry_run: サブProjectの生成コマンド（dict/list）をpendingに記録
+            try:
+                sub_cmd = sub_project.render(cache_path, dry_run=True, alpha=True)
+            finally:
+                Project._current = parent
+            parent._pending_compute_cmds[cache_path] = sub_cmd
+        else:
+            # 実生成: 一時パスへレンダし成功時のみ確定（アトミック書き込み）
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            base, ext = os.path.splitext(cache_path)
+            tmp_path = f"{base}.tmp{ext}"
+            print(f"サブプロジェクト生成: {cache_path}")
+            try:
+                sub_project.render(tmp_path, alpha=True)
+                os.replace(tmp_path, cache_path)
+                with _GEN_COUNTER_LOCK:
+                    _GEN_COUNTER[0] += 1
+            finally:
+                Project._current = parent
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        # 親レイヤーの依存として登録（レイヤーキャッシュの鮮度検証に載せる）
+        if parent is not None and parent._current_layer_file:
+            parent._extra_layer_deps.setdefault(
+                parent._current_layer_file, []).extend(layer_files + dep_sources)
+        obj = Object(cache_path)
+        obj._origin_sources = list(layer_files) + list(dep_sources)
+        obj._resolved_length = total
+        # 音声有無: dry_run解決済みのサブオブジェクトから確定（未生成キャッシュの
+        # probe不能でFalse固定になるのを防ぐ）
+        obj._has_audio = any(
+            isinstance(o, Object) and o.has_audio for o in sub_project.objects)
+        return obj
 
     def _compute_cache_path(self, duration=None):
         """compute用キャッシュパスを計算"""
@@ -4415,12 +4831,18 @@ class Object:
                 f"メディアの長さを取得できません: {self.source}")
         base_dur = info["duration"]
         result = base_dur
-        # 映像trim
+        # 映像 時間系（trim/speed/freeze_frame）を並び順に反映
         for e in self.effects:
             if e.name == "trim":
                 d = e.params.get("duration")
                 if d is not None:
                     result = min(result, d)
+            elif e.name == "speed":
+                factor = e.params.get("factor", 1.0)
+                if factor > 0:
+                    result = result / factor
+            elif e.name == "freeze_frame":
+                result = result + e.params.get("duration", 0.0)
         # 音声atrim/atempo
         for e in self.audio_effects:
             if e.name == "atrim":
@@ -4428,6 +4850,8 @@ class Object:
                 if d is not None:
                     result = min(result, d)
             elif e.name == "atempo":
+                if getattr(e, "_auto_from_speed", False):
+                    continue  # speed()由来の自動atempoは映像側で反映済み（二重計上防止）
                 rate = e.params.get("rate", 1.0)
                 if rate > 0:
                     result = result / rate
@@ -5348,6 +5772,181 @@ def outline(width=2, color="white"):
     return Effect("outline", width=width, color=color)
 
 
+# --- 合成・コンポジション系Effect ---
+
+def _validate_mask_image(func, image_path):
+    """マスク画像パスの検証（文字列・存在・画像形式）"""
+    if not isinstance(image_path, str) or not image_path:
+        raise TypeError(
+            f"{func}: image_path にはマスク画像のパス文字列を指定してください: {image_path!r}")
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"{func}: マスク画像が見つかりません: {image_path}")
+    if _detect_media_type(image_path) != "image":
+        raise ValueError(f"{func}: マスクには画像のみ指定できます: {image_path}")
+
+
+def _register_material_dep(path):
+    """素材をレイヤー依存として登録（レイヤーキャッシュの鮮度検証に載せる）"""
+    proj = Project._current
+    if proj is not None and proj._current_layer_file:
+        proj._extra_layer_deps.setdefault(
+            proj._current_layer_file, []).append(path)
+
+
+def mask(image_path):
+    """マスクEffect: 画像の輝度をアルファとして乗算する。
+
+    白い部分は不透明のまま、黒い部分は透明になる（グレーは半透明）。
+    追加 -i 入力の配線を避けるため movie= ソースで filter chain 内に読み込み、
+    scale2ref で素材サイズへ自動スケールする。元素材のアルファとは乗算合成。
+    """
+    _validate_mask_image("mask", image_path)
+    _register_material_dep(image_path)
+    return Effect("mask", image=image_path)
+
+
+def mask_wipe(image_path, progress=None):
+    """マスクワイプEffect: マスク画像の輝度をしきい値に使うワイプ。
+
+    輝度 <= progress*255 の画素から順に現れる（黒い部分が先、白い部分が最後）。
+    progress は 0→1 の進行（Expr/lambda可、省略時は線形 u）。
+    グラデーション画像を使うと方向・形状を自由に制御できる。
+    """
+    _validate_mask_image("mask_wipe", image_path)
+    _register_material_dep(image_path)
+    if progress is None:
+        progress = _resolve_param(lambda u: u)
+    else:
+        progress = _resolve_param(progress)
+    return Effect("mask_wipe", image=image_path, progress=progress)
+
+
+def opacity(value):
+    """不透明度Effect。定数(0〜1)は colorchannelmixer（高速）、
+    Expr/lambda は geq による live アニメーション対応。"""
+    v = _resolve_param(value)
+    if isinstance(v, Const):
+        _require_number("opacity", "value", v.value, 0.0, 1.0)
+    return Effect("opacity", value=v)
+
+
+# FFmpeg blend フィルタの合成モード（normal は通常overlayと同義のため許可のみ）
+_BLEND_MODES = {
+    "addition", "addition128", "grainmerge", "and", "average", "burn",
+    "darken", "difference", "difference128", "grainextract", "divide",
+    "dodge", "exclusion", "extremity", "freeze", "glow", "hardlight",
+    "hardmix", "heat", "lighten", "linearlight", "multiply", "multiply128",
+    "negation", "normal", "or", "overlay", "phoenix", "pinlight", "reflect",
+    "screen", "softlight", "subtract", "vividlight", "xor", "softdifference",
+    "geometric", "harmonic", "bleach", "stain", "interpolate", "hardoverlay",
+}
+_BLEND_MODE_ALIASES = {"add": "addition", "plus": "addition"}
+
+
+def blend_mode(mode):
+    """オブジェクトの合成モードを変更するEffect（screen/multiply/overlay等）。
+
+    overlayフィルタは合成モード非対応のため、このオブジェクトのみ
+    「キャンバス全面へ透明パドした入力」を blend=cN_mode=<mode> で合成し、
+    アルファ領域だけ maskedmerge で採用する経路に切り替わる（live）。
+    """
+    if not isinstance(mode, str):
+        raise TypeError(f"blend_mode: mode には合成モード名の文字列を指定してください: {mode!r}")
+    m = _BLEND_MODE_ALIASES.get(mode.strip().lower(), mode.strip().lower())
+    if m not in _BLEND_MODES:
+        hint = _suggest_hint(m, _BLEND_MODES)
+        raise ValueError(
+            f"blend_mode: 未知の合成モード '{mode}'。{hint}\n"
+            f"有効なモード: {', '.join(sorted(_BLEND_MODES))}")
+    return Effect("blend_mode", mode=m)
+
+
+def rounded(radius):
+    """角丸Effect: geq でアルファに角丸矩形マスクを乗算する。
+
+    radius: 角の半径px（0で無効）。
+    """
+    _require_number("rounded", "radius", radius, 0, 4096)
+    return Effect("rounded", radius=int(_builtins.round(radius)))
+
+
+def pip(x=0.7, y=0.7, scale=0.3, radius=12, border=2, border_color="white",
+        shadow=True):
+    """ピクチャインピクチャのプリセット（既存Effectの組を返すEffectChain）。
+
+    scale縮小 → rounded角丸 → outline縁取り → drop_shadow → move配置 の合成。
+    x/y: 配置位置（キャンバス比率、中央anchor）。scale: 縮小率。
+    radius: 角丸半径px（0で無効）。border: 縁取り幅px（0で無効）。
+    """
+    _require_number("pip", "x", x, 0.0, 1.0)
+    _require_number("pip", "y", y, 0.0, 1.0)
+    _require_number("pip", "scale", scale, 0.01, 1.0)
+    _require_number("pip", "radius", radius, 0, 4096)
+    if isinstance(border, bool) or not isinstance(border, int) or not (0 <= border <= 16):
+        raise ValueError(f"pip: border は 0〜16 の整数で指定してください: {border!r}")
+    effs = [Effect("scale", value=Const(float(scale)))]
+    if radius > 0:
+        effs.append(Effect("rounded", radius=int(radius)))
+    if border > 0:
+        effs.append(outline(border, border_color))
+    if shadow:
+        effs.append(drop_shadow(dx=4, dy=4, blur=8, opacity=0.4))
+    effs.append(move(x=x, y=y, anchor="center"))
+    return EffectChain(effs)
+
+
+def blur_background_fill(blur=20):
+    """縦横変換の定番「ぼかした自分自身を背景に敷く」Effect。
+
+    素材をキャンバス全面に cover で拡大ぼかしし、中央に本体を fit で重ねる。
+    出力はキャンバスサイズ固定。live Effect（キャンバスサイズのffv1キャッシュ
+    肥大とProject解像度依存を避けるためチェックポイント対象外）。
+    """
+    _require_number("blur_background_fill", "blur", blur, 0.1, 200)
+    return Effect("blur_background_fill", blur=blur)
+
+
+def _parse_color_alpha(func, color):
+    """'white@0.2' 形式の色指定を (R, G, B, A0-255) に分解する"""
+    if not isinstance(color, str) or not color:
+        raise ValueError(
+            f"{func}: color には色名か16進の文字列を指定してください: {color!r}")
+    body, sep, alpha_str = color.partition("@")
+    alpha = 1.0
+    if sep:
+        try:
+            alpha = float(alpha_str)
+        except ValueError:
+            raise ValueError(f"{func}: 不正なアルファ指定です: '{color}'")
+        if not (0.0 <= alpha <= 1.0):
+            raise ValueError(f"{func}: アルファは0〜1で指定してください: '{color}'")
+    r, g, b = _parse_color_rgb(body)
+    return (r, g, b, int(_builtins.round(alpha * 255)))
+
+
+def progress_bar(*, height=6, color="white", bg="white@0.2", y=1.0):
+    """動画全体の進行バーを表示する特殊Object（透明lavfi + geq、textと同方式）。
+
+    duration 未設定のまま動画全体に表示される（time/show は不要）。
+    color: バー色、bg: 背景トラック色（'white@0.2' のようにアルファ指定可）。
+    y: 縦位置（0=上端, 1=下端）。
+    """
+    _require_number("progress_bar", "height", height, 1, 512)
+    _require_number("progress_bar", "y", y, 0.0, 1.0)
+    bar_rgba = _parse_color_alpha("progress_bar", color)
+    track_rgba = _parse_color_alpha("progress_bar", bg)
+    spec = {
+        "kind": "progress_bar",
+        "height": int(height), "y": float(y),
+        "bar_rgba": bar_rgba, "track_rgba": track_rgba,
+    }
+    spec["synthetic_source"] = _text_synthetic_source(
+        f"pbar|{height}|{color}|{bg}|{y}")
+    obj = _new_text_object(spec)
+    obj._advance = False  # タイムラインを進めない（全体に重ねる表示専用）
+    return obj
+
+
 # --- 音声エフェクト関数 ---
 
 def again(value=1.0):
@@ -5383,6 +5982,44 @@ def atrim(duration=None):
 def atempo(rate=1.0):
     """音声テンポ変更（時間影響あり）"""
     return AudioEffect("atempo", rate=rate)
+
+
+# --- 時間操作Effect（映像・live） ---
+
+def speed(factor):
+    """再生速度Effect（setpts=PTS/factor）。映像の実効尺は 元尺/factor になる
+    （length()/duration自動決定に反映される）。
+
+    音声付き動画には <= 適用時に対応する atempo が自動適用される
+    （atempo有効範囲0.5〜100を超える場合は多段に自動分解）。
+    live Effect（チェックポイントベイク対象外。ベイク済みソースに毎レンダ適用）。
+    """
+    _require_number("speed", "factor", factor, 0.01, 100.0)
+    return Effect("speed", factor=float(factor))
+
+
+def reverse():
+    """逆再生Effect（reverseフィルタ）。
+
+    注意: 全フレームをメモリに保持するため、実効尺が30秒を超える素材には
+    使用できません（明示エラー）。長い素材は trim() で短くしてから適用すること。
+    音声は反転されません（必要なら adelete() で除外するか別素材を用意）。
+    live Effect（チェックポイントベイク対象外）。
+    """
+    return Effect("reverse")
+
+
+def freeze_frame(at, duration):
+    """フリーズフレームEffect: 時刻 at のフレームで duration 秒静止してから
+    続きを再生する（トータル尺は +duration。length()に反映される）。
+
+    trim 3分割 + loop + concat のチェーン内サブグラフで実装。
+    音声は変化しません（音声も止めたい場合は別途編集）。
+    live Effect（チェックポイントベイク対象外）。
+    """
+    _require_number("freeze_frame", "at", at, 0.0, None)
+    _require_number("freeze_frame", "duration", duration, 0.01, None)
+    return Effect("freeze_frame", at=float(at), duration=float(duration))
 
 
 # --- テキスト系ファクトリ（映像Object, drawtext/subtitlesベース） ---
@@ -5992,6 +6629,112 @@ def transition(obj_a, obj_b, kind="fade", duration=1.0):
                 "-c:v", "ffv1", "-level", "3", "-pix_fmt", "yuva444p",
                 "-t", str(total), cache_path])
     return _finalize_generated_object(cache_path, cmd, origin_sources, total)
+
+
+def video_sequence(*objs, transition="fade", t_dur=0.5):
+    """複数の動画クリップを xfade（+全クリップに音声があれば acrossfade）で
+    連結した1本の合成Objectを生成する（slideshowの動画版・キャッシュ生成物）。
+
+    objs: 動画Object または動画パス文字列（2つ以上）。素のObjectのみ
+    （Transform/Effect適用済みは先に compute() で素材化する）。
+    各クリップの実長は probe で取得し、t_dur が最短クリップ以上ならエラー。
+    合成尺は sum(実長) - t_dur*(n-1) 秒。
+    """
+    if len(objs) < 2:
+        raise ValueError("video_sequence: 2つ以上の動画を指定してください")
+    _validate_xfade_kind("video_sequence", transition)
+    _require_number("video_sequence", "t_dur", t_dur, 0.01, None)
+    proj = Project._current
+    sources = []
+    for o in objs:
+        if isinstance(o, Object):
+            if o.media_type != "video":
+                raise ValueError(
+                    f"video_sequence: 動画Objectのみ連結できます: {o.source}")
+            if o.transforms or o.effects or o.audio_effects:
+                raise ValueError(
+                    f"video_sequence: '{o.source}' に Transform/Effect が適用されています。"
+                    f"先に compute() で素材化してから渡してください。")
+            sources.append(o.source)
+            if proj is not None and o in proj.objects:
+                proj.objects.remove(o)  # 合成に消費（タイムラインから除外）
+        elif isinstance(o, str):
+            if not os.path.exists(o):
+                raise FileNotFoundError(f"video_sequence: 動画が見つかりません: {o}")
+            if _detect_media_type(o) != "video":
+                raise ValueError(f"video_sequence: 動画のみ指定できます: {o}")
+            sources.append(o)
+        else:
+            raise TypeError(
+                f"video_sequence: 動画Objectかパス文字列のみ指定できます: {type(o)}")
+    n = len(sources)
+    lengths = [_probe_audio_length(s) or 5.0 for s in sources]
+    # xfade は重なり区間 t_dur を要するため、最短クリップ未満を保証する
+    for s, ln in zip(sources, lengths):
+        if ln <= t_dur:
+            raise ValueError(
+                f"video_sequence: クリップ実長({ln:.3f}s)が t_dur({t_dur}s)以下です: {s}\n"
+                f"t_dur を短くするか、より長いクリップを指定してください。")
+    total = sum(lengths) - t_dur * (n - 1)
+
+    # 音声: 全クリップが音声を持つ場合のみ acrossfade で連結（混在は映像のみ）
+    def _has_audio(src):
+        if proj is not None:
+            info = proj._probe_media(src)
+            if info is not None:
+                return bool(info.get("has_audio"))
+        return False
+    all_audio = all(_has_audio(s) for s in sources)
+
+    w = proj.width if proj else 1280
+    h = proj.height if proj else 720
+    fps = proj.fps if proj else 30
+
+    sigs = ["video_sequence"]
+    sigs.extend(_source_signature(s) for s in sources)
+    sigs.extend([f"tr={transition}", f"tdur={t_dur}", f"size={w}x{h}",
+                 f"fps={fps}", f"audio={all_audio}", f"ev={_ENGINE_VER}"])
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    cache_path = os.path.join(_ARTIFACT_DIR, "xfade", f"{key}.mkv")
+
+    # コマンド構築: 各クリップを共通サイズ/fpsへ正規化し xfade（+acrossfade）連結
+    cmd = ["ffmpeg", "-y"]
+    for s in sources:
+        cmd.extend(_decoder_input_args(s, "video", fps))
+    parts = []
+    for i, (s, ln) in enumerate(zip(sources, lengths)):
+        parts.append(
+            f"[{i}:v]trim=duration={ln},setpts=PTS-STARTPTS,"
+            f"{_xfade_scale_chain(w, h)},fps={fps}[t{i}]")
+    cur = "[t0]"
+    acc = lengths[0]
+    for i in range(1, n):
+        out = f"[x{i}]"
+        offset = acc - t_dur
+        parts.append(
+            f"{cur}[t{i}]xfade=transition={transition}:duration={t_dur}:offset={offset}{out}")
+        cur = out
+        acc = offset + lengths[i]
+    maps = ["-map", cur]
+    if all_audio:
+        for i, ln in enumerate(lengths):
+            parts.append(f"[{i}:a]atrim=duration={ln},asetpts=PTS-STARTPTS[at{i}]")
+        acur = "[at0]"
+        for i in range(1, n):
+            aout = f"[ax{i}]"
+            parts.append(f"{acur}[at{i}]acrossfade=d={t_dur}{aout}")
+            acur = aout
+        maps.extend(["-map", acur])
+    cmd.extend(["-filter_complex", ";".join(parts)])
+    cmd.extend(maps)
+    cmd.extend(["-c:v", "ffv1", "-level", "3", "-pix_fmt", "yuva444p"])
+    if all_audio:
+        cmd.extend(["-c:a", "pcm_s16le"])
+    cmd.extend(["-t", str(total), cache_path])
+    obj = _finalize_generated_object(cache_path, cmd, list(sources), total)
+    # dry_run では未生成キャッシュのprobeができないため音声有無を明示確定する
+    obj._has_audio = all_audio
+    return obj
 
 
 # --- イージング関数 ---

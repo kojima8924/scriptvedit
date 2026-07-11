@@ -16,6 +16,10 @@ from scriptvedit import (
     anchor, pause,
     text, typewriter, counter, subtitles,
     duck_under, loop, audio_sequence, sfx, audio_viz,
+    mask, mask_wipe, opacity, blend_mode, rounded, pip,
+    blur_background_fill, progress_bar,
+    speed, reverse, freeze_frame, video_sequence,
+    _atempo_chain_rates,
 )
 
 
@@ -2430,6 +2434,276 @@ def test_ken_burns_overshoot_clamp():
             os.unlink(tmp)
 
 
+# --- 合成・時間操作（Wave: mask/blend_mode/speed 等） ---
+
+def test_blend_mode_bad_name():
+    """blend_mode: 未知のモード名 → ValueError + suggest"""
+    try:
+        blend_mode("screeen")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "screeen" in msg and "もしかして" in msg and "screen" in msg:
+            return True, msg.split("\n")[0]
+        return False, f"suggestなし: {msg}"
+
+
+def test_blend_mode_alias():
+    """blend_mode: エイリアス 'add' → addition に解決"""
+    e = blend_mode("add")
+    if e.params["mode"] == "addition":
+        return True, "add → addition"
+    return False, f"エイリアス解決失敗: {e.params}"
+
+
+def test_reverse_too_long():
+    """reverse: 実効尺が30秒超（speedで引き伸ばし） → ValueError"""
+    layer = (
+        "from scriptvedit import *\n"
+        "obj = Object('../guitar_noaudio.mp4')\n"
+        "obj.time(5) <= speed(0.1) & reverse() & move(x=0.5, y=0.5)\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_rev_long.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        p.render("_tmp_rev.mp4", dry_run=True)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "reverse" in msg and "30" in msg:
+            return True, msg.split("\n")[0]
+        return False, f"メッセージが不適切: {msg}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_video_sequence_tdur_too_big():
+    """video_sequence: t_dur が最短クリップ以上 → ValueError"""
+    _mk_project()
+    try:
+        video_sequence("../fox_noaudio.mp4", "../guitar_noaudio.mp4", t_dur=6.0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "t_dur" in msg and "fox_noaudio" in msg:
+            return True, msg.split("\n")[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_video_sequence_one_clip():
+    """video_sequence: 1クリップのみ → ValueError"""
+    _mk_project()
+    try:
+        video_sequence("../fox_noaudio.mp4")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "2つ以上" in msg else (False, msg)
+
+
+def test_video_sequence_non_video():
+    """video_sequence: 画像パスを混ぜる → ValueError"""
+    _mk_project()
+    try:
+        video_sequence("../fox_noaudio.mp4", "../onigiri_tenmusu.png")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "動画のみ" in msg else (False, msg)
+
+
+def test_speed_bad_factor():
+    """speed: factor=0 → ValueError（範囲外）"""
+    try:
+        speed(0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "factor" in msg else (False, msg)
+
+
+def test_speed_on_image():
+    """speed: 画像素材への適用 → ValueError"""
+    _mk_project()
+    obj = Object("../onigiri_tenmusu.png")
+    try:
+        obj <= speed(2.0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "動画素材にのみ" in msg else (False, msg)
+
+
+def test_speed_length_reflected():
+    """speed: length() に factor が反映される（自動atempoの二重計上なし）"""
+    p = _mk_project()
+    obj = Object("../fox_noaudio.mp4")
+    obj <= speed(2.0)
+    ln = obj.length()
+    expected = 5.545 / 2.0
+    if abs(ln - expected) < 0.01:
+        # 自動atempoが追加されフラグ付きであること
+        auto = [ae for ae in obj.audio_effects
+                if ae.name == "atempo" and getattr(ae, "_auto_from_speed", False)]
+        if auto:
+            return True, f"length={ln:.4f} (期待{expected:.4f}) + 自動atempo確認"
+        return False, "自動atempoが追加されていない"
+    return False, f"length不一致: {ln} (期待{expected})"
+
+
+def test_freeze_frame_length_reflected():
+    """freeze_frame: length() に +duration が反映される"""
+    p = _mk_project()
+    obj = Object("../fox_noaudio.mp4")
+    obj <= freeze_frame(at=1.0, duration=2.0)
+    ln = obj.length()
+    expected = 5.545 + 2.0
+    if abs(ln - expected) < 0.01:
+        return True, f"length={ln:.4f} (期待{expected:.4f})"
+    return False, f"length不一致: {ln} (期待{expected})"
+
+
+def test_freeze_frame_bad_at():
+    """freeze_frame: at が負 → ValueError"""
+    try:
+        freeze_frame(at=-1.0, duration=1.0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "at" in msg else (False, msg)
+
+
+def test_opacity_out_of_range():
+    """opacity: 定数が範囲外(1.5) → ValueError"""
+    try:
+        opacity(1.5)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "value" in msg else (False, msg)
+
+
+def test_rounded_negative():
+    """rounded: 負のradius → ValueError"""
+    try:
+        rounded(-5)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "radius" in msg else (False, msg)
+
+
+def test_mask_missing_file():
+    """mask: マスク画像不在 → FileNotFoundError"""
+    try:
+        mask("no_such_mask_image.png")
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        msg = str(e)
+        return (True, msg) if "マスク画像" in msg else (False, msg)
+
+
+def test_mask_wipe_non_image():
+    """mask_wipe: 動画をマスクに指定 → ValueError"""
+    try:
+        mask_wipe("../fox_noaudio.mp4")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "画像のみ" in msg else (False, msg)
+
+
+def test_pip_bad_border():
+    """pip: border が非整数 → ValueError"""
+    try:
+        pip(border=2.5)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "border" in msg else (False, msg)
+
+
+def test_pip_returns_chain():
+    """pip: EffectChain（scale/rounded/outline/drop_shadow/move）を返す"""
+    ch = pip(x=0.7, y=0.7, scale=0.3, radius=12, border=2, shadow=True)
+    names = [e.name for e in ch.effects]
+    expected = ["scale", "rounded", "outline", "drop_shadow", "move"]
+    if names == expected:
+        return True, f"構成: {names}"
+    return False, f"構成不一致: {names}"
+
+
+def test_progress_bar_bad_color():
+    """progress_bar: 不正な色名 → ValueError"""
+    _mk_project()
+    try:
+        progress_bar(color="not_a_color")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "色名" in msg or "16進" in msg else (False, msg)
+
+
+def test_from_project_non_project():
+    """from_project: Project以外 → TypeError"""
+    try:
+        Object.from_project("not_a_project")
+        return False, "例外が発生しませんでした"
+    except TypeError as e:
+        msg = str(e)
+        return (True, msg) if "Project" in msg else (False, msg)
+
+
+def test_from_project_bad_cache():
+    """from_project: cache不正値 → ValueError + suggest"""
+    sub = Project()
+    try:
+        Object.from_project(sub, cache="always")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "cache" in msg else (False, msg)
+
+
+def test_from_project_no_layers():
+    """from_project: layer()未登録のサブProject → ValueError"""
+    sub = Project()
+    try:
+        Object.from_project(sub)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "layer()" in msg else (False, msg)
+
+
+def test_atempo_chain_decompose():
+    """_atempo_chain_rates: 範囲外レートの多段分解（範囲内はそのまま）"""
+    if _atempo_chain_rates(0.25) != [0.5, 0.5]:
+        return False, f"0.25の分解失敗: {_atempo_chain_rates(0.25)}"
+    if _atempo_chain_rates(2.0) != [2.0]:
+        return False, f"2.0が分解された: {_atempo_chain_rates(2.0)}"
+    if _atempo_chain_rates(200.0) != [100.0, 2.0]:
+        return False, f"200.0の分解失敗: {_atempo_chain_rates(200.0)}"
+    return True, "0.25→[0.5,0.5] / 2.0→[2.0] / 200→[100,2]"
+
+
+def test_compute_rejects_blend_mode():
+    """compute: live Effect blend_mode → ValueError"""
+    _mk_project()
+    obj = Object("../onigiri_tenmusu.png")
+    obj <= blend_mode("screen")
+    try:
+        obj.compute()
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "blend_mode" in msg else (False, msg)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -2576,6 +2850,30 @@ ALL_TESTS = [
     ("counter目標到達(+0.5)", test_counter_reaches_target),
     ("typewriter半開区間", test_typewriter_halfopen_enable),
     ("ken_burns overshootクランプ", test_ken_burns_overshoot_clamp),
+    # --- 合成・時間操作（mask/blend_mode/speed/video_sequence 等） ---
+    ("blend_mode 不正名 suggest", test_blend_mode_bad_name),
+    ("blend_mode エイリアス", test_blend_mode_alias),
+    ("reverse 長尺拒否", test_reverse_too_long),
+    ("video_sequence t_dur過大", test_video_sequence_tdur_too_big),
+    ("video_sequence 1クリップ", test_video_sequence_one_clip),
+    ("video_sequence 非動画", test_video_sequence_non_video),
+    ("speed factor不正", test_speed_bad_factor),
+    ("speed 画像適用拒否", test_speed_on_image),
+    ("speed length反映", test_speed_length_reflected),
+    ("freeze_frame length反映", test_freeze_frame_length_reflected),
+    ("freeze_frame at負", test_freeze_frame_bad_at),
+    ("opacity 範囲外", test_opacity_out_of_range),
+    ("rounded 負radius", test_rounded_negative),
+    ("mask 画像不在", test_mask_missing_file),
+    ("mask_wipe 非画像", test_mask_wipe_non_image),
+    ("pip border不正", test_pip_bad_border),
+    ("pip チェーン構成", test_pip_returns_chain),
+    ("progress_bar 不正色", test_progress_bar_bad_color),
+    ("from_project 非Project", test_from_project_non_project),
+    ("from_project cache不正", test_from_project_bad_cache),
+    ("from_project layerなし", test_from_project_no_layers),
+    ("atempo 多段分解", test_atempo_chain_decompose),
+    ("compute blend_mode拒否", test_compute_rejects_blend_mode),
 ]
 
 
