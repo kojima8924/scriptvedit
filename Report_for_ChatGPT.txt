@@ -12,16 +12,18 @@
   「1ファイル = 1レイヤー」アーキテクチャを採用。
   main.py がオーケストレータ、各レイヤーは独立した .py ファイル。
 
-  コアファイル: scriptvedit.py (約6560行)
+  コアファイル: scriptvedit.py (約8120行)
   ライセンス: なし（個人プロジェクト）
   環境: Windows 11 / Python 3.10 / ffmpeg 8.0-full_build
 
   ◆ ファイル構成
     scriptvedit/
-    ├── scriptvedit.py   ← コアライブラリ (約6560行)
+    ├── scriptvedit.py   ← コアライブラリ (約8120行)
     ├── morph.py         ← 最適輸送モーフ + パーティクルエンジン (約730行、morph_to/explode_to/assemble_from用)
     ├── svinspect.py     ← タイムライン検査ビュー (約840行、HTMLガント/テキストレポート、標準ライブラリのみ)
     ├── svtts.py         ← VOICEVOX連携TTS (約220行、tts/speakers/tts_duration + CLI、標準ライブラリのみ)
+    ├── svtestkit.py     ← 視覚検証ヘルパー (約470行、extract_frame/ssim/frame_diff/assert_frame/assert_frames + CLI、numpy+PIL)
+    ├── svbeat.py        ← ビート検出 (約470行、detect_beats/snap_times/beats_to_keyframes + CLI、numpy+scipy、librosa非依存)
     ├── upload_to_server.py ← export結果のFTPSアップロードスクリプト
     ├── main.py          ← オーケストレータ (デモ用)
     ├── bg.py            ← 背景レイヤー (デモ用)
@@ -36,11 +38,11 @@
     │   └── diagram_svg.html   ← SVG図解テンプレート
     ├── sample/          ← ショーケース動画関連（スライド・素材・生成物）
     ├── test/
-    │   ├── test_snapshot.py   ← スナップショットテスト (73テスト)
-    │   ├── test_errors.py     ← エラーケーステスト (134テスト)
+    │   ├── test_snapshot.py   ← スナップショットテスト (87テスト)
+    │   ├── test_errors.py     ← エラーケーステスト (190テスト)
     │   ├── render_all.py      ← 全テスト動画の実レンダリング
-    │   ├── snapshots/         ← スナップショットJSON (test01〜test73)
-    │   ├── test01〜test73 の main/レイヤーファイル群
+    │   ├── snapshots/         ← スナップショットJSON (test01〜test87)
+    │   ├── test01〜test87 の main/レイヤーファイル群
     │   ├── test19_scene.html  ← web Objectテスト用HTML
     │   └── *.png, *.jpg       ← テスト用素材（コミット済み）
     ├── *.png, *.jpg     ← 素材画像 (リポジトリルート直下、変更禁止)
@@ -67,12 +69,12 @@
     （中略: FFmpeg 8.0対応・レンダリング窓・showcase作成等）
 
   ◆ 直近のコミット履歴 (git log --oneline -6 相当、新しい順)
-    fb470d9 Wave4: 出力形式・キャッシュ管理・開発体験14種 ← 最新
-    11a923e Wave3: タイムライン構成・パスアニメーション・Expr拡張14種
-    27d39f6 Wave2: テキスト・字幕・オーディオ機能10種
-    608fbb7 Wave1: 映像エフェクト11種 + xfadeトランジション + パーティクル/可視化/TTSモジュール
-    c41e078 ドキュメント更新: README に新機能節を追加、Report を現状に同期
-    907022b レビュー指摘の一括修正: キャッシュ原子化・SEGVバリア・レイヤーキャッシュ統合ほか
+    d9cdbe6 Wave6/7 統合レビュー修正: 確定14件(speed音声尺・freeze境界・karaoke掃引ほか) ← 最新
+    d26a41d Wave7: 外部モジュール統合6機能(narrate/karaoke/beat_sync/slide/export_metadata/storyboard)
+    66672c0 Wave6: 合成・時間操作13機能 + SSIM検証/ビート検出モジュール
+    83505ce upload_to_server: FTPSデータ転送後のunwrap失敗でpush失敗を修正
+    19d5fb7 upload_to_server: ロリポップFTPSのPWD空文字問題でpush失敗を修正
+    78bf4ed Wave5: 統合レビュー指摘19件の修正
 
 ============================================================
 2. 主要クラスとAPI（全クラス・全ファクトリ関数の一覧と説明）
@@ -424,7 +426,7 @@
 10. テスト一覧
 ============================================================
 
-  ◆ スナップショットテスト (test_snapshot.py) - 73テスト（snapshots test01〜test73）
+  ◆ スナップショットテスト (test_snapshot.py) - 87テスト（snapshots test01〜test87）
     test01〜test22: 基本機能（DSL・キャッシュ・anchor/pause・web Object等）
     test23: move保存テスト（resize(force) + move + scaleでmoveが消えないことを確認）
     test24: video checkpointテスト（動画のtransform-only → .webm拡張子）
@@ -443,7 +445,7 @@
     test37: color_shift Effect
     test38: subtitle_box Webテンプレート
 
-  ◆ エラーケーステスト (test_errors.py) - 134テスト
+  ◆ エラーケーステスト (test_errors.py) - 190テスト
     主なカバレッジ:
     - DSL誤用（math.sin使用、未定義アンカー、configureタイポ、%P記法等）
     - キャッシュ/演算子（policy/quality演算子、chain糖衣、FFP変化検出、checkpoint署名）
@@ -454,10 +456,13 @@
     - live Effect（move保持、shake is live）
     - until offset / time(name=) / show系 / compute の各種検証
 
-  ※ test_snapshot.py 73件 + test_errors.py 134件 全PASS確認済み（2026-07-11時点）
+  ※ test_snapshot.py 87件 + test_errors.py 190件 全PASS確認済み（2026-07-11時点）
   ※ test39〜test73 は Wave1〜4 の新機能（映像エフェクト・テキスト・オーディオ・
      パスアニメ・explode/assemble・group/grid・部分レンダ・チャプター・GIF/draft/
      連番PNG/thumbnail/並列キャッシュ/inspect/watch 等）をカバー
+  ※ test74〜test87 は Wave6/7 の新機能（from_project/mask/mask_wipe/blend_mode/
+     blur_background_fill/progress_bar/speed/freeze_frame/video_sequence/
+     narrate/karaoke/slide 等）をカバー
 
 ============================================================
 11. 過去の主要変更（チェックポイント致命点修正）
@@ -579,8 +584,48 @@
 
 ## 最新の更新 (2026-07-11)
 
-4ウェーブで約53機能を追加した（コミット 608fbb7 / 27d39f6 / 11a923e / fb470d9）。
-scriptvedit.py は約6560行、テストは test_snapshot 73件 / test_errors 134件 全PASS。
+Wave6/7 で合成・時間操作・外部モジュール統合 計19機能 + 新モジュール2本を追加した
+（コミット 66672c0=Wave6 / d26a41d=Wave7 / d9cdbe6=統合レビュー修正）。
+scriptvedit.py は約8120行、テストは test_snapshot 87件 / test_errors 190件 全PASS。
+（Wave1〜4=約53機能は 608fbb7 / 27d39f6 / 11a923e / fb470d9、Wave5=78bf4ed のレビュー修正）
+
+◆ Wave6 (66672c0): 合成・時間操作13機能 + 新モジュール2本
+  - 合成・コンポジション（scriptvedit.py）:
+    ・Object.from_project(sub, *, cache="auto") … サブProjectを透過webm素材化して
+      1Objectとして親に配置（ネストコンポジション、素材FFPで自動再生成）
+    ・mask / mask_wipe(image, progress=None) … 画像輝度をアルファに使うマスク/ワイプ
+    ・opacity(value) … 定数=colorchannelmixer高速 / Expr=geqでlive
+    ・blend_mode(mode) … screen/multiply/overlay等（blend+maskedmerge経路、add/plusエイリアス）
+    ・rounded(radius) / pip(...) … 角丸 / ピクチャインピクチャのプリセット
+    ・blur_background_fill(blur=20) … ぼかした自分自身を背景に敷く（縦横変換の定番）
+    ・progress_bar(*, height=6, color, bg, y=1.0) … 動画全体の進行バー（time不要の表示専用）
+  - 時間操作（scriptvedit.py、すべてlive）:
+    ・speed(factor) … 再生速度（実効尺=元尺/factor、音声はatempo自動、範囲超は多段分解）
+    ・reverse() … 逆再生（実効尺30秒超は拒否、音声非反転）
+    ・freeze_frame(at, duration) … at のフレームで duration 秒静止（at>=実効尺は拒否）
+    ・video_sequence(*objs, transition="fade", t_dur=0.5) … 動画をxfade(+acrossfade)で連結
+  - svtestkit.py（新規、numpy+PIL+ffmpeg）:
+    ・extract_frame(accurate=True)/ssim/frame_diff/assert_frame(threshold=0.97)/assert_frames
+    ・CLI: compare（SSIM+差分統計）/ frame（フレーム抽出）
+  - svbeat.py（新規、numpy+scipy、librosa非依存）:
+    ・detect_beats/snap_times/beats_to_keyframes（スペクトラルフラックス+自己相関+グリッド当てはめ）
+    ・CLI: BPM+先頭20拍 / --json
+
+◆ Wave7 (d26a41d): 外部モジュール統合6機能（scriptvedit.py）
+  - narrate(text, *, speaker=1, subtitle=True, subtitle_style=None, ...) … TTS音声+同期字幕を
+    1呼び出しで生成・配置（字幕窓=音声実長、Narration(audio,subtitle)を返す。svtts/VOICEVOX必要）
+  - karaoke(lines, *, style=None) … ASS \k タグのカラオケ風ハイライト字幕（均等割り/word_durations明示）
+  - beat_sync(audio_source, *, min_bpm=60, max_bpm=200) … svbeatをDSL統合、拍時刻をJSONキャッシュ
+  - slide(html_file, page=None, *, duration=5.0, ...) … HTMLスライドAPI（page切替/showSlide/no-op注入）
+  - export_metadata(path=None, *, title, description, tags) … YouTube用メタデータ(.json/.txt)
+  - storyboard(out_path, *, cols=4, interval=None) … 絵コンテ（サムネイル格子PNG、Pillow必要）
+
+◆ 統合レビュー修正 (d9cdbe6): 確定14件
+  - speed: 音声付き動画の実効尺(length)に atempo を正しく反映
+  - freeze_frame: at が実効尺以上のとき拒否（境界条件の修正）
+  - karaoke: \k タグの掃引タイミング（センチ秒換算・語割り）の修正
+  - video_sequence: 音声連結時の A/V ドリフト修正（acrossfade尺の整合）
+  - svbeat: 倍/半テンポの曖昧性解決（同スコアなら最速を選ぶ）の修正 ほか
 
 ◆ Wave1 (608fbb7): 映像エフェクト11種 + トランジション + 新規モジュール
   - 映像Effect（全 bakeable、3経路共有）: chroma_key / vignette / pixelize / glow /
@@ -630,14 +675,24 @@ scriptvedit.py は約6560行、テストは test_snapshot 73件 / test_errors 13
 - morph_to / explode_to / assemble_from は bakeable ops の末尾に1つだけ配置する
 - 統計集計が dry_run の破壊的 source 差し替えと衝突する問題は、状態スナップショット/
   復元で修正済み
+- karaoke のフォント描画は libass 依存（環境のフォント有無で見た目が変わる）
+- narrate / beat_sync は外部モジュール依存（narrate=svtts+VOICEVOX、beat_sync=svbeat+numpy/scipy）
+- blend_mode はキャンバス内合成が前提（blend+maskedmerge 経路。overlay フィルタは合成モード非対応）
+- reverse は実効尺30秒超で拒否（全フレームをメモリ保持するため）。freeze_frame の at は実効尺未満のみ
+- speed の音声は atempo 自動適用（有効範囲0.5〜100超は多段分解）。video_sequence は
+  Transform/Effect適用済みObjectを先に compute() で素材化する必要がある
 
 ## 依存関係
 
 - コア: Python 3.10+ / ffmpeg 8.0（PATH必須）
-- テンプレート・web Object: Playwright + Chromium
-- voice(): VOICEVOX エンジンを別途起動する必要がある（既定 127.0.0.1:50021）。svtts.py 経由
+- テンプレート・web Object・slide: Playwright + Chromium
+- voice() / narrate(): VOICEVOX エンジンを別途起動する必要がある（既定 127.0.0.1:50021）。svtts.py 経由
+- beat_sync() / svbeat: numpy + scipy（scipy はビート検出に必須。librosa 非依存）
+- svtestkit: numpy + PIL + ffmpeg（scipy は任意で SSIM 窓を高速化）
+- storyboard(): Pillow
 - svinspect.py / svtts.py は標準ライブラリのみで動作（VOICEVOX との通信時を除く）
-- inspect() / voice() は scriptvedit.py と同じディレクトリに svinspect.py / svtts.py が必要
+- inspect() / voice() / narrate() / beat_sync() は scriptvedit.py と同じディレクトリに
+  対応モジュール（svinspect.py / svtts.py / svbeat.py）が必要
 
 ## その他
 
