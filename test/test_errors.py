@@ -2116,6 +2116,175 @@ def test_explode_produces_particle_cache():
             os.unlink(tmp)
 
 
+def test_bad_preset_suggest():
+    """不正preset名 → ValueError かつ suggest（もしかして）"""
+    p = Project()
+    try:
+        p.configure(preset="shortz")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "shortz" in msg and "もしかして" in msg and "shorts" in msg:
+            return True, msg.split("\n")[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_bad_encoder_suggest():
+    """不正encoder名 → ValueError かつ suggest"""
+    p = Project()
+    try:
+        p.configure(encoder="libx246")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "libx246" in msg and "もしかして" in msg:
+            return True, msg.split("\n")[0]
+        return False, f"メッセージが不適切: {msg}"
+
+
+def test_configure_typo_suggest():
+    """configureキーtypo → suggest（widht→width）"""
+    p = Project()
+    try:
+        p.configure(widht=1280)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "もしかして" in msg and "width" in msg:
+            return True, msg.split("\n")[0]
+        return False, f"suggestが出ませんでした: {msg}"
+
+
+def test_encoder_fallback():
+    """未対応エンコーダ指定は libx264 へフォールバックし例外を投げない"""
+    import warnings as _w
+    p = Project()
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        p.configure(encoder="nvenc")
+    # 環境により nvenc 有無が異なる: h264_nvenc（利用可）か libx264（フォールバック）
+    if p._encoder_cv in ("h264_nvenc", "libx264"):
+        return True, f"encoder解決: {p._encoder_cv}"
+    return False, f"予期しないencoder: {p._encoder_cv}"
+
+
+def test_preset_sets_dimensions():
+    """preset='square' で width/height/fps が設定される"""
+    p = Project()
+    p.configure(preset="square")
+    if (p.width, p.height) == (1080, 1080):
+        return True, f"{p.width}x{p.height}"
+    return False, f"寸法不正: {p.width}x{p.height}"
+
+
+def test_preset_override():
+    """preset の後に width 個別指定で上書きできる"""
+    p = Project()
+    p.configure(preset="hd", width=1000)
+    if p.width == 1000 and p.height == 1080:
+        return True, f"{p.width}x{p.height}"
+    return False, f"上書き失敗: {p.width}x{p.height}"
+
+
+def test_gif_output_format():
+    """.gif 出力で palettegen/paletteuse が cmd に出る"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_gif.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp.gif", dry_run=True)
+        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        if "palettegen" in s and "paletteuse" in s and "-an" in cmd:
+            return True, "GIFパレット出力OK"
+        return False, f"パレット欠落: {s[-120:]}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_alpha_webm_format():
+    """.webm + alpha=True で透明背景 + yuva420p"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_webm.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp.webm", dry_run=True, alpha=True)
+        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        if "yuva420p" in s and "black@0.0" in s and "libvpx-vp9" in s:
+            return True, "透過webm出力OK"
+        return False, f"透過設定欠落: {s[:160]}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def test_draft_key_separation():
+    """draft と本番でチェックポイント鍵が分離される"""
+    from scriptvedit import _checkpoint_cache_path, _ACTIVE_QUALITY, resize
+    ops = [("transform", resize(sx=0.5, sy=0.5))]
+    _ACTIVE_QUALITY[0] = ""
+    final_path = _checkpoint_cache_path("../onigiri_tenmusu.png", ops)
+    _ACTIVE_QUALITY[0] = "draft"
+    draft_path = _checkpoint_cache_path("../onigiri_tenmusu.png", ops)
+    _ACTIVE_QUALITY[0] = ""
+    if final_path != draft_path:
+        return True, "draft/final鍵分離OK"
+    return False, "鍵が同一（分離失敗）"
+
+
+def test_voice_without_svtts():
+    """voice()（svtts無し環境想定）: svtts経由の呼び出し形が正しい
+
+    VOICEVOX未起動でも ImportError/ConnectionError の適切な例外になることを確認。
+    """
+    from scriptvedit import voice
+    try:
+        voice("テスト", speaker=1)
+        return True, "voice実行成功（VOICEVOX起動中）"
+    except (ImportError, ConnectionError, TimeoutError, RuntimeError) as e:
+        # svtts不在 or VOICEVOX未起動: いずれも想定内の親切なエラー
+        return True, f"想定内エラー: {type(e).__name__}"
+    except Exception as e:
+        return False, f"予期しない例外: {type(e).__name__}: {e}"
+
+
+def test_inspect_report_text():
+    """inspect()（out_html省略）でテキストレポート文字列を返す"""
+    layer = (
+        "from scriptvedit import *\n"
+        "o = Object('../onigiri_tenmusu.png')\n"
+        "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
+    )
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_insp.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        p.render("_tmp.mp4", dry_run=True)
+        rep = p.inspect()
+        if isinstance(rep, str) and "タイムライン" in rep:
+            return True, "レポート生成OK"
+        return False, f"レポート不正: {type(rep)}"
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -2242,6 +2411,18 @@ ALL_TESTS = [
     ("param CLI上書き", test_param_cli_override),
     ("marker埋め込み出力", test_marker_in_cmd),
     ("explode particleキャッシュ", test_explode_produces_particle_cache),
+    # --- 出力形式・DX（最終ウェーブ） ---
+    ("不正preset suggest", test_bad_preset_suggest),
+    ("不正encoder suggest", test_bad_encoder_suggest),
+    ("configure typo suggest", test_configure_typo_suggest),
+    ("encoder フォールバック", test_encoder_fallback),
+    ("preset 寸法設定", test_preset_sets_dimensions),
+    ("preset 個別上書き", test_preset_override),
+    ("GIF出力形式", test_gif_output_format),
+    ("透過webm形式", test_alpha_webm_format),
+    ("draft鍵分離", test_draft_key_separation),
+    ("voice例外処理", test_voice_without_svtts),
+    ("inspect レポート", test_inspect_report_text),
 ]
 
 

@@ -607,6 +607,62 @@ def setup_test66():
     return p.render("test66.mp4", dry_run=True, start=1.5, end=4.0)
 
 
+def setup_test67():
+    """GIF出力（palettegen/paletteuse を1グラフで実行、音声なし）"""
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer("test67_layer.py", priority=0)
+    return p.render("test67.gif", dry_run=True)
+
+
+def setup_test68():
+    """ドラフトレンダ（解像度半分・ultrafast・crf28）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test67_layer.py", priority=0)
+    return p.render("test68.mp4", dry_run=True, draft=True)
+
+
+def setup_test69():
+    """プリセット square（1080x1080）"""
+    p = Project()
+    p.configure(preset="square", background_color="black")
+    p.layer("test67_layer.py", priority=0)
+    return p.render("test69.mp4", dry_run=True)
+
+
+def setup_test70():
+    """透過webm出力（libvpx-vp9 yuva420p + 透明背景）"""
+    p = Project()
+    p.configure(width=640, height=360, fps=30, background_color="black")
+    p.layer("test67_layer.py", priority=0)
+    return p.render("test70.webm", dry_run=True, alpha=True)
+
+
+def setup_test71():
+    """連番PNG出力（out_%05d.png / png rgba）"""
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer("test67_layer.py", priority=0)
+    return p.render("test71.png", dry_run=True)
+
+
+def setup_test72():
+    """アニメーションWebP出力"""
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer("test67_layer.py", priority=0)
+    return p.render("test72.webp", dry_run=True)
+
+
+def setup_test73():
+    """プリセット + 個別上書き（shorts の後に fps=24 で上書き）"""
+    p = Project()
+    p.configure(preset="shorts", fps=24, background_color="navy")
+    p.layer("test67_layer.py", priority=0)
+    return p.render("test73.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -674,6 +730,13 @@ ALL_TESTS = [
     ("test64", setup_test64),
     ("test65", setup_test65),
     ("test66", setup_test66),
+    ("test67", setup_test67),
+    ("test68", setup_test68),
+    ("test69", setup_test69),
+    ("test70", setup_test70),
+    ("test71", setup_test71),
+    ("test72", setup_test72),
+    ("test73", setup_test73),
 ]
 
 

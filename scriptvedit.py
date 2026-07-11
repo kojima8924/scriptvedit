@@ -6,6 +6,10 @@ import hashlib
 import math as _math
 import warnings
 import builtins as _builtins
+import time as _time
+import difflib as _difflib
+import shutil as _shutil
+import concurrent.futures as _futures
 
 __all__ = [
     # コアクラス
@@ -25,7 +29,7 @@ __all__ = [
     # テキスト・字幕（drawtext/subtitlesベース）
     "text", "typewriter", "counter", "subtitles",
     # オーディオ系
-    "duck_under", "loop", "audio_sequence", "sfx", "audio_viz",
+    "duck_under", "loop", "audio_sequence", "sfx", "audio_viz", "voice",
     # アンカー/同期
     "anchor", "pause", "scene",
     # Expr
@@ -681,6 +685,7 @@ def _run_ffmpeg_to_cache(cmd, cache_path, timeout=600):
     try:
         _run_ffmpeg(run_cmd, timeout=timeout)
         os.replace(tmp_path, cache_path)
+        _GEN_COUNTER[0] += 1  # render統計用: 生成した中間ファイル数
     finally:
         # 失敗時に残った一時ファイルを削除（成功時はos.replace済みで存在しない）
         try:
@@ -691,7 +696,81 @@ def _run_ffmpeg_to_cache(cmd, cache_path, timeout=600):
 
 # --- configure許可キー ---
 
-_CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color"}
+_CONFIGURE_KEYS = {"width", "height", "fps", "duration", "background_color",
+                   "preset", "encoder", "parallel"}
+
+# 出力プリセット: name -> (width, height, fps)
+_PRESETS = {
+    "shorts": (1080, 1920, 30),
+    "reel":   (1080, 1920, 30),
+    "reels":  (1080, 1920, 30),
+    "tiktok": (1080, 1920, 30),
+    "vertical": (1080, 1920, 30),
+    "square": (1080, 1080, 30),
+    "hd":     (1920, 1080, 30),
+    "fhd":    (1920, 1080, 30),
+    "1080p":  (1920, 1080, 30),
+    "720p":   (1280, 720, 30),
+    "2k":     (2560, 1440, 30),
+    "4k":     (3840, 2160, 30),
+}
+
+# エンコーダ名 -> {cv: -c:v の値, args: 追加エンコード引数, draft: ドラフト用引数}
+_ENCODER_MAP = {
+    # libx264 の既定は追加引数なし（従来の出力・スナップショットと一致させる）
+    "libx264":    {"cv": "libx264", "args": [],
+                   "draft": ["-preset", "ultrafast", "-crf", "28"]},
+    "nvenc":      {"cv": "h264_nvenc", "args": ["-preset", "p5", "-cq", "23"],
+                   "draft": ["-preset", "p1", "-cq", "30"]},
+    "hevc_nvenc": {"cv": "hevc_nvenc", "args": ["-preset", "p5", "-cq", "25"],
+                   "draft": ["-preset", "p1", "-cq", "32"]},
+    "qsv":        {"cv": "h264_qsv", "args": ["-global_quality", "23"],
+                   "draft": ["-global_quality", "32"]},
+    "hevc":       {"cv": "libx265", "args": ["-preset", "medium", "-crf", "24"],
+                   "draft": ["-preset", "ultrafast", "-crf", "30"]},
+}
+
+# 生成した中間ファイル数のカウンタ（render統計用。render開始時にリセット）
+_GEN_COUNTER = [0]
+
+# 有効な出力品質サフィックス（draft時にチェックポイント鍵へ混ぜ本番と分離）
+_ACTIVE_QUALITY = [""]
+
+# ffmpeg 利用可能エンコーダ集合のキャッシュ（None=未取得）
+_AVAILABLE_ENCODERS = [None]
+
+
+def _ffmpeg_available_encoders():
+    """ffmpeg -encoders を1回だけ実行し、利用可能なエンコーダ名の集合を返す"""
+    if _AVAILABLE_ENCODERS[0] is not None:
+        return _AVAILABLE_ENCODERS[0]
+    names = set()
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=30)
+        for line in out.stdout.splitlines():
+            # 例: " V..... libx264   ..." 先頭にフラグ列、続いてエンコーダ名
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] and parts[0][0] in "VAS":
+                names.add(parts[1])
+    except Exception:
+        names = set()
+    _AVAILABLE_ENCODERS[0] = names
+    return names
+
+
+def _suggest_hint(name, candidates, prefix="\nもしかして: "):
+    """未知の名前に対し近い候補を difflib で探し、'もしかして: X?' を返す。
+    候補が無ければ空文字列。エラーメッセージ末尾に連結して使う。"""
+    try:
+        matches = _difflib.get_close_matches(
+            str(name), [str(c) for c in candidates], n=3, cutoff=0.6)
+    except Exception:
+        matches = []
+    if not matches:
+        return ""
+    return f"{prefix}{', '.join(matches)}?"
 
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
@@ -1030,6 +1109,8 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
     opfp = _op_prefix_fingerprint(ops)
     sigs.append(opfp)
     sigs.append(f"q={quality}")
+    if _ACTIVE_QUALITY[0]:
+        sigs.append(f"rq={_ACTIVE_QUALITY[0]}")
     sigs.append(f"ev={_ENGINE_VER}")
     if duration is not None:
         sigs.append(f"dur={duration}")
@@ -1065,6 +1146,8 @@ def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     sigs.append(f"dur={duration}")
     sigs.append(f"fps={fps}")
     sigs.append(f"q={quality}")
+    if _ACTIVE_QUALITY[0]:
+        sigs.append(f"rq={_ACTIVE_QUALITY[0]}")
     sigs.append(f"ev={_ENGINE_VER}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
     src_hash = hashlib.sha256(src_path.replace("\\", "/").encode()).hexdigest()[:8]
@@ -1088,6 +1171,8 @@ def _particle_cache_path(img_path, particle_op, duration, fps, quality="final"):
     sigs.append(f"dur={duration}")
     sigs.append(f"fps={fps}")
     sigs.append(f"q={quality}")
+    if _ACTIVE_QUALITY[0]:
+        sigs.append(f"rq={_ACTIVE_QUALITY[0]}")
     sigs.append(f"ev={_ENGINE_VER}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
     src_hash = hashlib.sha256(img_path.replace("\\", "/").encode()).hexdigest()[:8]
@@ -1252,19 +1337,72 @@ class Project:
         self._markers = []  # [(time, label)] チャプターマーカー
         self._param_overrides = None  # p.param() 用の遅延パース済み上書き値
         self._render_window = None  # 部分レンダの (start, end)
+        self.encoder = "libx264"    # 映像エンコーダ（configure(encoder=...)で変更）
+        self._encoder_cv = "libx264"  # 解決済み -c:v の値（フォールバック反映後）
+        self._encoder_args = list(_ENCODER_MAP["libx264"]["args"])       # []
+        self._encoder_draft_args = list(_ENCODER_MAP["libx264"]["draft"])
+        self._parallel = None       # キャッシュ並列生成のワーカ数（None=自動）
+        self._draft = False         # ドラフトレンダ中フラグ
+        self._render_quality = "final"
+        self._thumbnail_at = None   # thumbnail()実行中のみ非None
         Project._current = self
 
     def configure(self, **kwargs):
         unknown = set(kwargs.keys()) - _CONFIGURE_KEYS
         if unknown:
+            hint = _suggest_hint(sorted(unknown)[0], _CONFIGURE_KEYS)
             raise ValueError(
                 f"不明な設定キー: {', '.join(sorted(unknown))}。"
-                f"使用可能: {', '.join(sorted(_CONFIGURE_KEYS))}"
+                f"使用可能: {', '.join(sorted(_CONFIGURE_KEYS))}{hint}"
             )
+        # preset: width/height/fps をまとめて設定（個別指定で上書き可能なので先に適用）
+        if "preset" in kwargs:
+            name = kwargs.pop("preset")
+            if name not in _PRESETS:
+                hint = _suggest_hint(str(name), _PRESETS.keys())
+                raise ValueError(
+                    f"不明なプリセット: {name}。"
+                    f"使用可能: {', '.join(sorted(_PRESETS))}{hint}")
+            pw, ph, pfps = _PRESETS[name]
+            self.width, self.height, self.fps = pw, ph, pfps
+        # encoder: 利用可能性を検出し、不可なら libx264 にフォールバック
+        if "encoder" in kwargs:
+            self._set_encoder(kwargs.pop("encoder"))
+        # parallel: キャッシュ並列生成のワーカ数
+        if "parallel" in kwargs:
+            pval = kwargs.pop("parallel")
+            if pval is not None:
+                pval = int(pval)
+                if pval < 1:
+                    raise ValueError(f"parallel は1以上が必要です: {pval}")
+            self._parallel = pval
         for key, value in kwargs.items():
             setattr(self, key, value)
         if "duration" in kwargs:
             self._configured_duration = kwargs["duration"]
+
+    def _set_encoder(self, encoder):
+        """エンコーダを設定。ffmpegで利用不可なら libx264 へフォールバック（警告）。"""
+        if encoder not in _ENCODER_MAP:
+            hint = _suggest_hint(str(encoder), _ENCODER_MAP.keys())
+            raise ValueError(
+                f"不明なエンコーダ: {encoder}。"
+                f"使用可能: {', '.join(sorted(_ENCODER_MAP))}{hint}")
+        info = _ENCODER_MAP[encoder]
+        cv = info["cv"]
+        available = _ffmpeg_available_encoders()
+        # available が空（検出失敗）の場合は指定を尊重（検出不能≠利用不可）
+        if available and cv not in available and encoder != "libx264":
+            warnings.warn(
+                f"エンコーダ '{encoder}' ({cv}) はこのffmpegで利用できません。"
+                f"libx264 にフォールバックします。")
+            encoder = "libx264"
+            info = _ENCODER_MAP["libx264"]
+            cv = info["cv"]
+        self.encoder = encoder
+        self._encoder_cv = cv
+        self._encoder_args = list(info["args"])
+        self._encoder_draft_args = list(info["draft"])
 
     def normalize_audio(self, target=-14):
         """最終音声にloudnorm(EBU R128)を適用しラウドネスを正規化する。
@@ -1649,9 +1787,16 @@ class Project:
                     raise RuntimeError(f"未定義のアンカー: '{until_name}'")
 
     def render(self, output_path, *, dry_run=False, timeout=1800,
-               start=None, end=None):
+               start=None, end=None, draft=False, alpha=False):
         self._reset_runtime_state()
         self._dry_run = dry_run
+        self._draft = bool(draft)
+        self._alpha = bool(alpha)
+        self._render_quality = "draft" if draft else "final"
+        # draft時はチェックポイント/morph鍵を本番と分離
+        _ACTIVE_QUALITY[0] = "draft" if draft else ""
+        _GEN_COUNTER[0] = 0
+        _t0 = _time.perf_counter()
         self._pending_compute_cmds = {}
         # 部分レンダの時間窓を検証・保持（式のt基準は保ちつつ窓外を出力しない）
         if start is not None or end is not None:
@@ -1706,6 +1851,25 @@ class Project:
             return cmd  # 後方互換: cache不要ならlistのまま
 
         self._ensure_web_objects()
+        # 統計: このレンダが参照する中間生成物のうち既存(ヒット)/未生成(ミス)を数える
+        # 注意: _collect_* はdry_run用でobj.source等を予測パスへ破壊的に差し替えるため、
+        #       状態をスナップショットして復元してから実生成へ進む
+        planned = set()
+        _snap = [(o, o.source, o.media_type, list(o.transforms), list(o.effects),
+                  getattr(o, "_resolved_length", None))
+                 for o in self.objects if isinstance(o, Object)]
+        try:
+            planned |= set(self._collect_checkpoint_cmds().keys())
+            planned |= set(self._collect_cache_cmds().keys())
+        except Exception:
+            planned = set()
+        finally:
+            for o, src, mt, tr, ef, rl in _snap:
+                o.source, o.media_type = src, mt
+                o.transforms, o.effects = tr, ef
+                o._resolved_length = rl
+        cache_hits = sum(1 for p in planned if os.path.exists(p))
+        cache_misses = len(planned) - cache_hits
         self._ensure_checkpoints()
         cmd = self._build_ffmpeg_cmd(output_path)
         print(f"実行コマンド:")
@@ -1713,7 +1877,72 @@ class Project:
         print()
         _run_ffmpeg(cmd, timeout=timeout)
         self._generate_pending_caches()
+        elapsed = _time.perf_counter() - _t0
+        generated = _GEN_COUNTER[0]
         print(f"\n完了: {output_path}")
+        mode = "ドラフト" if draft else "本番"
+        print(f"[統計] {mode} / 総時間 {elapsed:.2f}s / "
+              f"キャッシュ ヒット{cache_hits} ミス{cache_misses} / "
+              f"生成した中間ファイル {generated}件")
+
+    def thumbnail(self, at, out, *, timeout=600):
+        """指定時刻 at(秒) のフレームを1枚のPNGとして書き出す。
+
+        render() と同じプラン解決・チェックポイント生成を通し、
+        フィルタグラフの t 基準を保ったまま -ss + -frames:v 1 で抜き出す。
+        """
+        at = float(at)
+        if at < 0:
+            raise ValueError(f"thumbnail: at は0以上が必要です: {at}")
+        self._reset_runtime_state()
+        self._dry_run = False
+        self._draft = False
+        self._alpha = False
+        self._render_quality = "final"
+        _ACTIVE_QUALITY[0] = ""
+        self._pending_compute_cmds = {}
+        self._render_window = None
+        self._validate_cache_specs()
+        self._plan_resolve()
+        self.objects = []
+        self._layers = []
+        self._mode = "render"
+        for spec in self._layer_specs:
+            if self._should_use_cache(spec):
+                self._load_cached_layer(spec)
+            else:
+                self._exec_layer(spec["filename"], spec["priority"])
+        self._resolve_anchors()
+        if self.duration is None:
+            self.duration = self._calc_total_duration()
+        self._ensure_web_objects()
+        self._ensure_checkpoints()
+        self._thumbnail_at = at
+        try:
+            cmd = self._build_ffmpeg_cmd(out)
+            print(f"サムネイル抽出 @{at}s: {out}")
+            print(f"  ffmpeg {' '.join(cmd[1:])}")
+            _run_ffmpeg(cmd, timeout=timeout)
+        finally:
+            self._thumbnail_at = None
+        print(f"完了: {out}")
+        return out
+
+    def inspect(self, out_html=None, *, title=None):
+        """svinspect による検査ビュー。
+
+        out_html 指定時は HTML ガントチャートを書き出しそのパスを返す。
+        省略時はプレーンテキストのレポート文字列を返す（遅延 import）。
+        """
+        try:
+            import svinspect as _svi
+        except ImportError as e:
+            raise ImportError(
+                "inspect() には svinspect.py が必要です。"
+                "scriptvedit.py と同じディレクトリに配置してください。") from e
+        if out_html is not None:
+            return _svi.render_timeline(self, out_html, title=title)
+        return _svi.report_text(self)
 
     def _plan_resolve(self):
         """Plan pass: 固定点反復でアンカーを解決"""
@@ -2459,11 +2688,40 @@ class Project:
             obj.source = webm_path
             obj.media_type = "video"
 
+    def _parallel_workers(self):
+        """キャッシュ並列生成のワーカ数を決定（configure(parallel=N)優先、既定は控えめ）"""
+        if self._parallel is not None:
+            return _builtins.max(1, int(self._parallel))
+        cpu = os.cpu_count() or 2
+        # ffmpeg自体がマルチスレッドのため控えめに（CPU数-1、上限4）
+        return _builtins.max(1, _builtins.min(cpu - 1, 4))
+
     def _generate_pending_caches(self):
-        """実際のキャッシュ生成実行"""
-        for i, spec in enumerate(self._layer_specs):
-            if spec["cache"] == "make":
+        """レイヤーキャッシュ生成を実行（独立レイヤーは ThreadPoolExecutor で並列）"""
+        pending = [i for i, spec in enumerate(self._layer_specs)
+                   if spec["cache"] == "make"]
+        if not pending:
+            return
+        workers = _builtins.min(self._parallel_workers(), len(pending))
+        if workers <= 1 or len(pending) == 1:
+            for i in pending:
                 self._render_layer_to_cache(i)
+            return
+        # 各レイヤーキャッシュは独立（相互に入力参照しない）ため並列化して差し支えない
+        print(f"レイヤーキャッシュを並列生成: {len(pending)}件 (workers={workers})")
+        errors = []
+        with _futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(self._render_layer_to_cache, i): i for i in pending}
+            for fut in _futures.as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as e:  # 1件失敗しても他の結果は確定させる
+                    errors.append((futs[fut], e))
+        if errors:
+            i, e = errors[0]
+            raise RuntimeError(
+                f"レイヤーキャッシュ生成に失敗しました "
+                f"({self._layer_specs[i]['filename']}): {e}") from e
 
     def _build_layer_cache_cmd(self, spec_index, webm_path):
         """レイヤーキャッシュ用ffmpegコマンド（透明webm VP9 alpha）
@@ -2484,7 +2742,10 @@ class Project:
         if audio_sources:
             warnings.warn(
                 f"レイヤーキャッシュ ({spec['filename']}) は映像のみ保存します。"
-                f"以下の音声はキャッシュ再生時に脱落します: {', '.join(audio_sources)}")
+                f"以下の音声はキャッシュ再生時に脱落します: {', '.join(audio_sources)}\n"
+                f"回避策: 音声を持つ素材は cache を付けない別レイヤーに分離してください"
+                f"（透過VP9への音声多重化はレイヤー内amix/adelay/duck_underの"
+                f"再現が必要で本ウェーブでは見送り）。")
 
         dur = self.duration or self._calc_total_duration()
 
@@ -2602,14 +2863,54 @@ class Project:
                 return length
         return fallback
 
+    def _resolve_output_format(self, output_path):
+        """出力パスの拡張子・draft/alpha/thumbnail設定から出力形式を決定する。
+
+        戻り値 dict:
+          kind:  "h264" | "gif" | "webp" | "pngseq" | "webm" | "thumb"
+          alpha: 背景を透過にするか
+          has_audio: この形式が音声トラックを持てるか
+          output_path: 実際にffmpegへ渡す出力パス（連番PNGは %05d 化）
+        """
+        alpha = bool(getattr(self, "_alpha", False))
+        if getattr(self, "_thumbnail_at", None) is not None:
+            return {"kind": "thumb", "alpha": False, "has_audio": False,
+                    "output_path": output_path}
+        ext = os.path.splitext(output_path)[1].lower()
+        if ext == ".gif":
+            return {"kind": "gif", "alpha": False, "has_audio": False,
+                    "output_path": output_path}
+        if ext == ".webp":
+            return {"kind": "webp", "alpha": alpha, "has_audio": False,
+                    "output_path": output_path}
+        if ext == ".png":
+            # 連番PNG（out.png -> out_%05d.png）。既に%が含まれるなら尊重
+            op = output_path
+            if "%" not in op:
+                base, _e = os.path.splitext(output_path)
+                op = f"{base}_%05d.png"
+            return {"kind": "pngseq", "alpha": True, "has_audio": False,
+                    "output_path": op}
+        if ext == ".webm":
+            return {"kind": "webm", "alpha": alpha, "has_audio": True,
+                    "output_path": output_path}
+        return {"kind": "h264", "alpha": alpha, "has_audio": True,
+                "output_path": output_path}
+
     def _build_ffmpeg_cmd(self, output_path):
         inputs = []
         filter_parts = []
+        fmt = self._resolve_output_format(output_path)
+        output_path = fmt["output_path"]
 
-        inputs.extend([
-            "-f", "lavfi",
-            "-i", f"color=c={self.background_color}:s={self.width}x{self.height}:d={self.duration}:r={self.fps}",
-        ])
+        # 背景入力（alpha出力時は透明キャンバス）
+        if fmt["alpha"]:
+            bg_src = (f"color=c=black@0.0:s={self.width}x{self.height}"
+                      f":d={self.duration}:r={self.fps},format=rgba")
+        else:
+            bg_src = (f"color=c={self.background_color}:s={self.width}x{self.height}"
+                      f":d={self.duration}:r={self.fps}")
+        inputs.extend(["-f", "lavfi", "-i", bg_src])
 
         renderable = [o for o in self.objects if isinstance(o, Object)]
         sorted_objects = sorted(renderable, key=lambda o: o.priority)
@@ -2731,12 +3032,29 @@ class Project:
                     f"{ln_in}loudnorm=I={self._loudnorm_target}:TP=-1.5:LRA=11[aout_ln]")
                 audio_out = "[aout_ln]"
 
+        # 出力前の映像後処理（draft縮小・GIFパレット生成）
+        video_map = current_base
+        if getattr(self, "_draft", False):
+            # ドラフト: 解像度を半分に（幾何は保持、偶数寸法に丸め）
+            filter_parts.append(
+                f"{video_map}scale=trunc(iw/4)*2:trunc(ih/4)*2[vdraft]")
+            video_map = "[vdraft]"
+        if fmt["kind"] == "gif":
+            # 高品質パレット: split→palettegen→paletteuse を1グラフで実行
+            filter_parts.append(
+                f"{video_map}split[gsrc][gpg];"
+                f"[gpg]palettegen=stats_mode=diff[gpal];"
+                f"[gsrc][gpal]paletteuse=dither=bayer:bayer_scale=5"
+                f":diff_mode=rectangle[vgif]")
+            video_map = "[vgif]"
+
         cmd = ["ffmpeg", "-y"]
         cmd.extend(inputs)
 
         # チャプター: FFMETADATAを追加入力にして -map_metadata で埋め込む
         meta_idx = None
-        if self._markers:
+        emit_meta = bool(self._markers) and fmt["has_audio"]
+        if emit_meta:
             meta_path = self._chapters_metadata_path()
             if not getattr(self, "_dry_run", False):
                 self._write_chapters_metadata(meta_path)
@@ -2744,20 +3062,24 @@ class Project:
             meta_idx = 1 + len(sorted_objects)
             cmd.extend(["-f", "ffmetadata", "-i", meta_path])
 
+        use_audio = bool(audio_out) and fmt["has_audio"]
         if filter_parts:
             cmd.extend(["-filter_complex", ";".join(filter_parts)])
-            cmd.extend(["-map", current_base])
-            if audio_out:
+            cmd.extend(["-map", video_map])
+            if use_audio:
                 cmd.extend(["-map", audio_out])
 
         if meta_idx is not None:
             cmd.extend(["-map_metadata", str(meta_idx)])
 
-        cmd.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
-        if audio_out:
-            cmd.extend(["-c:a", "aac"])
-        else:
-            cmd.extend(["-an"])
+        # --- 出力形式ごとのエンコード指定 ---
+        cmd.extend(self._encode_args(fmt, use_audio))
+
+        # thumbnail: 単一フレーム抽出（-ss + -frames:v 1、-update で単一画像出力）
+        if fmt["kind"] == "thumb":
+            cmd.extend(["-ss", str(self._thumbnail_at), "-frames:v", "1",
+                        "-update", "1", output_path])
+            return cmd
 
         # 部分レンダ: 出力側 -ss/-t で窓を切り出す（フィルタのt基準は保つ）
         window = getattr(self, "_render_window", None)
@@ -2772,6 +3094,45 @@ class Project:
             cmd.extend(["-t", str(self.duration), output_path])
 
         return cmd
+
+    def _encode_args(self, fmt, use_audio):
+        """出力形式に応じた -c:v / -pix_fmt / -c:a 等のエンコード引数を返す"""
+        kind = fmt["kind"]
+        draft = bool(getattr(self, "_draft", False))
+        args = []
+        if kind == "thumb":
+            return ["-pix_fmt", "rgba", "-an"]
+        if kind == "gif":
+            # パレット適用済みなのでコーデック指定は不要。音声なし。
+            return ["-an"]
+        if kind == "webp":
+            q = "60" if draft else "80"
+            return ["-c:v", "libwebp", "-lossless", "0", "-q:v", q,
+                    "-loop", "0", "-an"]
+        if kind == "pngseq":
+            return ["-c:v", "png", "-pix_fmt", "rgba", "-an"]
+        if kind == "webm":
+            pix = "yuva420p" if fmt["alpha"] else "yuv420p"
+            crf = "34" if draft else "24"
+            args = ["-c:v", "libvpx-vp9", "-pix_fmt", pix,
+                    "-b:v", "0", "-crf", crf, "-auto-alt-ref", "0"]
+            if use_audio:
+                args.extend(["-c:a", "libopus"])
+            else:
+                args.append("-an")
+            return args
+        # h264 / 指定エンコーダ
+        args = ["-c:v", self._encoder_cv]
+        if draft:
+            args.extend(self._encoder_draft_args)
+        else:
+            args.extend(self._encoder_args)
+        args.extend(["-pix_fmt", "yuv420p"])
+        if use_audio:
+            args.extend(["-c:a", "aac"])
+        else:
+            args.append("-an")
+        return args
 
 
 # --- メディア情報ヘルパー ---
@@ -3686,9 +4047,10 @@ class Object:
         if self.media_type == "web":
             unknown = set(kwargs.keys()) - _WEB_KWARGS
             if unknown:
+                hint = _suggest_hint(sorted(unknown)[0], _WEB_KWARGS)
                 raise TypeError(
                     f"不明なキーワード引数: {', '.join(sorted(unknown))}。"
-                    f"使用可能: {', '.join(sorted(_WEB_KWARGS))}")
+                    f"使用可能: {', '.join(sorted(_WEB_KWARGS))}{hint}")
             if "duration" not in kwargs:
                 raise ValueError("web Object には duration が必須です")
             if "size" not in kwargs:
@@ -5137,12 +5499,40 @@ def sfx(source, at, *, volume=1.0):
     return _finalize_generated_object(cache_path, cmd, [source], total)
 
 
+def voice(text, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0, **tts_kwargs):
+    """svtts(VOICEVOX)で text を音声合成し、その wav を素材とする音声Objectを返す。
+
+    duration は tts_duration による実長を自動設定するため、字幕・タイムラインと
+    自然に同期する。svtts.py が無い/VOICEVOX 未起動なら親切なエラーを投げる。
+
+    使用例:
+        v = voice("こんにちは、世界", speaker=3)
+        v.show(v.duration)
+    """
+    try:
+        import svtts as _svtts
+    except ImportError as e:
+        raise ImportError(
+            "voice() には svtts.py が必要です。"
+            "scriptvedit.py と同じディレクトリに配置してください。") from e
+    wav = _svtts.tts(text, speaker=speaker, speed=speed, pitch=pitch, **tts_kwargs)
+    dur = _svtts.tts_duration(wav)
+    obj = Object(wav)
+    obj.duration = dur
+    if volume != 1.0:
+        _require_number("voice", "volume", volume, 0, None)
+        obj.audio_effects.append(again(volume))
+    return obj
+
+
 def audio_viz(source, *, kind="waves", color="white", size=None, duration=None):
     """音声を showwaves/showspectrum/showcqt で可視化した映像Objectを生成（キャッシュ生成物）。
     kind: 'waves' | 'spectrum' | 'cqt'。"""
     _validate_audio_source("audio_viz", source)
     if kind not in ("waves", "spectrum", "cqt"):
-        raise ValueError(f"audio_viz: kind は 'waves'/'spectrum'/'cqt': {kind!r}")
+        hint = _suggest_hint(str(kind), ("waves", "spectrum", "cqt"))
+        raise ValueError(
+            f"audio_viz: kind は 'waves'/'spectrum'/'cqt': {kind!r}{hint}")
     proj = Project._current
     fps = proj.fps if proj else 30
     dur = duration or _probe_audio_length(source) or 5.0
@@ -5250,8 +5640,9 @@ _XFADE_TRANSITIONS = {
 
 def _validate_xfade_kind(func_name, kind):
     if kind not in _XFADE_TRANSITIONS:
+        hint = _suggest_hint(str(kind), _XFADE_TRANSITIONS)
         raise ValueError(
-            f"{func_name}: 未知のtransition '{kind}'。\n"
+            f"{func_name}: 未知のtransition '{kind}'。{hint}\n"
             f"有効な名前: {', '.join(sorted(_XFADE_TRANSITIONS))}")
 
 
@@ -5949,3 +6340,222 @@ def label(x, y, text, **kw):
 def spotlight(x, y, r, **kw):
     """スポットライト（暗幕くり抜き）オブジェクト定義を返す"""
     return {"type": "spotlight", "x": x, "y": y, "r": r, **kw}
+
+
+# --- キャッシュ管理 CLI / watch モード ---
+
+def _iter_cache_files(cache_dir=_CACHE_DIR):
+    """__cache__ 配下の全ファイルを (絶対パス, カテゴリ, サイズ, mtime) で列挙する"""
+    if not os.path.isdir(cache_dir):
+        return
+    root_abs = os.path.abspath(cache_dir)
+    for dirpath, _dirs, files in os.walk(cache_dir):
+        for name in files:
+            path = os.path.join(dirpath, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            rel = os.path.relpath(path, root_abs)
+            parts = rel.replace("\\", "/").split("/")
+            # artifacts/<種別>/... は種別を、それ以外は先頭ディレクトリをカテゴリに
+            if parts[0] == "artifacts" and len(parts) > 1:
+                category = parts[1]
+            elif len(parts) > 1:
+                category = parts[0]
+            else:
+                category = "(直下)"
+            yield path, category, st.st_size, st.st_mtime
+
+
+def _fmt_size(n):
+    """バイト数を人間可読な単位で整形"""
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.1f}{unit}" if unit != "B" else f"{int(n)}B"
+        n /= 1024.0
+
+
+def cache_stats(cache_dir=_CACHE_DIR):
+    """種別ごとの件数・合計サイズを集計して表示する"""
+    stats = {}
+    total_n = 0
+    total_sz = 0
+    for _path, category, size, _mtime in _iter_cache_files(cache_dir):
+        c = stats.setdefault(category, [0, 0])
+        c[0] += 1
+        c[1] += size
+        total_n += 1
+        total_sz += size
+    print(f"=== キャッシュ統計: {os.path.abspath(cache_dir)} ===")
+    if total_n == 0:
+        print("  (キャッシュはありません)")
+        return
+    print(f"  {'種別':<16} {'件数':>8} {'サイズ':>12}")
+    print("  " + "-" * 38)
+    for category in sorted(stats):
+        n, sz = stats[category]
+        print(f"  {category:<16} {n:>8} {_fmt_size(sz):>12}")
+    print("  " + "-" * 38)
+    print(f"  {'合計':<16} {total_n:>8} {_fmt_size(total_sz):>12}")
+
+
+def cache_gc(keep_days, cache_dir=_CACHE_DIR):
+    """keep_days 日より古い（mtime基準）キャッシュファイルを削除する"""
+    cutoff = _time.time() - float(keep_days) * 86400.0
+    removed_n = 0
+    removed_sz = 0
+    for path, _category, size, mtime in list(_iter_cache_files(cache_dir)):
+        if mtime < cutoff:
+            try:
+                os.remove(path)
+                removed_n += 1
+                removed_sz += size
+            except OSError:
+                pass
+    # 空ディレクトリを掃除
+    _prune_empty_dirs(cache_dir)
+    print(f"GC完了: {keep_days}日より古い {removed_n}件 "
+          f"({_fmt_size(removed_sz)}) を削除しました")
+    return removed_n
+
+
+def _prune_empty_dirs(root):
+    """空ディレクトリを再帰的に削除する（bottom-up）"""
+    if not os.path.isdir(root):
+        return
+    for dirpath, dirs, files in os.walk(root, topdown=False):
+        if dirpath == root:
+            continue
+        try:
+            if not os.listdir(dirpath):
+                os.rmdir(dirpath)
+        except OSError:
+            pass
+
+
+def cache_clear(cache_dir=_CACHE_DIR):
+    """__cache__ を丸ごと削除する"""
+    if os.path.isdir(cache_dir):
+        _shutil.rmtree(cache_dir, ignore_errors=True)
+        print(f"キャッシュ全削除: {os.path.abspath(cache_dir)}")
+    else:
+        print(f"キャッシュディレクトリはありません: {cache_dir}")
+
+
+def _watch_targets(script_path):
+    """監視対象ファイル集合を返す（スクリプト自身 + 同ディレクトリの .py 依存レイヤー）"""
+    script_path = os.path.abspath(script_path)
+    targets = {script_path}
+    d = os.path.dirname(script_path)
+    try:
+        for name in os.listdir(d):
+            if name.endswith(".py"):
+                targets.add(os.path.join(d, name))
+    except OSError:
+        pass
+    return targets
+
+
+def _snapshot_mtimes(paths):
+    """パス集合の mtime スナップショット dict を返す"""
+    snap = {}
+    for p in paths:
+        try:
+            snap[p] = os.stat(p).st_mtime
+        except OSError:
+            snap[p] = None
+    return snap
+
+
+def watch(script_path, *, out=None, interval=0.5, max_cycles=None):
+    """script_path と同ディレクトリの .py を監視し、変更時に再実行する。
+
+    標準ライブラリのみ（os.stat ポーリング）。チェックポイント/レイヤー
+    キャッシュが効くため差分再生成は高速。Ctrl-C で停止。
+    max_cycles を指定するとその回数だけポーリングして戻る（テスト用）。
+    """
+    script_path = os.path.abspath(script_path)
+    if not os.path.exists(script_path):
+        raise FileNotFoundError(f"watch: スクリプトが見つかりません: {script_path}")
+
+    def _run():
+        cmd = [sys.executable, script_path]
+        if out:
+            cmd.append(out)
+        print(f"[watch] 実行: {' '.join(cmd)}")
+        t0 = _time.perf_counter()
+        rc = subprocess.run(cmd, cwd=os.path.dirname(script_path)).returncode
+        dt = _time.perf_counter() - t0
+        status = "成功" if rc == 0 else f"失敗(rc={rc})"
+        print(f"[watch] {status} ({dt:.2f}s) 変更を待機中... (Ctrl-Cで終了)")
+
+    print(f"[watch] 監視開始: {script_path}")
+    _run()  # 起動時に1回実行
+    targets = _watch_targets(script_path)
+    last = _snapshot_mtimes(targets)
+    cycles = 0
+    try:
+        while True:
+            _time.sleep(interval)
+            cycles += 1
+            targets = _watch_targets(script_path)  # 新規ファイル追加も検知
+            cur = _snapshot_mtimes(targets)
+            changed = [p for p in cur if cur[p] != last.get(p)]
+            if changed:
+                names = ", ".join(os.path.basename(p) for p in changed)
+                print(f"[watch] 変更検知: {names}")
+                _run()
+                last = cur
+            if max_cycles is not None and cycles >= max_cycles:
+                print("[watch] max_cycles 到達。監視を終了します。")
+                return
+    except KeyboardInterrupt:
+        print("\n[watch] 監視を終了しました。")
+
+
+def _main(argv=None):
+    """CLI エントリポイント: cache 管理 / watch モード"""
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="scriptvedit",
+        description="scriptvedit: キャッシュ管理と watch モード")
+    sub = parser.add_subparsers(dest="command")
+
+    p_cache = sub.add_parser("cache", help="__cache__ の統計・GC・全削除")
+    p_cache.add_argument("--stats", action="store_true", help="種別ごとの件数・サイズを表示")
+    p_cache.add_argument("--gc", action="store_true", help="古い生成物を削除")
+    p_cache.add_argument("--keep-days", type=float, default=7.0,
+                         help="--gc で残す日数（既定: 7）")
+    p_cache.add_argument("--clear", action="store_true", help="キャッシュを全削除")
+    p_cache.add_argument("--dir", default=_CACHE_DIR, help="キャッシュディレクトリ")
+
+    p_watch = sub.add_parser("watch", help="スクリプト変更を監視して再実行")
+    p_watch.add_argument("script", help="監視する Python スクリプト")
+    p_watch.add_argument("--out", help="出力パス（スクリプトへ引数として渡す）")
+    p_watch.add_argument("--interval", type=float, default=0.5, help="ポーリング間隔（秒）")
+    p_watch.add_argument("--max-cycles", type=int, default=None,
+                         help="指定回数だけポーリングして終了（テスト用）")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "cache":
+        if args.clear:
+            cache_clear(args.dir)
+        elif args.gc:
+            cache_gc(args.keep_days, args.dir)
+        elif args.stats:
+            cache_stats(args.dir)
+        else:
+            cache_stats(args.dir)  # 既定は統計表示
+        return 0
+    if args.command == "watch":
+        watch(args.script, out=args.out, interval=args.interval,
+              max_cycles=args.max_cycles)
+        return 0
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(_main())
