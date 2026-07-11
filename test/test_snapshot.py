@@ -751,6 +751,47 @@ def setup_test84():
     return p.render("test84.mp4", dry_run=True)
 
 
+def setup_test85():
+    """narrate: TTS(svttsをモック化)+字幕の同時生成・タイムライン同期
+    （VOICEVOX不要。svtts.tts/tts_durationを差し替えて実行する）"""
+    import svtts
+    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
+    fake_wav = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Impact-38.mp3"))
+
+    def _fake_tts(text, *, speaker=1, speed=1.0, pitch=0.0, **kw):
+        return fake_wav
+
+    def _fake_dur(path):
+        return 2.5
+
+    svtts.tts = _fake_tts
+    svtts.tts_duration = _fake_dur
+    try:
+        p = Project()
+        p.configure(width=1280, height=720, fps=30, background_color="black")
+        p.layer("test85_narrate.py", priority=0)
+        return p.render("test85.mp4", dry_run=True)
+    finally:
+        svtts.tts = orig_tts
+        svtts.tts_duration = orig_dur
+
+
+def setup_test86():
+    """karaoke: ASS \\kタグ字幕（均等割り+word_durations明示）をsubtitlesフィルタで合成"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test86_karaoke.py", priority=0)
+    return p.render("test86.mp4", dry_run=True)
+
+
+def setup_test87():
+    """slide: HTMLスライドのページ切替規約（window.showSlide版 / id="page-N"版）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test87_slide.py", priority=0)
+    return p.render("test87.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -836,6 +877,9 @@ ALL_TESTS = [
     ("test82", setup_test82),
     ("test83", setup_test83),
     ("test84", setup_test84),
+    ("test85", setup_test85),
+    ("test86", setup_test86),
+    ("test87", setup_test87),
 ]
 
 

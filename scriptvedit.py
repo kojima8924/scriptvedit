@@ -1,5 +1,6 @@
 import subprocess
 import os
+import re
 import sys
 import json
 import hashlib
@@ -32,9 +33,11 @@ __all__ = [
     "speed", "reverse", "freeze_frame",
     "again", "afade", "adelete", "delete", "trim", "atrim", "atempo",
     # テキスト・字幕（drawtext/subtitlesベース）
-    "text", "typewriter", "counter", "subtitles",
+    "text", "typewriter", "counter", "subtitles", "karaoke",
     # オーディオ系
     "duck_under", "loop", "audio_sequence", "sfx", "audio_viz", "voice",
+    # 外部モジュール統合（svtts/svbeat/web）
+    "narrate", "Narration", "beat_sync", "slide",
     # アンカー/同期
     "anchor", "pause", "scene",
     # Expr
@@ -1589,6 +1592,64 @@ class Project:
             f.write("\n".join(lines) + "\n")
         return path
 
+    def export_metadata(self, path=None, *, title=None, description=None, tags=None):
+        """YouTube投稿用メタデータ（チャプター+タイトル+説明+タグ）を1ファイルに出力する。
+
+        title省略時は self.param("title") があればそれを使う（無ければNone）。
+        path省略時は "metadata.json"（カレントディレクトリ）に書き出す。
+        拡張子で出力形式を切替: .json ならJSON（構造化データ）、
+        .txt ならYouTube概要欄にそのまま貼れるプレーンテキスト
+        （タイトル→説明→チャプター目次→#タグ の順）。
+
+        戻り値: 書き出したパス。
+        """
+        if title is None:
+            title = self.param("title", None)
+        markers = self._sorted_markers()
+        chapter_lines = []
+        if not markers or markers[0][0] > 0.001:
+            chapter_lines.append("0:00 イントロ")
+        for t, label in markers:
+            chapter_lines.append(f"{self._fmt_timestamp(t)} {label}")
+        chapters = [{"time": t, "label": label} for t, label in markers]
+        tag_list = [str(t) for t in tags] if tags else []
+
+        if path is None:
+            path = "metadata.json"
+        ext = os.path.splitext(path)[1].lower()
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp_path = path + ".tmp"
+        if ext == ".txt":
+            lines = []
+            if title:
+                lines.append(title)
+                lines.append("")
+            if description:
+                lines.append(description)
+                lines.append("")
+            if chapter_lines:
+                lines.extend(chapter_lines)
+                lines.append("")
+            if tag_list:
+                lines.append(" ".join(f"#{t}" for t in tag_list))
+            content = "\n".join(lines).rstrip("\n") + "\n"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        else:
+            data = {
+                "title": title,
+                "description": description,
+                "tags": tag_list,
+                "chapters": chapters,
+                "chapters_text": "\n".join(chapter_lines),
+            }
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+        return path
+
     def _chapters_metadata_path(self):
         """FFMETADATAチャプターファイルのキャッシュパス（内容由来の鍵）"""
         total = self.duration if self.duration is not None else 0
@@ -2054,6 +2115,83 @@ class Project:
             self._thumbnail_at = None
         print(f"完了: {out}")
         return out
+
+    def storyboard(self, out_path, *, cols=4, interval=None):
+        """タイムラインの絵コンテ（サムネイル格子画像）を1枚のPNGとして生成する。
+
+        interval秒ごと（省略時は 総尺/12）に thumbnail() と同じ抽出経路
+        （plan解決+checkpoint確保+ffmpeg単フレーム抽出）でサムネイルを取り出し、
+        PILでcols列のグリッドに結合する（各コマ左上に時刻ラベルを焼き込む）。
+        事前にrender()した最終動画は不要（このメソッド単体で完結する実装方式。
+        thumbnail()を都度呼ぶためコマ数ぶんffmpegが実行される）。
+
+        戻り値: 書き出したパス(out_path)。
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError as e:
+            raise ImportError(
+                "storyboard() には Pillow が必要です。"
+                "`pip install Pillow` を実行してください。") from e
+        if cols < 1:
+            raise ValueError(f"storyboard: cols は1以上が必要です: {cols}")
+        if interval is not None:
+            _require_number("storyboard", "interval", interval, 0.001, None)
+
+        tmp_dir = os.path.join(_ARTIFACT_DIR, "storyboard", "_frames")
+        os.makedirs(tmp_dir, exist_ok=True)
+        try:
+            # 1枚目の抽出で総尺を確定させる（thumbnail()の副作用でself.durationが決まる）
+            first_path = os.path.join(tmp_dir, "frame_000.png")
+            self.thumbnail(0.0, first_path)
+            total = self.duration
+            if not total or total <= 0:
+                raise RuntimeError("storyboard: タイムラインの総尺を確定できませんでした")
+            step = interval if interval is not None else max(total / 12.0, 0.01)
+
+            times = [0.0]
+            t = step
+            while t < total - 1e-6:
+                times.append(t)
+                t += step
+
+            frame_paths = [(0.0, first_path)]
+            for i, tsec in enumerate(times[1:], start=1):
+                fp = os.path.join(tmp_dir, f"frame_{i:03d}.png")
+                self.thumbnail(min(tsec, max(0.0, total - 0.001)), fp)
+                frame_paths.append((tsec, fp))
+
+            thumbs = [Image.open(fp).convert("RGB") for _, fp in frame_paths]
+            tw, th = thumbs[0].size
+            n = len(thumbs)
+            rows = (n + cols - 1) // cols
+            gap = 4
+            grid_w = cols * tw + (cols - 1) * gap
+            grid_h = rows * th + (rows - 1) * gap
+            canvas = Image.new("RGB", (grid_w, grid_h), (20, 20, 20))
+            draw = ImageDraw.Draw(canvas)
+            try:
+                font = ImageFont.truetype("C:/Windows/Fonts/consola.ttf", 18)
+            except Exception:
+                font = ImageFont.load_default()
+            for i, ((tsec, _fp), img) in enumerate(zip(frame_paths, thumbs)):
+                r, c = divmod(i, cols)
+                x = c * (tw + gap)
+                y = r * (th + gap)
+                canvas.paste(img, (x, y))
+                label = self._fmt_timestamp(tsec)
+                draw.rectangle([x, y, x + 68, y + 20], fill=(0, 0, 0))
+                draw.text((x + 4, y + 3), label, fill=(255, 255, 0), font=font)
+
+            d = os.path.dirname(out_path)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            tmp_out = out_path + ".tmp.png"
+            canvas.save(tmp_out)
+            os.replace(tmp_out, out_path)
+        finally:
+            _shutil.rmtree(tmp_dir, ignore_errors=True)
+        return out_path
 
     def inspect(self, out_html=None, *, title=None):
         """svinspect による検査ビュー。
@@ -4416,6 +4554,9 @@ class Scene:
 
 _WEB_KWARGS = {"duration", "size", "fps", "data", "name", "debug_frames", "deps"}
 
+# slide(): web Objectの_web_dataに埋め込むページ切替キー（内部規約・非公開API）
+_SLIDE_PAGE_KEY = "__svt_slide_page__"
+
 
 class Object:
     def __init__(self, source, **kwargs):
@@ -4893,11 +5034,33 @@ class Object:
         html_path = os.path.abspath(self._web_source)
         url = f"file:///{html_path.replace(os.sep, '/')}"
 
+        # slide(): ページ切替規約（_SLIDE_PAGE_KEY）が指定されていれば、
+        # renderFrame待機の前にページ切替JSフックを実行する
+        slide_page = self._web_data.get(_SLIDE_PAGE_KEY)
+
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
             try:
                 page = browser.new_page(viewport={"width": w, "height": h})
                 page.goto(url)
+                if slide_page is not None:
+                    # window.showSlide(n) があれば呼び出し、無ければ
+                    # id="page-N" 要素のみ表示（他のid^="page-"要素は非表示）。
+                    # renderFrame未定義ならno-opを注入し、静止スライドとして
+                    # 通常のWeb Objectキャプチャ経路をそのまま利用できるようにする。
+                    page.evaluate(
+                        "(n) => {"
+                        "  if (typeof window.showSlide === 'function') {"
+                        "    window.showSlide(n);"
+                        "  } else {"
+                        "    document.querySelectorAll('[id^=\"page-\"]').forEach(function(el) {"
+                        "      el.style.display = (el.id === ('page-' + n)) ? '' : 'none';"
+                        "    });"
+                        "  }"
+                        "  if (typeof window.renderFrame !== 'function') {"
+                        "    window.renderFrame = function(state) {};"
+                        "  }"
+                        "}", slide_page)
                 page.wait_for_function("typeof globalThis.renderFrame === 'function'", timeout=5000)
                 for i in range(N):
                     t = i / fps
@@ -6172,6 +6335,162 @@ def subtitles(srt_file, *, style=None):
     return obj
 
 
+# --- karaoke（ASS \k タグによるカラオケ風ハイライト字幕） ---
+
+# 既知の色名 -> #RRGGBB（karaoke styleの簡易色指定用）
+_ASS_NAMED_COLORS = {
+    "white": "FFFFFF", "black": "000000", "red": "FF0000", "green": "00FF00",
+    "blue": "0000FF", "yellow": "FFFF00", "cyan": "00FFFF", "magenta": "FF00FF",
+    "orange": "FFA500", "gray": "808080", "grey": "808080", "pink": "FFC0CB",
+}
+
+
+def _color_to_ass(color, alpha=0):
+    """色指定をASSの &HAABBGGRR 16進文字列に変換する。
+    'white'等の既知色名 / '#RRGGBB' / 既にASS形式('&H..'始まり)のいずれかを受け付ける。"""
+    if isinstance(color, str) and color.upper().startswith("&H"):
+        return color
+    if not isinstance(color, str):
+        raise ValueError(f"karaoke: 色指定は文字列で指定してください: {color!r}")
+    name = color.lower()
+    hexrgb = _ASS_NAMED_COLORS.get(name, color.lstrip("#"))
+    if len(hexrgb) != 6 or any(c not in "0123456789abcdefABCDEF" for c in hexrgb):
+        raise ValueError(
+            f"karaoke: 未対応の色指定です: {color!r}"
+            f"（既知色名 {sorted(_ASS_NAMED_COLORS)} か #RRGGBB を指定してください）")
+    rr, gg, bb = hexrgb[0:2], hexrgb[2:4], hexrgb[4:6]
+    return f"&H{alpha:02X}{bb}{gg}{rr}".upper()
+
+
+def _fmt_ass_time(t):
+    """秒 -> ASSタイムコード（H:MM:SS.cc、センチ秒単位）"""
+    cs_total = int(round(float(t) * 100))
+    h, rem = divmod(cs_total, 360000)
+    m, rem = divmod(rem, 6000)
+    s, cs = divmod(rem, 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _escape_ass_text(s):
+    """ASSダイアログテキスト用エスケープ（\\、{}、改行）"""
+    return (s.replace("\\", "\\\\").replace("{", "\\{")
+             .replace("}", "\\}").replace("\r\n", "\\N").replace("\n", "\\N"))
+
+
+def _karaoke_tokenize(text):
+    """カラオケ行を\\kタグの単位（語）に分割する。
+    空白を含む場合は空白区切り（末尾の空白を保持）、無ければ1文字ずつに分割
+    （日本語歌詞のように分かち書きが無い場合の既定挙動）。"""
+    if any(c.isspace() for c in text):
+        toks = re.findall(r"\S+\s*", text)
+        return toks if toks else [text]
+    return list(text)
+
+
+def karaoke(lines, *, style=None):
+    """カラオケ風ハイライト字幕（ASSの\\kタグ）を生成する映像Object。
+
+    lines: [(start, end, "歌詞"), ...] または
+           [(start, end, "歌詞", [word_durations...]), ...] のリスト。
+    - word_durations省略時: 行内の語（分割規約は_karaoke_tokenize参照）に
+      (end-start)を均等割りして\\kタグを割り当てる。
+    - word_durations指定時: 分割された語の数と同じ長さの秒数リストを指定する
+      （語ごとのハイライト時間、\\kタグの単位はセンチ秒に変換）。
+    style: {"font", "size", "primary"（既に発音済みの色）, "secondary"（未発音の色）,
+            "outline_color", "back_color", "alignment", "margin_v", "outline",
+            "shadow", "bold"} を上書きする辞書（省略キーは既定値）。
+
+    生成したASSは歌詞+タイミング+styleのSHA256でcontent-addressedキャッシュに
+    書き出し、subtitles()経由でsubtitlesフィルタとして合成する。
+    SRT/ASSと同様に .time(全体尺) で開始0に配置する想定。
+    """
+    if not isinstance(lines, (list, tuple)) or len(lines) == 0:
+        raise ValueError("karaoke: lines には1行以上指定してください")
+    st = dict(style or {})
+    font = st.get("font", "Meiryo")
+    size = int(st.get("size", 48))
+    primary = _color_to_ass(st.get("primary", "yellow"))
+    secondary = _color_to_ass(st.get("secondary", "white"))
+    outline_color = _color_to_ass(st.get("outline_color", "black"))
+    back_color = _color_to_ass(st.get("back_color", "black"), alpha=0x80)
+    alignment = int(st.get("alignment", 2))
+    margin_v = int(st.get("margin_v", 60))
+    outline_w = st.get("outline", 2)
+    shadow = st.get("shadow", 0)
+    bold = -1 if st.get("bold", True) else 0
+
+    body_lines = []
+    for idx, line in enumerate(lines):
+        if not isinstance(line, (list, tuple)) or len(line) not in (3, 4):
+            raise ValueError(
+                f"karaoke: lines[{idx}] は (start,end,text) または "
+                f"(start,end,text,word_durations) を指定してください: {line!r}")
+        if len(line) == 3:
+            t0, t1, txt = line
+            word_durs = None
+        else:
+            t0, t1, txt, word_durs = line
+        t0 = float(t0)
+        t1 = float(t1)
+        if t1 <= t0:
+            raise ValueError(
+                f"karaoke: lines[{idx}] の end は start より後が必要です: {line!r}")
+        tokens = _karaoke_tokenize(str(txt))
+        if not tokens:
+            continue
+        if word_durs is not None:
+            word_durs = list(word_durs)
+            if len(word_durs) != len(tokens):
+                raise ValueError(
+                    f"karaoke: lines[{idx}] の word_durations 数({len(word_durs)})が"
+                    f"分割語数({len(tokens)})と一致しません。分割結果: {tokens}\n"
+                    f"（分割規約: 空白を含む行は空白区切り、無ければ1文字ずつ）")
+            for d in word_durs:
+                _require_number("karaoke", "word_durations要素", d, 0.001, None)
+        else:
+            each = (t1 - t0) / len(tokens)
+            word_durs = [each] * len(tokens)
+        k_text = "".join(
+            f"{{\\k{max(1, round(float(d) * 100))}}}{_escape_ass_text(tok)}"
+            for tok, d in zip(tokens, word_durs))
+        body_lines.append(
+            f"Dialogue: 0,{_fmt_ass_time(t0)},{_fmt_ass_time(t1)},Karaoke,,0,0,0,,{k_text}")
+
+    if not body_lines:
+        raise ValueError("karaoke: 有効な行がありません（全行が空テキストでした）")
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "WrapStyle: 0\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Karaoke,{font},{size},{primary},{secondary},{outline_color},"
+        f"{back_color},{bold},0,0,0,100,100,0,0,1,{outline_w},{shadow},"
+        f"{alignment},20,20,{margin_v},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+    content = header + "\n".join(body_lines) + "\n"
+
+    key = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    ass_path = os.path.join(_ARTIFACT_DIR, "karaoke", f"{key}.ass")
+    if not os.path.exists(ass_path):
+        os.makedirs(os.path.dirname(ass_path), exist_ok=True)
+        tmp_path = ass_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, ass_path)
+
+    return subtitles(ass_path)
+
+
 # --- オーディオ系ファクトリ ---
 
 def duck_under(other, *, ratio=8, threshold=0.05, attack=20, release=250):
@@ -6327,6 +6646,91 @@ def voice(text, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0, **tts_kwargs):
     return obj
 
 
+class Narration:
+    """narrate() の返値。(audio, subtitle) としてタプルアンパック可能な軽量ラッパー。
+
+    audio:    音声Object（voice()相当。durationはTTS実長）
+    subtitle: 字幕Object（subtitle=False指定時はNone）
+    duration: 音声の実長（秒）のショートカットプロパティ
+    """
+    __slots__ = ("audio", "subtitle")
+
+    def __init__(self, audio, subtitle):
+        self.audio = audio
+        self.subtitle = subtitle
+
+    def __iter__(self):
+        yield self.audio
+        yield self.subtitle
+
+    def __repr__(self):
+        return f"Narration(audio={self.audio!r}, subtitle={self.subtitle!r})"
+
+    @property
+    def duration(self):
+        return self.audio.duration
+
+
+def narrate(text_content, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0,
+            subtitle=True, subtitle_style=None,
+            x=0.5, y=0.9, size=36, color="white", font=None,
+            box=True, box_color="black@0.6", box_border=10, alpha=1.0,
+            anchor="center", **tts_kwargs):
+    """TTSナレーション音声 + 同期字幕を1回の呼び出しで生成・配置する。
+
+    voice()(svtts)でtext_contentを音声合成し、subtitle=Trueなら同じ内容の
+    text()字幕Objectも生成する。字幕の表示窓は音声の実長(tts_duration)に
+    一致させ、両者は同じ開始時刻からタイムラインに配置される。
+    複数回呼べば、音声の実長ぶんタイムラインが進むため順次配置される
+    （字幕は各回の音声窓にだけ表示される）。
+
+    x/y/size/color/font/box/box_color/box_border/alpha/anchor は text() と同じ
+    意味の字幕スタイル引数（既定はナレーション向けに下部中央+半透明ボックス）。
+    subtitle_style を渡すと、これらの既定値を辞書キー（同名）で個別に上書きできる
+    （例: subtitle_style={"size": 44, "y": 0.85}）。
+    volume/pitch/**tts_kwargs は voice() と同じ意味で音声側にのみ作用する。
+
+    戻り値: Narration(audio, subtitle) （タプルとして (a, t) = narrate(...) も可）。
+    svtts.py が無い/VOICEVOX未起動時のエラーはvoice()同様に透過する。
+
+    使用例:
+        n = narrate("こんにちは、世界", speaker=3)
+        # n.audio / n.subtitle、または audio, sub = narrate(...)
+    """
+    try:
+        import svtts as _svtts
+    except ImportError as e:
+        raise ImportError(
+            "narrate() には svtts.py が必要です。"
+            "scriptvedit.py と同じディレクトリに配置してください。") from e
+    wav = _svtts.tts(text_content, speaker=speaker, speed=speed, pitch=pitch,
+                     **tts_kwargs)
+    dur = _svtts.tts_duration(wav)
+
+    text_obj = None
+    if subtitle:
+        st = dict(subtitle_style or {})
+        text_obj = text(
+            text_content,
+            x=st.get("x", x), y=st.get("y", y), size=st.get("size", size),
+            color=st.get("color", color), font=st.get("font", font),
+            box=st.get("box", box), box_color=st.get("box_color", box_color),
+            box_border=st.get("box_border", box_border),
+            alpha=st.get("alpha", alpha), anchor=st.get("anchor", anchor))
+        # current_timeを進めず音声と同じ開始点に配置（音声側で進行させる）
+        text_obj.show(dur)
+
+    # text_objより後にaudio_objをobjects列へ追加することで、
+    # 「同じ開始時刻→音声側だけがタイムラインを進める」順序を保証する
+    audio_obj = Object(wav)
+    audio_obj.duration = dur
+    if volume != 1.0:
+        _require_number("narrate", "volume", volume, 0, None)
+        audio_obj.audio_effects.append(again(volume))
+
+    return Narration(audio_obj, text_obj)
+
+
 def audio_viz(source, *, kind="waves", color="white", size=None, duration=None):
     """音声を showwaves/showspectrum/showcqt で可視化した映像Objectを生成（キャッシュ生成物）。
     kind: 'waves' | 'spectrum' | 'cqt'。"""
@@ -6365,6 +6769,59 @@ def audio_viz(source, *, kind="waves", color="white", size=None, duration=None):
            "-c:v", "ffv1", "-level", "3", "-pix_fmt", "yuv420p",
            "-t", str(dur), cache_path]
     return _finalize_generated_object(cache_path, cmd, [source], dur)
+
+
+def beat_sync(audio_source, *, min_bpm=60, max_bpm=200):
+    """svbeat(numpy/scipyのみのビート検出)をDSLに統合し、拍時刻を返す。
+
+    audio_source: 音声/動画ファイルパス（svbeatがffmpegでデコードする）
+    min_bpm/max_bpm: svbeat.detect_beatsに渡すテンポ探索範囲
+
+    戻り値: {"bpm": float, "beats": [秒,...], "onsets": [秒,...], "duration": float}
+    （svbeat.detect_beats() と同じ形式。そのまま snap_times()/beats_to_keyframes()
+    に渡せる）
+
+    解析結果は audio_source のFFP + min_bpm/max_bpm をキーに
+    __cache__/artifacts/beats/ へJSONキャッシュし、同じ入力の再解析を避ける。
+    svbeat.py または numpy/scipy が無い場合は導入方法を含む日本語エラーにする。
+    """
+    if not isinstance(audio_source, str):
+        raise TypeError(
+            f"beat_sync: audio_source はパス文字列で指定してください: {audio_source!r}")
+    if not os.path.exists(audio_source):
+        raise FileNotFoundError(
+            f"beat_sync: 音声/動画ファイルが見つかりません: {audio_source}")
+    try:
+        import svbeat as _svbeat
+    except ImportError as e:
+        raise ImportError(
+            "beat_sync() には svbeat.py と numpy/scipy が必要です。\n"
+            "scriptvedit.py と同じディレクトリに svbeat.py を配置し、"
+            "`pip install numpy scipy` を実行してください。"
+            f"(元エラー: {e})") from e
+
+    sig = _source_signature(audio_source)
+    key_str = (f"{sig}||min_bpm={min_bpm}||max_bpm={max_bpm}||ev={_ENGINE_VER}")
+    key = hashlib.sha256(key_str.encode("utf-8")).hexdigest()[:16]
+    cache_path = os.path.join(_ARTIFACT_DIR, "beats", f"{key}.json")
+    if os.path.exists(cache_path):
+        with open(cache_path, encoding="utf-8") as f:
+            return json.load(f)
+
+    try:
+        result = _svbeat.detect_beats(
+            audio_source, min_bpm=min_bpm, max_bpm=max_bpm)
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"beat_sync: ビート検出に失敗しました: {e}") from e
+
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    tmp_path = cache_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False)
+    os.replace(tmp_path, cache_path)
+    return result
 
 
 # --- アンカー/同期 ---
@@ -7226,6 +7683,59 @@ def diagram(objects, duration=3.0, *, style=None, size=None,
     if deps is not None:
         kw["deps"] = deps
     return Object(tpl, **kw)
+
+
+def slide(html_file, page=None, *, duration=5.0, width=None, height=None,
+          name=None, debug_frames=False, deps=None):
+    """HTMLスライドを既存のweb Object機構でキャプチャする正式API。
+
+    page省略時: html_file全体を通常のWeb Object（renderFrame(state)による
+        アニメーション）としてduration秒キャプチャする（既存のObject(html,...)
+        直接呼び出しと同じ）。
+
+    page指定時（複数ページを持つ1つのHTMLをスライドデッキとして扱う規約）:
+        キャプチャ直前に以下のJSフックを実行してからduration秒分キャプチャする。
+          1. `window.showSlide` 関数があれば `window.showSlide(page)` を呼ぶ。
+          2. 無ければ `id="page-<page>"` の要素だけを表示し、他の
+             `id^="page-"` 要素は非表示（style.display='none'）にする。
+          3. HTML側に `renderFrame(state)` が定義されていなければ、
+             自動的にno-op実装を注入する（静止スライドはrenderFrame不要）。
+        この規約に沿ったHTMLを用意すれば、1ファイルで複数ページのスライドを
+        page番号違いのslide()呼び出しだけで使い分けられる。
+
+    width/height省略時はアクティブなProjectの解像度を使う。
+    キャッシュはWeb Objectと同じsignature方式（データ内容が変わればキー変化）。
+    """
+    if not isinstance(html_file, str):
+        raise TypeError(f"slide: html_file はパス文字列で指定してください: {html_file!r}")
+    if not os.path.exists(html_file):
+        raise FileNotFoundError(f"slide: HTMLファイルが見つかりません: {html_file}")
+    if os.path.splitext(html_file)[1].lower() not in (".html", ".htm"):
+        raise ValueError(f"slide: .html/.htm ファイルを指定してください: {html_file}")
+    _require_number("slide", "duration", duration, 0.01, None)
+    proj = Project._current
+    if width is None or height is None:
+        if proj is None:
+            raise RuntimeError(
+                "slide: width/height省略時はアクティブなProjectが必要です。"
+                "Project()を作成してからslide()を呼んでください。")
+    w = int(width) if width is not None else proj.width
+    h = int(height) if height is not None else proj.height
+
+    data = {}
+    if page is not None:
+        if not isinstance(page, int) or isinstance(page, bool) or page < 0:
+            raise ValueError(f"slide: page は0以上の整数で指定してください: {page!r}")
+        data[_SLIDE_PAGE_KEY] = page
+
+    if name is None:
+        base = os.path.splitext(os.path.basename(html_file))[0]
+        name = f"slide_{base}_p{page}" if page is not None else f"slide_{base}"
+    kw = dict(duration=float(duration), size=(w, h), data=data, name=name,
+              debug_frames=debug_frames)
+    if deps is not None:
+        kw["deps"] = deps
+    return Object(html_file, **kw)
 
 
 # --- 図形ビルダー ---

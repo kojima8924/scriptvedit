@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { width: 640px; height: 360px; background: #101820; overflow: hidden;
+       font-family: "Meiryo", sans-serif; color: white; }
+.pg { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center; font-size: 48px; }
+</style></head>
+<body>
+<div class="pg" id="p0" style="background:#204060;">PAGE ZERO</div>
+<div class="pg" id="p1" style="background:#402060; display:none;">PAGE ONE</div>
+<script>
+function showSlide(n) {
+  document.getElementById('p0').style.display = (n === 0) ? 'flex' : 'none';
+  document.getElementById('p1').style.display = (n === 1) ? 'flex' : 'none';
+}
+window.showSlide = showSlide;
+</script>
+</body></html>

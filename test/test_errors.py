@@ -20,6 +20,7 @@ from scriptvedit import (
     blur_background_fill, progress_bar,
     speed, reverse, freeze_frame, video_sequence,
     _atempo_chain_rates,
+    narrate, Narration, karaoke, beat_sync, slide,
 )
 
 
@@ -2704,6 +2705,233 @@ def test_compute_rejects_blend_mode():
         return (True, msg.split("\n")[0]) if "blend_mode" in msg else (False, msg)
 
 
+# --- 外部モジュール統合（narrate/karaoke/beat_sync/slide/export_metadata/storyboard） ---
+
+def test_narrate_without_voicevox():
+    """narrate()（VOICEVOX未起動環境想定）: voice()同様に想定内エラーへ透過する"""
+    try:
+        narrate("テストナレーション", speaker=1)
+        return True, "narrate実行成功（VOICEVOX起動中）"
+    except (ImportError, ConnectionError, TimeoutError, RuntimeError) as e:
+        return True, f"想定内エラー: {type(e).__name__}"
+    except Exception as e:
+        return False, f"予期しない例外: {type(e).__name__}: {e}"
+
+
+def test_narrate_returns_narration_tuple():
+    """narrate()の戻り値: Narrationは(audio, subtitle)としてタプルアンパック可能"""
+    import svtts
+    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
+    svtts.tts = lambda text, **kw: os.path.join(os.path.dirname(__file__), "..", "Impact-38.mp3")
+    svtts.tts_duration = lambda path: 1.5
+    try:
+        _mk_project()
+        n = narrate("テスト", subtitle=True)
+        if not isinstance(n, Narration):
+            return False, f"Narration型ではありません: {type(n)}"
+        a, s = n
+        if a is not n.audio or s is not n.subtitle:
+            return False, "タプルアンパックが属性と一致しません"
+        if n.duration != 1.5:
+            return False, f"durationがtts_durationと不一致: {n.duration}"
+        if s.media_type != "text":
+            return False, f"subtitleがtext Objectではありません: {s.media_type}"
+        return True, f"audio.duration={a.duration}, subtitle.media_type={s.media_type}"
+    finally:
+        svtts.tts = orig_tts
+        svtts.tts_duration = orig_dur
+
+
+def test_narrate_subtitle_false_no_subtitle():
+    """narrate(subtitle=False): subtitle属性がNoneになる"""
+    import svtts
+    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
+    svtts.tts = lambda text, **kw: os.path.join(os.path.dirname(__file__), "..", "Impact-38.mp3")
+    svtts.tts_duration = lambda path: 1.0
+    try:
+        _mk_project()
+        n = narrate("テスト", subtitle=False)
+        ok = n.subtitle is None and n.audio is not None
+        return (True, "subtitle=Noneを確認") if ok else (False, f"subtitle={n.subtitle!r}")
+    finally:
+        svtts.tts = orig_tts
+        svtts.tts_duration = orig_dur
+
+
+def test_karaoke_ass_kfired():
+    """karaoke: 生成ASSに\\kタグ・Dialogue・スタイル色が含まれる"""
+    obj = karaoke([(0.0, 2.0, "abc")], style={"primary": "yellow", "secondary": "white"})
+    ass_path = obj._text_spec["srt"]
+    with open(ass_path, encoding="utf-8") as f:
+        content = f.read()
+    checks = [
+        "\\k" in content, "Dialogue: 0,0:00:00.00,0:00:02.00" in content,
+        "&H0000FFFF" in content,  # primary=yellow (BGR: 00,FF,FF)
+        content.count("\\k") == 3,  # 'a','b','c' の3語
+    ]
+    return (True, "ASS生成OK") if all(checks) else (False, f"検証失敗: {content[:200]}")
+
+
+def test_karaoke_word_durations_equal_split():
+    """karaoke: word_durations省略時は均等割りされる"""
+    obj = karaoke([(0.0, 3.0, "ab")])
+    ass_path = obj._text_spec["srt"]
+    with open(ass_path, encoding="utf-8") as f:
+        content = f.read()
+    # 2文字で3秒 → 1文字あたり1.5秒 = 150centiseconds
+    ok = "{\\k150}" in content
+    return (True, "均等割りOK") if ok else (False, content)
+
+
+def test_karaoke_word_durations_mismatch():
+    """karaoke: word_durations数がトークン数と不一致 → ValueError"""
+    try:
+        karaoke([(0.0, 2.0, "abc", [0.5, 0.5])])
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg.split("\n")[0]) if "word_durations" in msg else (False, msg)
+
+
+def test_karaoke_bad_line_tuple():
+    """karaoke: lines要素の長さ不正 → ValueError"""
+    try:
+        karaoke([(0.0, 2.0)])
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return True, str(e).split("\n")[0]
+
+
+def test_karaoke_end_before_start():
+    """karaoke: end <= start → ValueError"""
+    try:
+        karaoke([(2.0, 1.0, "x")])
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return True, str(e).split("\n")[0]
+
+
+def test_beat_sync_detects_and_caches():
+    """beat_sync: 実音声でビート検出し、2回目はJSONキャッシュから即返す"""
+    audio = os.path.join(os.path.dirname(__file__), "..", "Impact-38.mp3")
+    if not os.path.exists(audio):
+        return True, "スキップ（Impact-38.mp3が無い環境）"
+    try:
+        import svbeat  # noqa: F401
+    except ImportError:
+        return True, "スキップ（svbeat/numpy/scipy不在）"
+    from scriptvedit import _ARTIFACT_DIR
+    import shutil as _sh
+    beats_dir = os.path.join(_ARTIFACT_DIR, "beats")
+    if os.path.isdir(beats_dir):
+        _sh.rmtree(beats_dir)
+    r1 = beat_sync(audio, min_bpm=60, max_bpm=200)
+    if "bpm" not in r1 or "beats" not in r1 or not r1["beats"]:
+        return False, f"結果構造が不正: {list(r1.keys())}"
+    cache_files_before = os.listdir(beats_dir) if os.path.isdir(beats_dir) else []
+    if not cache_files_before:
+        return False, "キャッシュJSONが生成されていません"
+    r2 = beat_sync(audio, min_bpm=60, max_bpm=200)
+    ok = r1 == r2
+    return (True, f"bpm={r1['bpm']}, beats={len(r1['beats'])}拍, キャッシュ一致") if ok \
+        else (False, "1回目と2回目の結果が不一致")
+
+
+def test_beat_sync_missing_file():
+    """beat_sync: 存在しない音声ファイル → FileNotFoundError"""
+    try:
+        beat_sync("no_such_audio.mp3")
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        return True, str(e).split("\n")[0]
+
+
+def test_slide_missing_file():
+    """slide: 存在しないHTML → FileNotFoundError"""
+    _mk_project()
+    try:
+        slide("no_such_slide.html", page=0)
+        return False, "例外が発生しませんでした"
+    except FileNotFoundError as e:
+        return True, str(e).split("\n")[0]
+
+
+def test_slide_bad_extension():
+    """slide: .html/.htm以外 → ValueError"""
+    _mk_project()
+    try:
+        slide("../onigiri_tenmusu.png", page=0)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        return True, str(e).split("\n")[0]
+
+
+def test_slide_size_without_project():
+    """slide: width/height省略時にアクティブProjectが無ければRuntimeError"""
+    Project._current = None
+    html = os.path.join(os.path.dirname(__file__), "test19_scene.html")
+    try:
+        slide(html, page=0)
+        return False, "例外が発生しませんでした"
+    except RuntimeError as e:
+        return True, str(e).split("\n")[0]
+
+
+def test_export_metadata_json():
+    """p.export_metadata(): JSON出力にtitle/chapters/tagsが反映される"""
+    p = _mk_project()
+    p.marker(0, "イントロ")
+    p.marker(3.0, "本編")
+    out = os.path.join(os.path.dirname(__file__), "_tmp_meta.json")
+    try:
+        import json as _json
+        p.export_metadata(out, title="テスト動画", description="説明文",
+                          tags=["tag1", "tag2"])
+        with open(out, encoding="utf-8") as f:
+            data = _json.load(f)
+        ok = (data["title"] == "テスト動画" and data["tags"] == ["tag1", "tag2"]
+              and len(data["chapters"]) == 2 and "0:00" in data["chapters_text"])
+        return (True, "JSON構造OK") if ok else (False, f"内容不一致: {data}")
+    finally:
+        if os.path.exists(out):
+            os.remove(out)
+
+
+def test_export_metadata_title_from_param():
+    """p.export_metadata(): title省略時はparam('title')を使う"""
+    p = _mk_project()
+    argv_bak = sys.argv[:]
+    sys.argv = [argv_bak[0], "--param", "title=パラメータ由来タイトル"]
+    out = os.path.join(os.path.dirname(__file__), "_tmp_meta2.json")
+    try:
+        import json as _json
+        p.export_metadata(out)
+        with open(out, encoding="utf-8") as f:
+            data = _json.load(f)
+        ok = data["title"] == "パラメータ由来タイトル"
+        return (True, "param由来title OK") if ok else (False, f"title={data['title']!r}")
+    finally:
+        sys.argv = argv_bak
+        if os.path.exists(out):
+            os.remove(out)
+
+
+def test_export_metadata_txt_format():
+    """p.export_metadata(): .txt拡張子ではプレーンテキスト形式で出力される"""
+    p = _mk_project()
+    p.marker(0, "イントロ")
+    out = os.path.join(os.path.dirname(__file__), "_tmp_meta.txt")
+    try:
+        p.export_metadata(out, title="タイトル", tags=["a", "b"])
+        with open(out, encoding="utf-8") as f:
+            content = f.read()
+        ok = "タイトル" in content and "0:00" in content and "#a" in content
+        return (True, "txt形式OK") if ok else (False, content)
+    finally:
+        if os.path.exists(out):
+            os.remove(out)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -2874,6 +3102,23 @@ ALL_TESTS = [
     ("from_project layerなし", test_from_project_no_layers),
     ("atempo 多段分解", test_atempo_chain_decompose),
     ("compute blend_mode拒否", test_compute_rejects_blend_mode),
+    # --- 外部モジュール統合（narrate/karaoke/beat_sync/slide/export_metadata） ---
+    ("narrate VOICEVOX未起動", test_narrate_without_voicevox),
+    ("narrate Narrationタプル", test_narrate_returns_narration_tuple),
+    ("narrate subtitle=False", test_narrate_subtitle_false_no_subtitle),
+    ("karaoke ASS \\k生成", test_karaoke_ass_kfired),
+    ("karaoke 均等割り", test_karaoke_word_durations_equal_split),
+    ("karaoke word_durations不一致", test_karaoke_word_durations_mismatch),
+    ("karaoke lines要素不正", test_karaoke_bad_line_tuple),
+    ("karaoke end<=start", test_karaoke_end_before_start),
+    ("beat_sync 検出+キャッシュ", test_beat_sync_detects_and_caches),
+    ("beat_sync ファイル不在", test_beat_sync_missing_file),
+    ("slide HTML不在", test_slide_missing_file),
+    ("slide 拡張子不正", test_slide_bad_extension),
+    ("slide サイズ省略+Project無し", test_slide_size_without_project),
+    ("export_metadata JSON形式", test_export_metadata_json),
+    ("export_metadata param由来title", test_export_metadata_title_from_param),
+    ("export_metadata txt形式", test_export_metadata_txt_format),
 ]
 
 
