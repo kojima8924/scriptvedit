@@ -50,15 +50,19 @@ def ftp_connect():
 
 
 def remote_dir_exists(ftp, path):
-    """リモートディレクトリの存在確認"""
-    pwd = ftp.pwd()
+    """リモートディレクトリの存在確認
+
+    ロリポップのFTPSは PWD に空文字を返すため、ftp.pwd() で現在位置を
+    保存して戻す方式は使えない（cwd("") が元の位置に戻らず、path の中に
+    入ったままになる）。呼び出し側は常にルート基準のため絶対パス "/" で戻す。
+    """
     try:
         ftp.cwd(path)
         return True
     except ftplib.error_perm:
         return False
     finally:
-        ftp.cwd(pwd)
+        ftp.cwd("/")
 
 
 def rmdir_recursive(ftp, path):
