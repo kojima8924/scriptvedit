@@ -53,6 +53,7 @@ _MANIFEST_CATEGORY_MEMBERS = {
     "生成効果": ["morph_to", "explode_to", "assemble_from"],
     "テキスト・字幕": ["text", "typewriter", "counter", "subtitles", "karaoke",
                        "subtitle", "subtitle_box", "bubble", "diagram"],
+    "数式": ["formula", "formula_lines"],
     "オーディオ": ["again", "afade", "duck_under", "loop", "audio_sequence",
                    "sfx", "audio_viz", "voice", "narrate", "normalize_audio"],
     "シーケンス生成": ["slideshow", "transition", "video_sequence", "slide"],
@@ -118,6 +119,31 @@ _MANIFEST_PARAM_META = {
     ("grid", "cols"): {"type": "int", "default": None, "required": True, "desc": "列数"},
     ("grid", "rows"): {"type": "int", "default": None, "required": True, "desc": "行数"},
     ("grid", "gap"): {"type": "int", "default": 0, "desc": "セル間の余白px"},
+    # 数式（KaTeX同梱・透過PNG化）
+    ("formula", "latex"): {"type": "string", "required": True,
+                           "desc": "LaTeX 数式（r'...' 推奨。KaTeX のサポート範囲）"},
+    ("formula", "size"): {"type": "number", "default": 48, "min": 1, "max": 2000,
+                          "desc": "基準フォントサイズpx"},
+    ("formula", "color"): {"type": "color", "default": "white",
+                           "desc": "文字色（CSSカラー）"},
+    ("formula", "display"): {"type": "bool", "default": True,
+                             "desc": "True=別行立て(displayMode) / False=インライン"},
+    ("formula", "duration"): {"type": "number", "default": None, "min": 0.01,
+                              "desc": "表示秒数（省略時は .time(秒) で指定）"},
+    ("formula", "padding"): {"type": "number", "default": 4, "min": 0, "max": 500,
+                             "desc": "数式まわりの余白px（切り出しbboxに含まれる）"},
+    ("formula", "align"): {"type": "choice", "default": "left",
+                           "choices": ["left", "center", "right"],
+                           "desc": "複数行時の揃え"},
+    ("formula_lines", "latex_lines"): {"type": "list", "required": True,
+                                       "desc": "LaTeX 数式のリスト（縦に並べる）"},
+    ("formula_lines", "gap"): {"type": "number", "default": 12, "min": 0, "max": 2000,
+                               "desc": "行間px"},
+    ("formula_lines", "align"): {"type": "choice", "default": "left",
+                                 "choices": ["left", "center", "right"],
+                                 "desc": "行の揃え"},
+    ("formula_lines", "duration"): {"type": "number", "default": None, "min": 0.01,
+                                    "desc": "表示秒数（省略時は .time(秒) で指定）"},
     # 既定値が None のため型を推定できない引数
     ("speed", "factor"): {"type": "number", "min": 0.1, "desc": "再生速度倍率（2.0で2倍速）"},
     ("zoom", "from_value"): {"type": "number", "desc": "開始スケール"},
@@ -188,6 +214,10 @@ _MANIFEST_NOTES = {
 
 # エントリごとの最小例
 _MANIFEST_EXAMPLES = {
+    "formula": ("eq = formula(r'\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}', size=64, color='white')\n"
+                "eq.time(4) <= fade(lambda u: u) & move(x=0.5, y=0.4, anchor='center')"),
+    "formula_lines": ("formula_lines([r'a^2 + b^2 = c^2', r'c = \\sqrt{a^2 + b^2}'], "
+                      "size=48, gap=16).time(5)"),
     "fade": "img.time(3) <= fade(lambda u: u)          # 3秒かけてフェードイン",
     "scale": "img <= scale(lambda u: lerp(1.0, 1.5, u))",
     "zoom": "img <= zoom(from_value=1.0, to_value=1.4)",

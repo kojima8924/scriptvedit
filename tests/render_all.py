@@ -340,6 +340,14 @@ def render_test90():
     p.render(out("test90.mp4"))
 
 
+def render_test91():
+    """formula: KaTeX数式の透過PNG化（fade/moveがそのまま効く）"""
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer(L("test91_formula.py"), priority=0)
+    p.render(out("test91.mp4"))
+
+
 ALL_RENDERS = [
     ("test01", render_test01),
     ("test02", render_test02),
@@ -382,6 +390,7 @@ ALL_RENDERS = [
     ("test88", render_test88),
     ("test89", render_test89),
     ("test90", render_test90),
+    ("test91", render_test91),
 ]
 
 

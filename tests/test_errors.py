@@ -23,6 +23,7 @@ from scriptvedit import (
     speed, reverse, freeze_frame, video_sequence,
     _atempo_chain_rates, trim,
     narrate, Narration, karaoke, beat_sync, slide,
+    formula, formula_lines,
     _build_video_pre_filters, _build_effect_filters, _ARTIFACT_DIR,
 )
 
@@ -3389,6 +3390,137 @@ def check_plugin_namespace_injection():
     return (ok, "import * で使用可 / 解除で除去") if ok else (False, "名前空間注入に失敗")
 
 
+# --- 数式（formula / formula_lines） ---
+
+def check_formula_invalid_latex():
+    """formula: 不正なLaTeXはKaTeXのエラーを日本語で明示する（実レンダ時）"""
+    from scriptvedit.formula import _build_formula_spec, _formula_cache_path, _render_formula_png
+    spec = _build_formula_spec("formula", [r"\frac{1}{"], 48, "white", True, 4, 0, "left")
+    try:
+        _render_formula_png(spec, _formula_cache_path(spec))
+        return False, "不正なLaTeXが通ってしまいました"
+    except ValueError as e:
+        msg = str(e)
+        ok = "LaTeX の構文エラー" in msg and "KaTeX" in msg and "\\frac{1}{" in msg
+        return (True, msg.split("\n")[0]) if ok else (False, f"メッセージ不適切: {msg}")
+    except RuntimeError as e:
+        # Playwright/Chromium が無い環境ではスキップ相当（親切なエラーであることは別checkで検証）
+        return True, f"Playwright未導入のためスキップ: {str(e).splitlines()[0]}"
+
+
+def check_formula_bad_params():
+    """formula: 不正なパラメータ（空LaTeX/色/size/align/display）を構築時に弾く"""
+    cases = [
+        (lambda: formula(""), ValueError, "空"),
+        (lambda: formula(123), TypeError, "文字列"),
+        (lambda: formula("x", color="not a color!"), ValueError, "CSSカラー"),
+        (lambda: formula("x", size=0), ValueError, "size"),
+        (lambda: formula("x", display="yes"), TypeError, "display"),
+        (lambda: formula("x", align="middle"), ValueError, "align"),
+        (lambda: formula("x", unknown=1), TypeError, "unknown"),
+        (lambda: formula_lines("x^2"), TypeError, "リスト"),
+        (lambda: formula_lines([]), ValueError, "空"),
+    ]
+    for fn, exc, needle in cases:
+        try:
+            fn()
+            return False, f"例外が出ませんでした（期待: {exc.__name__} / {needle}）"
+        except exc as e:
+            if needle not in str(e):
+                return False, f"メッセージ不適切（{needle} を含まない）: {e}"
+        except Exception as e:  # noqa: BLE001
+            return False, f"想定外の例外型 {type(e).__name__}（期待 {exc.__name__}）: {e}"
+    return True, f"{len(cases)}件すべて適切に拒否"
+
+
+def check_formula_cache_key():
+    """formula: LaTeX/size/color/display がキャッシュ鍵に効く（同内容は同一パス）"""
+    from scriptvedit.formula import _formula_cache_path, _build_formula_spec
+    def path(**kw):
+        args = dict(lines=[r"x^2"], size=48, color="white", display=True,
+                    padding=4, gap=0, align="left")
+        args.update(kw)
+        return _formula_cache_path(_build_formula_spec("formula", **args))
+    base = path()
+    if path() != base:
+        return False, "同一内容で異なるパスになりました（content-addressed でない）"
+    variants = {
+        "latex": path(lines=[r"x^3"]),
+        "size": path(size=64),
+        "color": path(color="red"),
+        "display": path(display=False),
+        "padding": path(padding=8),
+    }
+    same = [k for k, v in variants.items() if v == base]
+    if same:
+        return False, f"キャッシュ鍵に反映されていません: {same}"
+    if len(set(variants.values())) != len(variants):
+        return False, "異なる入力が同一パスに衝突しました"
+    if "__cache__" not in base.replace("\\", "/") or not base.endswith(".png"):
+        return False, f"キャッシュ配下のPNGパスではありません: {base}"
+    return True, f"5要素すべてが鍵に反映（例: {os.path.basename(base)}）"
+
+
+def check_formula_object_is_image():
+    """formula: 戻り値は画像Objectで、通常のEffect（fade/move）を適用できる"""
+    obj = formula(r"E = mc^2", size=48, duration=3)
+    if obj.media_type != "image":
+        return False, f"media_type が image ではありません: {obj.media_type}"
+    if obj.duration != 3.0:
+        return False, f"duration が反映されていません: {obj.duration}"
+    obj <= fade(lambda u: u) & move(x=0.5, y=0.5, anchor="center")
+    names = [e.name for e in obj.effects]
+    if "fade" not in names or "move" not in names:
+        return False, f"Effectが適用できていません: {names}"
+    if _sv._is_cache_artifact_path(obj.source) is not True:
+        return False, f"sourceがキャッシュ配下ではありません: {obj.source}"
+    return True, f"画像Object / effects={names}"
+
+
+def check_formula_playwright_missing():
+    """formula: Playwright 未導入時は導入方法を示す親切なエラーになる"""
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name.startswith("playwright"):
+            raise ImportError("No module named 'playwright'")
+        return real_import(name, *a, **kw)
+
+    builtins.__import__ = fake_import
+    try:
+        from scriptvedit.formula import _import_playwright
+        _import_playwright("formula")
+        return False, "Playwright 不在でも例外になりませんでした"
+    except RuntimeError as e:
+        msg = str(e)
+        ok = "Playwright" in msg and "pip install playwright" in msg and "chromium" in msg
+        return (True, msg.splitlines()[0]) if ok else (False, f"メッセージ不適切: {msg}")
+    finally:
+        builtins.__import__ = real_import
+
+
+def check_formula_katex_vendored():
+    """formula: KaTeX がリポジトリ同梱（CDN参照なし＝オフラインで動く）"""
+    from scriptvedit.formula import _KATEX_DIR, _FORMULA_TEMPLATE
+    from scriptvedit.web import _template_path
+    missing = [f for f in ("katex.min.css", "katex.min.js")
+               if not os.path.exists(os.path.join(_KATEX_DIR, f))]
+    if missing:
+        return False, f"同梱KaTeXが不足: {missing}"
+    fonts = [f for f in os.listdir(os.path.join(_KATEX_DIR, "fonts"))
+             if f.endswith(".woff2")]
+    if len(fonts) < 5:
+        return False, f"KaTeXフォントが不足: {len(fonts)}件"
+    with open(_template_path(_FORMULA_TEMPLATE), encoding="utf-8") as f:
+        html = f.read()
+    if "//" in html.split("vendor/katex")[0].replace("<!DOCTYPE", "").replace("http-equiv", ""):
+        pass  # コメント等の // は許容（下の http 参照チェックが本命）
+    if "http://" in html or "https://" in html:
+        return False, "テンプレートが外部URLを参照しています（オフライン動作不可）"
+    return True, f"KaTeX同梱OK（フォント{len(fonts)}件・外部URL参照なし）"
+
+
 # --- ケイパビリティ・マニフェスト（describe） ---
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -3971,6 +4103,13 @@ ALL_TESTS = [
     ("plugin スキーマ不正", check_plugin_bad_schema),
     ("plugin マニフェスト", check_plugin_manifest),
     ("plugin 名前空間注入", check_plugin_namespace_injection),
+    # --- 数式（formula） ---
+    ("formula 不正LaTeX", check_formula_invalid_latex),
+    ("formula 不正パラメータ", check_formula_bad_params),
+    ("formula キャッシュ鍵", check_formula_cache_key),
+    ("formula 画像Object+Effect", check_formula_object_is_image),
+    ("formula Playwright不在", check_formula_playwright_missing),
+    ("formula KaTeX同梱", check_formula_katex_vendored),
     # --- ケイパビリティ・マニフェスト（describe） ---
     ("describe JSON化可能", check_describe_json_serializable),
     ("describe 網羅性: Effect", check_describe_effect_exhaustive),

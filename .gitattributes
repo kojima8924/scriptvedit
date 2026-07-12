@@ -1,0 +1,29 @@
+# 改行コードの固定
+#
+# 重要: このプロジェクトはファイルの「内容ハッシュ」をキャッシュ鍵に使う
+# (_file_fingerprint)。git の改行変換で内容が変わると、clone した環境ごとに
+# キャッシュ鍵がずれてスナップショットテストが落ちる。
+# そのため作業ツリーの改行を明示的に固定する。
+
+# 自前のテキストは CRLF に統一（プロジェクト規約）
+* text=auto eol=crlf
+
+# ベンダー同梱物は一切変換しない（コミットされたバイト列のまま保つ）
+src/scriptvedit/templates/vendor/** -text
+
+# バイナリ
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.mp3 binary
+*.wav binary
+*.mp4 binary
+*.mkv binary
+*.webm binary
+*.zip binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

@@ -72,6 +72,8 @@ __all__ = [
     "keyframes",
     # テンプレートラッパー
     "subtitle", "subtitle_box", "bubble", "diagram",
+    # 数式（KaTeX同梱）
+    "formula", "formula_lines",
     # 図形ビルダー
     "circle", "rect", "arrow", "label", "spotlight",
     # プラグイン機構
@@ -190,6 +192,12 @@ from scriptvedit.media import (  # noqa: F401
 from scriptvedit.web import (  # noqa: F401
     _TEMPLATES_DIR, _data_hash, _resolve_size, _template_path, arrow, bubble, circle, diagram,
     label, rect, slide, spotlight, subtitle, subtitle_box,
+)
+from scriptvedit.formula import (  # noqa: F401
+    _CSS_COLOR_RE, _FORMULA_CACHE_DIR, _FORMULA_MAX_PX, _FORMULA_TEMPLATE, _FORMULA_VER,
+    _KATEX_DIR, _build_formula_spec, _formula_cache_path, _import_playwright,
+    _katex_fingerprint, _new_formula_object, _render_formula_png, _validate_color,
+    _validate_latex, formula, formula_lines,
 )
 from scriptvedit.plugins import (  # noqa: F401
     PluginError, _AUTOLOADED_PLUGIN_DIRS, _EFFECT_PLUGINS, _EffectPluginSpec,

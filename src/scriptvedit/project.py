@@ -692,6 +692,7 @@ class Project:
                 return {"main": cmd, "cache": all_extra}
             return cmd  # 後方互換: cache不要ならlistのまま
 
+        self._ensure_formula_objects()
         self._ensure_web_objects()
         # 統計: このレンダが参照する中間生成物のうち既存(ヒット)/未生成(ミス)を数える
         # 注意: _collect_* はdry_run用でobj.source等を予測パスへ破壊的に差し替えるため、
@@ -1624,6 +1625,24 @@ class Project:
                 webm_path = _web_cache_path(obj, self)
                 cmds[webm_path] = obj._build_web_cmd(self, webm_path)
         return cmds
+
+    def _ensure_formula_objects(self):
+        """formula()/formula_lines() の数式PNGを実レンダ直前に生成する。
+
+        Objectのsourceは構築時点で content-addressed なキャッシュパス
+        （__cache__/artifacts/formula/<hash>.png）に決まっているため、
+        dry_run ではPlaywrightを起動せずコマンドを組み立てられる。
+        """
+        from scriptvedit.formula import _render_formula_png
+        for obj in self.objects:
+            spec = getattr(obj, "_formula_spec", None)
+            if not isinstance(obj, Object) or spec is None:
+                continue
+            if os.path.exists(obj.source):
+                continue
+            print(f"数式レンダ: {spec['lines']}")
+            _render_formula_png(spec, obj.source, getattr(obj, "_formula_fn", "formula"))
+            print(f"  完了: {obj.source}")
 
     def _ensure_web_objects(self):
         """web ObjectのPlaywrightレンダ+ffmpegエンコード実行、sourceをwebmに差し替え"""

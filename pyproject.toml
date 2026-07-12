@@ -17,7 +17,7 @@ dependencies = []
 [project.optional-dependencies]
 # morph_to / explode_to / assemble_from（モーフィング・パーティクル）
 morph = ["numpy", "scipy", "opencv-python", "Pillow"]
-# web Object / slide / テンプレート（HTML レンダリング）
+# web Object / slide / テンプレート / formula（HTML レンダリング。KaTeX は同梱）
 web = ["playwright"]
 # ビート検出（beat_sync）
 beat = ["numpy"]
@@ -35,4 +35,11 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-scriptvedit = ["templates/*.html"]
+# formula() 用の同梱 KaTeX（CDN を使わずオフラインで数式をレンダするため vendor/ ごと配布する）
+scriptvedit = [
+    "templates/*.html",
+    "templates/vendor/katex/*.css",
+    "templates/vendor/katex/*.js",
+    "templates/vendor/katex/*.md",
+    "templates/vendor/katex/fonts/*.woff2",
+]

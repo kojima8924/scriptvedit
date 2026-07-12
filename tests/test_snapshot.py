@@ -848,6 +848,14 @@ def setup_test90():
     return p.render("test90.mp4", dry_run=True)
 
 
+def setup_test91():
+    """formula: KaTeX数式の透過PNG化（画像Objectとしてfade/moveがそのまま効く）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer(L("test91_formula.py"), priority=0)
+    return p.render("test91.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -939,6 +947,7 @@ ALL_TESTS = [
     ("test88", setup_test88),
     ("test89", setup_test89),
     ("test90", setup_test90),
+    ("test91", setup_test91),
 ]
 
 
