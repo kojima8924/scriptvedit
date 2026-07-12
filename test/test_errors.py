@@ -1,7 +1,9 @@
 # エラーケーステスト: 各種エラー条件の自動検証
-import sys, os, tempfile, shutil
+import sys, os, tempfile, shutil, json, re, subprocess
 sys.path.insert(0, "..")
+import scriptvedit as sv
 from scriptvedit import (
+    describe, describe_markdown,
     _resolve_param, Project, P, Object, VideoView, AudioView,
     again, move, fade, resize, rotate, rotate_to, morph_to, AudioEffect, AudioEffectChain,
     explode_to, assemble_from, move_along, path_bezier, throw, inertia, look_at, perlin,
@@ -3377,6 +3379,370 @@ def test_plugin_namespace_injection():
     return (ok, "import * で使用可 / 解除で除去") if ok else (False, "名前空間注入に失敗")
 
 
+# --- ケイパビリティ・マニフェスト（describe） ---
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# マニフェストのエントリを持つセクション（kind ごと）
+_OP_SECTIONS = (("effects", "effect"), ("transforms", "transform"),
+                ("audio_effects", "audio_effect"))
+
+
+def _ground_truth_ops():
+    """実装コードから「存在しうる操作名」を機械的に抽出する（網羅性検証の正解集合）。
+
+    scriptvedit.py 内で構築される Effect("x")/Transform("x")/AudioEffect("x") の
+    全リテラルに加え、_BAKEABLE_EFFECTS 等のレジストリも突き合わせる。
+    将来 Effect を足してマニフェストに載せ忘れたら、このテストが落ちる。
+    """
+    src_path = os.path.join(_REPO_ROOT, "scriptvedit.py")
+    with open(src_path, encoding="utf-8") as f:
+        src = f.read()
+    kinds = {"Effect": "effect", "Transform": "transform",
+             "AudioEffect": "audio_effect"}
+    ground = {"effect": set(), "transform": set(), "audio_effect": set()}
+    for m in re.finditer(r"\b(AudioEffect|Effect|Transform)\(\s*[\"']([a-z_0-9]+)[\"']", src):
+        ground[kinds[m.group(1)]].add(m.group(2))
+    # レジストリ側（ディスパッチを持たない bakeable/時間操作も取りこぼさない）
+    ground["effect"] |= set(sv._BAKEABLE_EFFECTS)
+    ground["effect"] |= set(sv._TIME_LIVE_EFFECTS)
+    ground["effect"] |= set(sv._TERMINAL_FRAME_EFFECTS)
+    # プラグインは plugins セクションで扱う（組込Effectの網羅性からは除外）
+    ground["effect"] -= set(sv._EFFECT_PLUGINS)
+    return ground
+
+
+def _manifest_covered_ops(m):
+    """マニフェストが internal 名でカバーしている操作名"""
+    cov = {"effect": set(), "transform": set(), "audio_effect": set()}
+    for section, kind in _OP_SECTIONS:
+        for e in m[section]:
+            cov[kind] |= set(e.get("effect_names", []))
+    return cov
+
+
+def test_describe_json_serializable():
+    """describe() が JSON シリアライズ可能な dict を返す"""
+    m = describe()
+    if not isinstance(m, dict):
+        return False, f"dict ではない: {type(m)}"
+    try:
+        s = json.dumps(m, ensure_ascii=False)
+    except (TypeError, ValueError) as e:
+        return False, f"JSON 化できません: {e}"
+    back = json.loads(s)
+    if back["library"] != "scriptvedit":
+        return False, "library フィールドが不正"
+    for key in ("usage", "constraints", "enums", "effects", "transforms",
+                "audio_effects", "factories", "objects", "project_methods",
+                "expr", "plugins", "stats"):
+        if key not in back:
+            return False, f"セクション欠落: {key}"
+    return True, f"JSON {len(s)}バイト / {back['stats']}"
+
+
+def test_describe_effect_exhaustive():
+    """網羅性: 実装が構築しうる全 Effect がマニフェストに載っている"""
+    m = describe()
+    ground = _ground_truth_ops()
+    cov = _manifest_covered_ops(m)
+    missing = ground["effect"] - cov["effect"]
+    if missing:
+        return False, ("マニフェスト未掲載の Effect: %s（describe() に載るよう "
+                       "ファクトリを __all__ へ公開するか _MANIFEST_INTERNAL_OPS へ宣言）"
+                       % sorted(missing))
+    return True, f"組込Effect {len(ground['effect'])}件すべて掲載"
+
+
+def test_describe_transform_audio_exhaustive():
+    """網羅性: 全 Transform / AudioEffect がマニフェストに載っている"""
+    m = describe()
+    ground = _ground_truth_ops()
+    cov = _manifest_covered_ops(m)
+    miss_t = ground["transform"] - cov["transform"]
+    miss_a = ground["audio_effect"] - cov["audio_effect"]
+    if miss_t or miss_a:
+        return False, f"未掲載 Transform={sorted(miss_t)} AudioEffect={sorted(miss_a)}"
+    return True, (f"Transform {len(ground['transform'])}件 / "
+                  f"AudioEffect {len(ground['audio_effect'])}件すべて掲載")
+
+
+def test_describe_public_api_exhaustive():
+    """網羅性: __all__ の公開callableが必ずどこかのセクションに載る"""
+    m = describe()
+    listed = set()
+    for section in sv._MANIFEST_ENTRY_SECTIONS:
+        for e in m.get(section, []):
+            listed.add(e["name"])
+            listed.add(e["name"].split(".")[-1])
+    missing = []
+    for name in sv.__all__:
+        obj = getattr(sv, name, None)
+        if obj is None or not callable(obj):
+            continue  # PI/E/P などの定数は対象外
+        if name not in listed:
+            missing.append(name)
+    if missing:
+        return False, f"マニフェスト未掲載の公開API: {sorted(missing)}"
+    return True, f"公開callable {len(listed)}件を掲載"
+
+
+def test_describe_bakeable_matches_registry():
+    """bakeable フラグが _BAKEABLE_EFFECTS と整合している"""
+    m = describe()
+    bad = []
+    for e in m["effects"]:
+        inames = e.get("effect_names") or []
+        if not inames:
+            continue
+        expect = all(n in sv._BAKEABLE_EFFECTS for n in inames)
+        if e.get("bakeable") != expect:
+            bad.append(f"{e['name']}: manifest={e.get('bakeable')} 実体={expect}")
+    if bad:
+        return False, f"bakeable 不一致: {bad}"
+    live = [e["name"] for e in m["effects"] if not e.get("bakeable")]
+    return True, f"bakeable 整合。live: {len(live)}件"
+
+
+def test_describe_plugin_listed():
+    """登録済みプラグインが plugins セクションに載る（スキーマ形式もそろう）"""
+    from scriptvedit import effect_plugin, unregister_plugin
+
+    @effect_plugin("t_manifest_fx", bakeable=True, category="視覚効果",
+                   params={"radius": {"type": "number", "default": 4,
+                                      "min": 0, "max": 50, "desc": "半径"}})
+    def build_t_manifest_fx(params, ctx):
+        """マニフェスト検証用プラグイン"""
+        return [f"gblur=sigma={params['radius']}"]
+
+    try:
+        m = describe()
+        entry = next((e for e in m["plugins"] if e["name"] == "t_manifest_fx"), None)
+        if entry is None:
+            return False, "plugins セクションに載っていません"
+        if entry["bakeable"] is not True or entry["category"] != "視覚効果":
+            return False, f"メタ情報が不正: {entry}"
+        p = entry["params"].get("radius")
+        if not p or p["type"] != "number" or p["default"] != 4 or p["max"] != 50:
+            return False, f"params スキーマが不正: {p}"
+        if entry["summary"] != "マニフェスト検証用プラグイン":
+            return False, f"summary が docstring 由来でない: {entry['summary']}"
+        # プラグインは組込 effects セクションには出ない
+        if any(e["name"] == "t_manifest_fx" for e in m["effects"]):
+            return False, "effects セクションに重複掲載されています"
+        json.dumps(m, ensure_ascii=False)
+        return True, f"プラグイン掲載 OK: {entry['summary']}"
+    finally:
+        unregister_plugin("t_manifest_fx")
+
+
+def test_describe_constraints_nonempty():
+    """constraints（既知の落とし穴）が空でなく、主要な地雷を含む"""
+    m = describe()
+    cons = m["constraints"]
+    if not cons:
+        return False, "constraints が空です"
+    ids = {c["id"] for c in cons}
+    required = {"text_size_const", "reverse_max_30s", "alpha_container",
+                "layer_cache_no_audio", "blend_mode_canvas", "voicevox_required",
+                "scipy_required", "one_file_one_layer", "terminal_frame_effect_last"}
+    missing = required - ids
+    if missing:
+        return False, f"必須の制約が欠落: {sorted(missing)}"
+    for c in cons:
+        for key in ("id", "topic", "severity", "text", "applies_to"):
+            if key not in c:
+                return False, f"制約 {c.get('id')} に {key} がありません"
+    return True, f"constraints {len(cons)}件（必須{len(required)}件を含む）"
+
+
+def test_describe_notes_propagated():
+    """制約が該当エントリの notes にも展開される（text の size 定数制約）"""
+    m = describe()
+    text_entry = next(e for e in m["factories"] if e["name"] == "text")
+    notes = " ".join(text_entry.get("notes", []))
+    if "size" not in notes or "SEGV" not in notes:
+        return False, f"text の notes に size 制約がありません: {notes[:60]}"
+    rev = next(e for e in m["effects"] if e["name"] == "reverse")
+    if "30" not in " ".join(rev.get("notes", [])):
+        return False, "reverse の notes に30秒上限がありません"
+    return True, "notes に制約が展開されている"
+
+
+def test_describe_usage_section():
+    """usage セクションに AI が書き始めるための最小情報がある"""
+    m = describe()
+    u = m["usage"]
+    for key in ("overview", "concepts", "main_script", "layer_file", "dsl",
+                "plugin_template", "workflow", "cli"):
+        if not u.get(key):
+            return False, f"usage.{key} が空です"
+    if "from scriptvedit import *" not in u["layer_file"]:
+        return False, "layer_file に import 行がありません"
+    if "@effect_plugin" not in u["plugin_template"]:
+        return False, "plugin_template が不正です"
+    return True, f"usage OK（concepts {len(u['concepts'])}件）"
+
+
+def test_describe_enums():
+    """enums が実装側の集合と一致する"""
+    m = describe()
+    en = m["enums"]
+    if set(en["blend_mode"]) != set(sv._BLEND_MODES):
+        return False, "blend_mode の集合が実装と不一致"
+    if set(en["xfade_transition"]) != set(sv._XFADE_TRANSITIONS):
+        return False, "xfade_transition の集合が実装と不一致"
+    if set(en["preset"]) != set(sv._PRESETS):
+        return False, "preset の集合が実装と不一致"
+    if set(en["encoder"]) != set(sv._ENCODER_MAP):
+        return False, "encoder の集合が実装と不一致"
+    # blend_mode の choices がエントリにも展開される
+    bm = next(e for e in m["effects"] if e["name"] == "blend_mode")
+    if "screen" not in bm["params"]["mode"]["choices"]:
+        return False, "blend_mode の choices が展開されていません"
+    return True, (f"blend_mode {len(en['blend_mode'])} / "
+                  f"xfade {len(en['xfade_transition'])} / preset {len(en['preset'])}")
+
+
+def test_describe_filter_kind():
+    """describe(kind=...) で種別を絞れる / 未知の kind は suggest 付きエラー"""
+    m = describe(kind="effect")
+    if "effects" not in m or "factories" in m:
+        return False, f"kind フィルタが効いていません: {list(m)}"
+    if not m["effects"]:
+        return False, "effects が空です"
+    try:
+        describe(kind="effects")   # 単数形が正しい
+        return False, "未知の kind でエラーになりません"
+    except ValueError as e:
+        if "もしかして" not in str(e):
+            return False, f"suggest がありません: {e}"
+    return True, f"kind=effect → {len(m['effects'])}件"
+
+
+def test_describe_filter_name():
+    """describe(name=...) で単一エントリ / 未知の名前は suggest 付きエラー"""
+    m = describe(name="fade")
+    if len(m.get("effects", [])) != 1 or m["effects"][0]["name"] != "fade":
+        return False, f"単一エントリになっていません: {m.get('effects')}"
+    if m["effects"][0]["params"]["alpha"]["type"] != "expr":
+        return False, "fade の alpha が expr 型ではありません"
+    # 該当する制約だけが残る
+    ids = {c["id"] for c in m["constraints"]}
+    if "text_size_const" in ids:
+        return False, "無関係な制約が残っています"
+    # メソッドも短縮名で引ける
+    m2 = describe(name="render")
+    if not m2.get("project_methods"):
+        return False, "Project.render を name=render で引けません"
+    try:
+        describe(name="fadee")
+        return False, "未知の name でエラーになりません"
+    except ValueError as e:
+        if "もしかして" not in str(e) or "fade" not in str(e):
+            return False, f"suggest がありません: {e}"
+    return True, "name フィルタ + suggest OK"
+
+
+def test_describe_signature_autoderived():
+    """シグネチャ/既定値が inspect から自動導出されている"""
+    m = describe()
+    idx = {e["name"]: e for e in m["effects"]}
+    wipe_e = idx["wipe"]
+    if wipe_e["signature"] != "wipe(direction='left', progress=None)":
+        return False, f"シグネチャが自動導出されていません: {wipe_e['signature']}"
+    if wipe_e["params"]["direction"]["choices"] != ["left", "right", "up", "down"]:
+        return False, "choices が展開されていません"
+    # zoom は内部 Effect 名が scale（公開名と内部名の差を記録する）
+    if idx["zoom"]["effect_names"] != ["scale"]:
+        return False, f"zoom の internal 名が不正: {idx['zoom']['effect_names']}"
+    # lambda/Expr を受け取れる引数は expr 型として自動検出される
+    if idx["scale"]["params"]["value"]["type"] != "expr":
+        return False, "scale.value が expr 型ではありません"
+    return True, "signature/choices/expr型の自動導出 OK"
+
+
+def test_describe_markdown():
+    """describe_markdown() が Markdown を返す"""
+    md = describe_markdown()
+    if not md.startswith("# scriptvedit"):
+        return False, "見出しがありません"
+    for needed in ("## 既知の制約・落とし穴", "### `fade(alpha=1.0)`", "bakeable",
+                   "## 使い方（AI向け）"):
+        if needed not in md:
+            return False, f"Markdown に {needed} がありません"
+    return True, f"Markdown {len(md)}文字"
+
+
+def _run_cli(*args):
+    """python -m scriptvedit ... をリポジトリルートで実行する"""
+    return subprocess.run(
+        [sys.executable, "-m", "scriptvedit"] + list(args),
+        cwd=_REPO_ROOT, capture_output=True, text=True, encoding="utf-8", timeout=120)
+
+
+def test_describe_cli_json():
+    """CLI: python -m scriptvedit describe → JSON を stdout"""
+    r = _run_cli("describe")
+    if r.returncode != 0:
+        return False, f"終了コード {r.returncode}: {r.stderr[:120]}"
+    try:
+        m = json.loads(r.stdout)
+    except ValueError as e:
+        return False, f"stdout が JSON ではありません: {e}"
+    if m["library"] != "scriptvedit" or not m["effects"]:
+        return False, "マニフェスト内容が不正"
+    return True, f"CLI JSON OK（effects {len(m['effects'])}件）"
+
+
+def test_describe_cli_md_and_filters():
+    """CLI: --format md / --kind / --name / 未知名は終了コード2"""
+    r = _run_cli("describe", "--format", "md")
+    if r.returncode != 0 or not r.stdout.startswith("# scriptvedit"):
+        return False, f"--format md が失敗: rc={r.returncode}"
+    r = _run_cli("describe", "--kind", "transform")
+    if r.returncode != 0:
+        return False, "--kind が失敗"
+    m = json.loads(r.stdout)
+    if "transforms" not in m or "effects" in m:
+        return False, f"--kind が効いていません: {list(m)}"
+    r = _run_cli("describe", "--name", "fade")
+    if r.returncode != 0:
+        return False, "--name が失敗"
+    m = json.loads(r.stdout)
+    if len(m["effects"]) != 1:
+        return False, "--name が単一エントリになりません"
+    # 近い名前があれば suggest 付き、無くてもエラー終了（rc=2）
+    r = _run_cli("describe", "--name", "fadee")
+    if r.returncode != 2 or "もしかして" not in r.stderr or "fade" not in r.stderr:
+        return False, f"typo の suggest が出ません: rc={r.returncode}"
+    r = _run_cli("describe", "--name", "nonexistent_fx")
+    if r.returncode != 2 or "ありません" not in r.stderr:
+        return False, f"未知名の扱いが不正: rc={r.returncode}"
+    return True, "CLI md/--kind/--name/エラー終了コード OK"
+
+
+def test_describe_cli_output_file():
+    """CLI: -o でファイル出力"""
+    out = os.path.join(tempfile.gettempdir(), "_sv_manifest_test.json")
+    if os.path.exists(out):
+        os.remove(out)
+    try:
+        r = _run_cli("describe", "-o", out)
+        if r.returncode != 0:
+            return False, f"終了コード {r.returncode}"
+        if not os.path.exists(out):
+            return False, "ファイルが作られていません"
+        with open(out, encoding="utf-8") as f:
+            m = json.load(f)
+        if not m["effects"]:
+            return False, "内容が空です"
+        return True, f"-o 出力 OK（{os.path.getsize(out)}バイト）"
+    finally:
+        if os.path.exists(out):
+            os.remove(out)
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -3590,6 +3956,24 @@ ALL_TESTS = [
     ("plugin スキーマ不正", test_plugin_bad_schema),
     ("plugin マニフェスト", test_plugin_manifest),
     ("plugin 名前空間注入", test_plugin_namespace_injection),
+    # --- ケイパビリティ・マニフェスト（describe） ---
+    ("describe JSON化可能", test_describe_json_serializable),
+    ("describe 網羅性: Effect", test_describe_effect_exhaustive),
+    ("describe 網羅性: Transform/Audio", test_describe_transform_audio_exhaustive),
+    ("describe 網羅性: 公開API", test_describe_public_api_exhaustive),
+    ("describe bakeable整合", test_describe_bakeable_matches_registry),
+    ("describe プラグイン掲載", test_describe_plugin_listed),
+    ("describe constraints非空", test_describe_constraints_nonempty),
+    ("describe notes展開", test_describe_notes_propagated),
+    ("describe usageセクション", test_describe_usage_section),
+    ("describe enums一致", test_describe_enums),
+    ("describe --kindフィルタ", test_describe_filter_kind),
+    ("describe --nameフィルタ", test_describe_filter_name),
+    ("describe シグネチャ自動導出", test_describe_signature_autoderived),
+    ("describe Markdown出力", test_describe_markdown),
+    ("describe CLI JSON", test_describe_cli_json),
+    ("describe CLI md/filter", test_describe_cli_md_and_filters),
+    ("describe CLI -o出力", test_describe_cli_output_file),
 ]
 
 
