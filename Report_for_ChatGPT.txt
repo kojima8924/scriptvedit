@@ -1,7 +1,7 @@
 ============================================================
   scriptvedit プロジェクト状況レポート (Claude Code → ChatGPT)
   作成日: 2026-02-11
-  最終更新: 2026-07-11
+  最終更新: 2026-07-13
 ============================================================
 
 ============================================================
@@ -12,42 +12,58 @@
   「1ファイル = 1レイヤー」アーキテクチャを採用。
   main.py がオーケストレータ、各レイヤーは独立した .py ファイル。
 
-  コアファイル: scriptvedit.py (約8120行)
+  【重要・構造変更】単一ファイル scriptvedit.py (8,524行) は廃止。
+  src/scriptvedit/ パッケージ (35モジュール / 合計 13,651行) に分割済み。
+  `pip install -e .` でインストールし、どのフォルダからでも `from scriptvedit import *`。
+
   ライセンス: なし（個人プロジェクト）
   環境: Windows 11 / Python 3.10 / ffmpeg 8.0-full_build
 
-  ◆ ファイル構成
+  ◆ ファイル構成（新レイアウト / src レイアウト）
     scriptvedit/
-    ├── scriptvedit.py   ← コアライブラリ (約8120行)
-    ├── morph.py         ← 最適輸送モーフ + パーティクルエンジン (約730行、morph_to/explode_to/assemble_from用)
-    ├── svinspect.py     ← タイムライン検査ビュー (約840行、HTMLガント/テキストレポート、標準ライブラリのみ)
-    ├── svtts.py         ← VOICEVOX連携TTS (約220行、tts/speakers/tts_duration + CLI、標準ライブラリのみ)
-    ├── svtestkit.py     ← 視覚検証ヘルパー (約470行、extract_frame/ssim/frame_diff/assert_frame/assert_frames + CLI、numpy+PIL)
-    ├── svbeat.py        ← ビート検出 (約470行、detect_beats/snap_times/beats_to_keyframes + CLI、numpy+scipy、librosa非依存)
-    ├── upload_to_server.py ← export結果のFTPSアップロードスクリプト
-    ├── main.py          ← オーケストレータ (デモ用)
-    ├── bg.py            ← 背景レイヤー (デモ用)
-    ├── onigiri.py       ← おにぎりレイヤー (デモ用)
-    ├── README.md        ← プロジェクト説明
+    ├── pyproject.toml   ← パッケージ定義（extras: morph / web / beat / tools / all）
+    ├── .gitattributes   ← 改行固定（内容ハッシュ指紋がclone環境でずれないように）
+    ├── CLAUDE.md        ← AI向けの前提・設計制約（本体と同期）
+    ├── README.md        ← ユーザ向けドキュメント
     ├── Report_for_ChatGPT.txt ← 本レポート
-    ├── .gitignore       ← 生成物・キャッシュの除外設定
-    ├── templates/
-    │   ├── subtitle.html      ← 字幕テンプレート
-    │   ├── subtitle_box.html  ← 字幕ボックステンプレート
-    │   ├── bubble.html        ← 吹き出しテンプレート
-    │   └── diagram_svg.html   ← SVG図解テンプレート
-    ├── sample/          ← ショーケース動画関連（スライド・素材・生成物）
-    ├── test/
-    │   ├── test_snapshot.py   ← スナップショットテスト (87テスト)
-    │   ├── test_errors.py     ← エラーケーステスト (190テスト)
+    ├── src/scriptvedit/       ← パッケージ本体 (35モジュール / 13,651行)
+    │   ├── __init__.py        ← 公開名前空間（from scriptvedit import * の対象）
+    │   ├── __main__.py cli.py ← CLI（describe / cache / watch）
+    │   ├── project.py         ← Project / render / 2パス / チェックポイント統括
+    │   ├── objects.py         ← Object / Transform / Effect / チェーン / 演算子
+    │   ├── timeline.py        ← anchor / pause / scene / group / grid
+    │   ├── effects/           ← basic / visual / composite / paths / time / terminal
+    │   ├── filters/           ← video / audio の ffmpeg フィルタ生成
+    │   ├── expr.py easing.py  ← Expr式ビルダー / イージング・シーケンス
+    │   ├── cache.py           ← キャッシュ鍵・ファイル指紋（内容ハッシュ）
+    │   ├── ffmpeg.py media.py ← ffmpeg 実行ヘルパー / probe・メディア判定
+    │   ├── state.py validate.py ← 実行時状態 / 引数検証・「もしかして」提案
+    │   ├── formula.py         ← 【新規】数式レンダ（formula / formula_lines）
+    │   ├── text.py audio.py   ← テキスト・字幕 / オーディオ拡張
+    │   ├── web.py             ← web Object・テンプレート（Playwright）
+    │   ├── morph.py           ← 最適輸送モーフ + パーティクル（morph_to / explode_to）
+    │   ├── tts.py             ← VOICEVOX連携（voice / narrate）
+    │   ├── beat.py            ← ビート検出（beat_sync、numpy+scipy、librosa非依存）
+    │   ├── viz.py             ← タイムライン検査ビュー（Project.inspect）
+    │   ├── testkit.py         ← SSIM視覚検証（assert_frame 等）
+    │   ├── plugins.py         ← 【新規】プラグイン機構（@effect_plugin）
+    │   ├── manifest.py        ← 【新規】describe（機械可読マニフェスト）
+    │   ├── assets.py          ← 【新規】素材パス解決（asset / here / layer）
+    │   └── templates/         ← subtitle / subtitle_box / bubble / diagram_svg / formula.html
+    │       └── vendor/katex/  ← 【新規】KaTeX 同梱（CSS + woff2 フォント20件、CDN参照なし）
+    ├── assets/          ← 【新規】素材を集約
+    │   ├── images/  video/  audio/
+    ├── tests/           ← pytest（323件）
+    │   ├── test_snapshot.py   ← スナップショットテスト (91件)
+    │   ├── test_errors.py     ← エラーケーステスト (232件)
+    │   ├── conftest.py        ← --snapshot-update オプション等
     │   ├── render_all.py      ← 全テスト動画の実レンダリング
-    │   ├── snapshots/         ← スナップショットJSON (test01〜test87)
-    │   ├── test01〜test87 の main/レイヤーファイル群
-    │   ├── test19_scene.html  ← web Objectテスト用HTML
-    │   └── *.png, *.jpg       ← テスト用素材（コミット済み）
-    ├── *.png, *.jpg     ← 素材画像 (リポジトリルート直下、変更禁止)
-    ├── *.mp4            ← 素材動画 (リポジトリルート直下)
-    └── *.mp3            ← 素材音声 (リポジトリルート直下)
+    │   ├── layers/            ← testNN_*.py のレイヤー定義とフィクスチャ(html/srt等)
+    │   └── snapshots/         ← スナップショットJSON
+    ├── examples/basic/     ← 最小サンプル（main.py / bg.py / onigiri.py）
+    ├── examples/showcase/  ← ショーケース動画
+    ├── plugins/            ← サンプルプラグイン（example_scanline / neon / photo_frame）
+    └── scripts/            ← 開発用（tools_baseline.py / upload_to_server.py 等）
 
   ◆ コミット履歴 (古い順)
     9ea9b69 初期コミット: DSLベースの動画構成ツール
@@ -68,13 +84,15 @@
     8a6630e キャッシュ再設計: policy/quality方式 + signatureベース
     （中略: FFmpeg 8.0対応・レンダリング窓・showcase作成等）
 
-  ◆ 直近のコミット履歴 (git log --oneline -6 相当、新しい順)
-    d9cdbe6 Wave6/7 統合レビュー修正: 確定14件(speed音声尺・freeze境界・karaoke掃引ほか) ← 最新
-    d26a41d Wave7: 外部モジュール統合6機能(narrate/karaoke/beat_sync/slide/export_metadata/storyboard)
-    66672c0 Wave6: 合成・時間操作13機能 + SSIM検証/ビート検出モジュール
-    83505ce upload_to_server: FTPSデータ転送後のunwrap失敗でpush失敗を修正
-    19d5fb7 upload_to_server: ロリポップFTPSのPWD空文字問題でpush失敗を修正
-    78bf4ed Wave5: 統合レビュー指摘19件の修正
+  ◆ 直近のコミット履歴 (git log --oneline -8、新しい順)
+    42f634b 統合レビュー修正8件: assets探索順・プラグイン予約名・ffp staleness ほか ← 最新
+    adc210d 数式レンダ formula(): KaTeX 同梱で LaTeX を透過画像として合成
+    33549e7 リポジトリに CLAUDE.md を追加: AIが正しい前提で作業を始められるように
+    8d68844 ファイル指紋を内容ハッシュ化: 新規clone/別マシンでテストが落ちる欠陥を解消
+    8efd3b2 Phase5-B: 素材・テスト・examples の再編とパッケージ収容
+    8062a4a Phase5-A: パッケージ化と本体分割(8,524行 → 24モジュール)
+    35ab3fc ケイパビリティ・マニフェスト: describe() で全機能をAIに機械可読提供
+    935c560 プラグイン機構: コアを編集せず Effect を追加できる @effect_plugin
 
 ============================================================
 2. 主要クラスとAPI（全クラス・全ファクトリ関数の一覧と説明）
@@ -323,7 +341,9 @@
   ◆ キャッシュ保存先 【パス変更】
     __cache__/artifacts/checkpoint/{src_hash[:8]}/{signature[:16]}.{ext}
     signature = FFP(source) + OPFP + quality + engine_ver + dur? + fps?
-    FFP = _file_fingerprint(source) = (abs_path, size, mtime_ns)
+    FFP = _file_fingerprint(source) = 【変更】素材の**内容ハッシュ**（mtime非依存。
+      旧: (abs_path, size, mtime_ns)）。キャッシュ生成物はパス署名。
+      ディスクキャッシュ(ffp.json)は staleness のため撤廃、プロセス内メモ化のみ
     画像→.png、動画→.webm (video入力 + transform-only でもwebm)
 
   ◆ 復元ロジック (_find_resume_point)
@@ -426,7 +446,16 @@
 10. テスト一覧
 ============================================================
 
-  ◆ スナップショットテスト (test_snapshot.py) - 87テスト（snapshots test01〜test87）
+  ◆ 実行方法【変更】pytest 化。どのディレクトリからでも実行できる（cd tests は不要）
+    pytest tests/                                    … 全323件（snapshot 91 + errors 232）
+    pytest tests/test_snapshot.py --snapshot-update  … スナップショット再生成
+    python tests/test_snapshot.py                    … pytest 無しでも直接実行可（--update で再生成）
+    python tests/render_all.py                       … 実レンダリング（重い。dry_runで検証できない経路をカバー）
+    ※ ファイル指紋が内容ハッシュ（mtime非依存）になったため、新規clone・別マシンでもそのまま通る。
+      .gitattributes で改行変換による指紋ずれも防止済み。
+    ※ test88〜test93 は プラグイン / describe / formula（数式レンダ）をカバー
+
+  ◆ スナップショットテスト (test_snapshot.py) - 現在91件（下記は当時の記録）
     test01〜test22: 基本機能（DSL・キャッシュ・anchor/pause・web Object等）
     test23: move保存テスト（resize(force) + move + scaleでmoveが消えないことを確認）
     test24: video checkpointテスト（動画のtransform-only → .webm拡張子）
@@ -456,7 +485,7 @@
     - live Effect（move保持、shake is live）
     - until offset / time(name=) / show系 / compute の各種検証
 
-  ※ test_snapshot.py 87件 + test_errors.py 190件 全PASS確認済み（2026-07-11時点）
+  ※ 現在は test_snapshot.py 91件 + test_errors.py 232件 = 323件 全PASS（2026-07-13時点）
   ※ test39〜test73 は Wave1〜4 の新機能（映像エフェクト・テキスト・オーディオ・
      パスアニメ・explode/assemble・group/grid・部分レンダ・チャプター・GIF/draft/
      連番PNG/thumbnail/並列キャッシュ/inspect/watch 等）をカバー
@@ -551,10 +580,14 @@
   17. 既存スクリプトの~resizeはquality:fastに意味が変わる（破壊的変更）
 
 ============================================================
-■ 素材ファイル (変更禁止)
+■ 素材ファイル (変更禁止) ※ assets/ 配下に集約済み。参照は asset("images/xxx.png") 等
 ============================================================
 
-  bg_pattern_ishigaki.jpg                        石垣模様の背景
+  images/ … bg_pattern_ishigaki.jpg / onigiri_tenmusu.png / figure_cafe.png ほか
+  video/  … fox_noaudio.mp4 / flowerbg_noaudio.mp4 / guitar_noaudio.mp4 ほか
+  audio/  … Impact-38.mp3 / ビックリ音.mp3
+
+  bg_pattern_ishigaki.jpg                      石垣模様の背景
   onigiri_tenmusu.png                            天むすおにぎり (透過PNG)
   figure_cafe.png                                カフェの人物 (透過PNG)
   pattern_teishiki_maku.png                      定式幕 (緑/橙/黒の縦縞)
@@ -582,7 +615,63 @@
 
 # === ChatGPT向け連絡事項 ===
 
-## 最新の更新 (2026-07-11)
+## 最新の更新 (2026-07-13) ★大改修: パッケージ化・pytest化・内容ハッシュ・数式レンダ★
+
+単一ファイル scriptvedit.py (8,524行) を廃止し、src/scriptvedit/ の35モジュール
+(合計 13,651行) にパッケージ分割した。テストは pytest で 323件 全PASS。
+（コミット 935c560 / 35ab3fc / 8062a4a / 8efd3b2 / 8d68844 / 33549e7 / adc210d / 42f634b）
+
+◆ 構造再編 (8062a4a / 8efd3b2)
+  - src レイアウト + pyproject.toml。`pip install -e .` でどのフォルダからでも
+    `from scriptvedit import *`（コアは標準ライブラリのみ、extras: morph/web/beat/tools/all）
+  - 素材は assets/(images/video/audio) に集約。asset() / here() / p.layer() が cwd 非依存
+  - assets/ の探索順: SCRIPTVEDIT_ASSETS → cwd → 実行中レイヤー位置 → パッケージ
+    （＝利用者の動画プロジェクト自身の assets/ が優先される。逆順にしてはいけない）
+  - tests/ / examples/ / plugins/ / scripts/ に整理。テストは pytest tests/ で実行
+
+◆ 移植性 (8d68844)
+  - ファイル指紋（キャッシュ鍵）を mtime ベース → **内容ハッシュ**に変更。
+    新規 clone・別マシンでもキャッシュ鍵が一致し、テストが落ちなくなった
+  - .gitattributes で改行変換による指紋ずれを防止（vendor 配下は無変換）
+
+◆ 数式レンダ formula() / formula_lines() (adc210d) ← 目玉機能
+  - LaTeX を **同梱の KaTeX** で Chromium(Playwright) にレンダリングし、数式要素だけを
+    要素スクリーンショットで切り出して透過PNG化。CDN 参照なし・TeX 処理系不要の完全オフライン
+  - formula(latex, *, size=48, color="white", display=True, duration=None, padding=4, align="left")
+  - formula_lines(latex_lines, *, size=48, color, display, duration, padding=4, gap=12, align)
+  - 戻り値は**通常の画像Object**なので move/fade/scale/rotate 等の既存アニメがそのまま効く
+  - 生成物は content-addressed キャッシュ（__cache__/artifacts/formula/*.png）
+
+◆ プラグイン機構 (935c560) / describe (35ab3fc)
+  - plugins/*.py に @effect_plugin を書くだけで Effect を追加でき、ファクトリ関数が
+    scriptvedit 名前空間へ注入される（params スキーマから検証・マニフェストを自動生成）
+  - 予約名（scriptvedit のサブモジュール名: beat/tts/viz/morph/testkit 等）と組込名は使用禁止
+  - `python -m scriptvedit describe [--format md|json] [--kind ...] [--name ...]` で
+    全機能のシグネチャ・引数レンジ・bakeable/live 区分を機械可読に取得できる
+
+## 統合レビュー (42f634b) で直した重要バグ ← パッケージ分割で新たに生まれた種類のバグ
+
+1. assets 探索順が「パッケージ位置」優先で、**利用者の動画プロジェクト自身の assets/ が
+   永久に無視されていた**（editable インストールではリポジトリ同梱 assets/ が常に勝つ）
+   → SCRIPTVEDIT_ASSETS → cwd → レイヤー位置 → パッケージ の順に修正。
+     プロセス全体キャッシュも撤廃（cwd変更・レイヤー切替に追随）
+2. **プラグインがサブモジュール名を乗っ取れた**（@effect_plugin("beat") で beat_sync が
+   AttributeError）。分割前は原理的に起き得なかった問題
+   → 予約名を明示禁止 + 遅延importを importlib.import_module に
+3. **ffp の staleness**: ディスクキャッシュ(__cache__/ffp.json)が (path,size,mtime) キーのため、
+   mtime保持コピー(cp -p / unzip 等)で古いハッシュを返し「変更が反映されない」
+   → 撤廃してプロセス内メモ化のみに
+4. **「実レンダ後にスナップショットが落ちる」罠の根本解消**: _src_bucket() が鍵本体と別方針
+   だったため、上流キャッシュの有無でパスが変わり dry_run と実レンダが食い違っていた
+   → _src_signature() に一本化（キャッシュ生成物=パス署名 / 素材=内容指紋）。
+     あわせて dry_run 中はキャッシュ生成物の寸法を**常に不明扱い**に統一
+5. formula のキャッシュ鍵に KaTeX フォント(woff2 20件)が入っておらず、字形が崩れたPNGが
+   焼き付いて二度と再生成されない → vendor 配下全ファイルを指紋に含めた
+6. thumbnail / storyboard が数式PNGを生成せずに落ちる（_ensure_formula_objects 未呼出）
+7. テストが依存不在時に PASS 扱いになっていた → pytest.skip() に修正
+8. dry_run で検証できない pad(SEGVバリア)経路を実レンダテスト(test92)でカバー
+
+## （以前の更新: 2026-07-11）
 
 Wave6/7 で合成・時間操作・外部モジュール統合 計19機能 + 新モジュール2本を追加した
 （コミット 66672c0=Wave6 / d26a41d=Wave7 / d9cdbe6=統合レビュー修正）。
@@ -661,6 +750,16 @@ scriptvedit.py は約8120行、テストは test_snapshot 87件 / test_errors 19
 
 ## 既知の制約・注意点
 
+- **dry_run の限界**: dry_run はキャッシュ生成物（数式PNG / web webm / checkpoint）を作らないため、
+  その寸法を予測できない（常に不明扱いに統一）。したがって寸法に依存する経路
+  ―― 特に scale(eval=frame) 直後の pad（FFmpeg 8.0 の SEGV バリア）―― は
+  スナップショットでは検証できず、**実レンダテスト（tests/render_all.py, test92）でカバー**している
+- karaoke のフォント描画は libass 依存（環境のフォント有無で見た目が変わる）
+- narrate / voice は VOICEVOX エンジンの起動が必要（既定 127.0.0.1:50021）
+- formula / web Object / テンプレート / slide は Playwright + Chromium が必要
+  （KaTeX はリポジトリ同梱のためネットワークは不要）
+- プラグイン名に scriptvedit のサブモジュール名（beat/tts/viz/morph/testkit 等）と
+  組込Effect名は使えない（PluginError）
 - drawtext の fontsize 式アニメは FFmpeg 8.0 で SEGV のため、text/typewriter/counter の
   size は定数のみ（式指定は日本語エラーで案内）。x/y/alpha アニメは正常動作。
   pixelize の size、outline の width も同様に定数のみ
@@ -684,20 +783,22 @@ scriptvedit.py は約8120行、テストは test_snapshot 87件 / test_errors 19
 
 ## 依存関係
 
-- コア: Python 3.10+ / ffmpeg 8.0（PATH必須）
-- テンプレート・web Object・slide: Playwright + Chromium
-- voice() / narrate(): VOICEVOX エンジンを別途起動する必要がある（既定 127.0.0.1:50021）。svtts.py 経由
-- beat_sync() / svbeat: numpy + scipy（scipy はビート検出に必須。librosa 非依存）
-- svtestkit: numpy + PIL + ffmpeg（scipy は任意で SSIM 窓を高速化）
+  ※ 旧モジュール名 svinspect.py / svtts.py / svbeat.py / svtestkit.py は廃止。
+    それぞれ scriptvedit.viz / .tts / .beat / .testkit に移動している（import 名に注意）
+
+- コア: Python 3.10+ / ffmpeg 8.0（PATH必須）。インストールは `pip install -e .`
+- テンプレート・web Object・slide・formula: Playwright + Chromium（`pip install -e .[web]`）
+- voice() / narrate(): VOICEVOX エンジンを別途起動する必要がある（既定 127.0.0.1:50021）
+- beat_sync() / scriptvedit.beat: numpy + scipy（scipy はビート検出に必須。librosa 非依存）
+- scriptvedit.testkit: numpy + PIL + ffmpeg（scipy は任意で SSIM 窓を高速化）
 - storyboard(): Pillow
-- svinspect.py / svtts.py は標準ライブラリのみで動作（VOICEVOX との通信時を除く）
-- inspect() / voice() / narrate() / beat_sync() は scriptvedit.py と同じディレクトリに
-  対応モジュール（svinspect.py / svtts.py / svbeat.py）が必要
+- scriptvedit.viz / scriptvedit.tts は標準ライブラリのみで動作（VOICEVOX との通信時を除く）
 
 ## その他
 
 - .gitignore でテスト生成物・キャッシュを追跡解除。テストに必要な素材はコミット済みのため、
-  フレッシュクローンでそのまま test_snapshot.py / test_errors.py を実行可能
-- テストは test/ ディレクトリから実行すること（素材の相対パス依存）
+  フレッシュクローンで `pip install -e .` → `pytest tests/` がそのまま通る（323件）
+- テストはどのディレクトリからでも実行できる（cd tests は不要。asset()/here() が cwd 非依存）
+- キャッシュ鍵は内容ハッシュのため、素材を mtime 保持でコピーしても変更が正しく検出される
 
 ============================================================
