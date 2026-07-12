@@ -792,6 +792,32 @@ def setup_test87():
     return p.render("test87.mp4", dry_run=True)
 
 
+def setup_test88():
+    """プラグイン: neon_glow(split+gblur+blend複合) + scanline(liveアニメ)"""
+    load_plugins("../plugins")
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test88_plugin_neon.py", priority=0)
+    return p.render("test88.mp4", dry_run=True)
+
+
+def setup_test89():
+    """プラグイン: photo_frame の pad 拡張が overlay 中央配置(pad_size)に反映される"""
+    load_plugins("../plugins")
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test89_plugin_frame.py", priority=0)
+    return p.render("test89.mp4", dry_run=True)
+
+
+def setup_test90():
+    """プラグイン: test/plugins/ の自動読込（bakeable / live 両方）"""
+    p = Project()
+    p.configure(width=1280, height=720, fps=30, background_color="black")
+    p.layer("test90_plugin_autoload.py", priority=0)
+    return p.render("test90.mp4", dry_run=True)
+
+
 ALL_TESTS = [
     ("test01", setup_test01),
     ("test02", setup_test02),
@@ -880,6 +906,9 @@ ALL_TESTS = [
     ("test85", setup_test85),
     ("test86", setup_test86),
     ("test87", setup_test87),
+    ("test88", setup_test88),
+    ("test89", setup_test89),
+    ("test90", setup_test90),
 ]
 
 

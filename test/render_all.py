@@ -303,6 +303,32 @@ def render_test38():
     p.render(out("test38.mp4"))
 
 
+def render_test88():
+    """プラグイン: neon_glow + scanline（短尺・小サイズ）"""
+    load_plugins("../plugins")
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer("test88_plugin_neon.py", priority=0)
+    p.render(out("test88.mp4"))
+
+
+def render_test89():
+    """プラグイン: photo_frame（pad拡張 + overlay中央配置）"""
+    load_plugins("../plugins")
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer("test89_plugin_frame.py", priority=0)
+    p.render(out("test89.mp4"))
+
+
+def render_test90():
+    """プラグイン: test/plugins/ 自動読込（tint_wash / test_live_only）"""
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer("test90_plugin_autoload.py", priority=0)
+    p.render(out("test90.mp4"))
+
+
 ALL_RENDERS = [
     ("test01", render_test01),
     ("test02", render_test02),
@@ -342,6 +368,9 @@ ALL_RENDERS = [
     ("test36", render_test36),
     ("test37", render_test37),
     ("test38", render_test38),
+    ("test88", render_test88),
+    ("test89", render_test89),
+    ("test90", render_test90),
 ]
 
 

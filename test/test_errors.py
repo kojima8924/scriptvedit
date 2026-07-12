@@ -1,5 +1,5 @@
 # エラーケーステスト: 各種エラー条件の自動検証
-import sys, os, tempfile
+import sys, os, tempfile, shutil
 sys.path.insert(0, "..")
 from scriptvedit import (
     _resolve_param, Project, P, Object, VideoView, AudioView,
@@ -3102,6 +3102,281 @@ def test_slide_page_js_normalizes_id():
     return False, f"JSに不足: {missing}"
 
 
+# --- プラグイン機構 ---
+
+import scriptvedit as _sv
+
+
+def _def_plugin(name, **kw):
+    """テスト用プラグインを登録してファクトリを返す"""
+    params = kw.pop("params", {
+        "radius": {"type": "number", "default": 5, "min": 0, "max": 100,
+                   "desc": "半径"},
+        "amount": {"type": "expr", "default": 1.0, "min": 0, "max": 2,
+                   "desc": "強さ"},
+    })
+
+    @_sv.effect_plugin(name, params=params, **kw)
+    def _builder(params, ctx):
+        """テスト用プラグイン"""
+        return [f"gblur=sigma={params['radius']}"]
+
+    return getattr(_sv, name)
+
+
+def test_plugin_unknown_param():
+    """プラグイン: 未知パラメータ → 日本語エラー + suggest"""
+    _sv.unregister_plugin("t_unknown")
+    f = _def_plugin("t_unknown")
+    try:
+        f(radus=3)
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        ok = "未知のパラメータ" in msg and "もしかして" in msg and "radius" in msg
+        return (True, msg.split("\n")[0]) if ok else (False, f"メッセージ不足: {msg}")
+    finally:
+        _sv.unregister_plugin("t_unknown")
+
+
+def test_plugin_out_of_range():
+    """プラグイン: number/expr の範囲外 → ValueError"""
+    _sv.unregister_plugin("t_range")
+    f = _def_plugin("t_range")
+    errs = []
+    for kw in ({"radius": 500}, {"amount": 5.0}):
+        try:
+            f(**kw)
+            errs.append(f"{kw} で例外なし")
+        except ValueError as e:
+            if "範囲" not in str(e):
+                errs.append(f"{kw}: {e}")
+    _sv.unregister_plugin("t_range")
+    return (not errs), ("範囲外を検出" if not errs else "; ".join(errs))
+
+
+def test_plugin_expr_accepted():
+    """プラグイン: type='expr' は lambda/Expr を受理（liveアニメ）"""
+    _sv.unregister_plugin("t_expr")
+    f = _def_plugin("t_expr")
+    e = f(amount=lambda u: u * 0.5)
+    ok = isinstance(e.params["amount"], _sv.Expr)
+    _sv.unregister_plugin("t_expr")
+    return (ok, "lambda を Expr に解決") if ok else (False, f"未解決: {e.params}")
+
+
+def test_plugin_duplicate_registration():
+    """プラグイン: 同名の二重登録は明示エラー（override=True で許可）"""
+    _sv.unregister_plugin("t_dup")
+    _def_plugin("t_dup")
+    try:
+        _def_plugin("t_dup")
+        _sv.unregister_plugin("t_dup")
+        return False, "二重登録が通ってしまいました"
+    except _sv.PluginError as e:
+        if "既に登録" not in str(e):
+            _sv.unregister_plugin("t_dup")
+            return False, f"メッセージ不適切: {e}"
+    try:
+        _def_plugin("t_dup", override=True)  # 明示フラグなら許可
+    except _sv.PluginError as e:
+        _sv.unregister_plugin("t_dup")
+        return False, f"override=True が拒否された: {e}"
+    _sv.unregister_plugin("t_dup")
+    return True, "二重登録を拒否 / override=True は許可"
+
+
+def test_plugin_builtin_name_conflict():
+    """プラグイン: 組込Effect名の上書きは常に禁止"""
+    try:
+        _def_plugin("glow")
+        _sv.unregister_plugin("glow")
+        return False, "組込 glow を上書きできてしまいました"
+    except _sv.PluginError as e:
+        ok = "組込" in str(e)
+        return (True, str(e).split("\n")[0]) if ok else (False, f"メッセージ不適切: {e}")
+
+
+def test_plugin_bakeable_checkpoint():
+    """プラグイン: bakeable=True はチェックポイント経路でも同じビルダーが使われる"""
+    _sv.unregister_plugin("t_bake")
+    _def_plugin("t_bake", bakeable=True)
+    try:
+        if "t_bake" not in _sv._BAKEABLE_EFFECTS:
+            return False, "_BAKEABLE_EFFECTS に登録されていません"
+        e = getattr(_sv, "t_bake")(radius=7)
+        if not _sv._is_bakeable("effect", e):
+            return False, "_is_bakeable が False"
+        obj = Object.__new__(Object)
+        obj.source = "../onigiri_tenmusu.png"
+        obj.transforms = []
+        obj.effects = [e]
+        obj.media_type = "image"
+        filters, _pad = _build_effect_filters(obj, 0, 2, base_dims=(100, 100))
+        ok = any("gblur=sigma=7" in f for f in filters)
+        return (True, "bakeable登録+ビルダー共有") if ok else (False, f"フィルタ不正: {filters}")
+    finally:
+        _sv.unregister_plugin("t_bake")
+
+
+def test_plugin_live_not_bakeable():
+    """プラグイン: bakeable=False は _BAKEABLE_EFFECTS に入らない"""
+    _sv.unregister_plugin("t_live")
+    _def_plugin("t_live", bakeable=False)
+    ok = "t_live" not in _sv._BAKEABLE_EFFECTS
+    _sv.unregister_plugin("t_live")
+    return (ok, "live扱い") if ok else (False, "bakeable集合に混入")
+
+
+def test_plugin_fingerprint_includes_source():
+    """プラグイン: ソースコードのFFPがキャッシュ鍵(_op_fingerprint_str)に入る"""
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "fp_plugin.py")
+    src = (
+        "from scriptvedit import effect_plugin\n\n"
+        "@effect_plugin('t_fp', bakeable=True, params={'k': "
+        "{'type': 'number', 'default': %d}})\n"
+        "def build_t_fp(params, ctx):\n"
+        "    '''FFPテスト'''\n"
+        "    return [f\"eq=gamma={params['k']}\"]\n"
+    )
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src % 1)
+        _sv.unregister_plugin("t_fp")
+        _sv._LOADED_PLUGIN_FILES.discard(os.path.abspath(path).replace("\\", "/"))
+        _sv.load_plugin(path)
+        e1 = getattr(_sv, "t_fp")(k=1)
+        fp1 = _sv._op_fingerprint_str(e1)
+        # プラグインのソースを書き換える → 同じパラメータでも指紋が変わる
+        with open(path, "w", encoding="utf-8") as f:
+            f.write((src % 1).replace("eq=gamma=", "eq=contrast="))
+        _sv.unregister_plugin("t_fp")
+        _sv._LOADED_PLUGIN_FILES.discard(os.path.abspath(path).replace("\\", "/"))
+        _sv.load_plugin(path)
+        e2 = getattr(_sv, "t_fp")(k=1)
+        fp2 = _sv._op_fingerprint_str(e2)
+        if "plugin_ffp=" not in fp1:
+            return False, f"指紋にplugin_ffpなし: {fp1}"
+        if fp1 == fp2:
+            return False, "ソース変更で指紋が変わりません"
+        return True, "ソース変更で指紋が変化"
+    finally:
+        _sv.unregister_plugin("t_fp")
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_plugin_load_failure_skips_only_bad():
+    """プラグイン: 読み込み失敗は警告+該当のみスキップ（他は生かす）"""
+    import warnings as _w
+    d = tempfile.mkdtemp()
+    good = os.path.join(d, "a_good.py")
+    bad = os.path.join(d, "b_bad.py")
+    try:
+        with open(good, "w", encoding="utf-8") as f:
+            f.write(
+                "from scriptvedit import effect_plugin\n\n"
+                "@effect_plugin('t_good', params={})\n"
+                "def build_t_good(params, ctx):\n"
+                "    '''OK'''\n"
+                "    return ['null']\n")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write("import no_such_module_xyz\n")
+        _sv.unregister_plugin("t_good")
+        with _w.catch_warnings(record=True) as rec:
+            _w.simplefilter("always")
+            loaded = _sv.load_plugins(d)
+        warned = any("プラグインをスキップ" in str(x.message) for x in rec)
+        ok = warned and len(loaded) == 1 and "t_good" in _sv._EFFECT_PLUGINS
+        # load_plugin 単体は PluginError を送出
+        raised = False
+        try:
+            _sv.load_plugin(bad)
+        except _sv.PluginError:
+            raised = True
+        ok = ok and raised
+        return (True, "不正プラグインのみスキップ+警告") if ok else (
+            False, f"warned={warned} loaded={loaded} raised={raised}")
+    finally:
+        _sv.unregister_plugin("t_good")
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_plugin_builder_bad_return():
+    """プラグイン: ビルダーの戻り値が不正 → PluginError"""
+    _sv.unregister_plugin("t_badret")
+
+    @_sv.effect_plugin("t_badret", params={})
+    def _b(params, ctx):
+        """不正戻り値"""
+        return 123
+
+    try:
+        obj = Object.__new__(Object)
+        obj.source = "../onigiri_tenmusu.png"
+        obj.transforms = []
+        obj.effects = [getattr(_sv, "t_badret")()]
+        obj.media_type = "image"
+        _build_effect_filters(obj, 0, 2)
+        return False, "例外が発生しませんでした"
+    except _sv.PluginError as e:
+        return True, str(e).split("\n")[0]
+    finally:
+        _sv.unregister_plugin("t_badret")
+
+
+def test_plugin_choice_suggest():
+    """プラグイン: choice 型の不正値 → 候補提示(suggest)"""
+    _sv.unregister_plugin("t_choice")
+    f = _def_plugin("t_choice", params={
+        "mode": {"type": "choice", "default": "soft",
+                 "choices": ["soft", "hard"], "desc": "モード"}})
+    try:
+        f(mode="softt")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        ok = "soft" in str(e) and "もしかして" in str(e)
+        return (True, str(e).split("\n")[0]) if ok else (False, f"メッセージ不適切: {e}")
+    finally:
+        _sv.unregister_plugin("t_choice")
+
+
+def test_plugin_bad_schema():
+    """プラグイン: スキーマの type が不正 → PluginError(候補提示つき)"""
+    try:
+        _def_plugin("t_schema", params={"x": {"type": "numbr", "default": 1}})
+        _sv.unregister_plugin("t_schema")
+        return False, "不正スキーマが通ってしまいました"
+    except _sv.PluginError as e:
+        ok = "type" in str(e)
+        return (True, str(e).split("\n")[0]) if ok else (False, f"メッセージ不適切: {e}")
+
+
+def test_plugin_manifest():
+    """プラグイン: plugin_manifest が登録内容を返す"""
+    _sv.unregister_plugin("t_man")
+    _def_plugin("t_man", bakeable=True, category="テスト")
+    items = {i["name"]: i for i in _sv.plugin_manifest()}
+    txt = _sv.plugin_manifest(as_text=True)
+    ok = ("t_man" in items and items["t_man"]["bakeable"] is True
+          and items["t_man"]["category"] == "テスト"
+          and "radius" in items["t_man"]["params"] and "t_man" in txt)
+    _sv.unregister_plugin("t_man")
+    return (ok, "マニフェスト出力OK") if ok else (False, f"内容不正: {items.get('t_man')}")
+
+
+def test_plugin_namespace_injection():
+    """プラグイン: ファクトリが scriptvedit 名前空間(__all__)へ注入される"""
+    _sv.unregister_plugin("t_ns")
+    _def_plugin("t_ns")
+    ns = {}
+    exec("from scriptvedit import *\nE = t_ns(radius=3)", ns)
+    ok = ns["E"].name == "t_ns" and "t_ns" in _sv.__all__
+    _sv.unregister_plugin("t_ns")
+    ok = ok and "t_ns" not in _sv.__all__
+    return (ok, "import * で使用可 / 解除で除去") if ok else (False, "名前空間注入に失敗")
+
+
 ALL_TESTS = [
     ("math.sin in lambda", test_math_sin_in_lambda),
     ("未定義アンカー参照", test_undefined_anchor),
@@ -3300,6 +3575,21 @@ ALL_TESTS = [
     ("S13 export json先頭章", test_export_metadata_json_intro_chapter),
     ("S11 beat_sync破損キャッシュ自己修復", test_beat_sync_corrupt_cache_self_heal),
     ("S14 slide ページ切替JS正規化", test_slide_page_js_normalizes_id),
+    # --- プラグイン機構 ---
+    ("plugin 未知パラメータ+suggest", test_plugin_unknown_param),
+    ("plugin 範囲外", test_plugin_out_of_range),
+    ("plugin expr受理(liveアニメ)", test_plugin_expr_accepted),
+    ("plugin 同名二重登録", test_plugin_duplicate_registration),
+    ("plugin 組込名の上書き禁止", test_plugin_builtin_name_conflict),
+    ("plugin bakeableチェックポイント", test_plugin_bakeable_checkpoint),
+    ("plugin bakeable=Falseはlive", test_plugin_live_not_bakeable),
+    ("plugin ソースFFPがキャッシュ鍵", test_plugin_fingerprint_includes_source),
+    ("plugin 読込失敗は該当のみスキップ", test_plugin_load_failure_skips_only_bad),
+    ("plugin ビルダー戻り値不正", test_plugin_builder_bad_return),
+    ("plugin choice suggest", test_plugin_choice_suggest),
+    ("plugin スキーマ不正", test_plugin_bad_schema),
+    ("plugin マニフェスト", test_plugin_manifest),
+    ("plugin 名前空間注入", test_plugin_namespace_injection),
 ]
 
 

@@ -1,0 +1,47 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=1280x720:d=2:r=30",
+    "-i",
+    "__cache__/artifacts/checkpoint/2fdb2eec/9ba5b46be87bf8ae.mkv",
+    "-filter_complex",
+    "[1:v]eq=gamma=2.4[obj1];[0:v][obj1]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,2)'[v1]",
+    "-map",
+    "[v1]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "2",
+    "test90.mp4"
+  ],
+  "cache": {
+    "__cache__/artifacts/checkpoint/2fdb2eec/9ba5b46be87bf8ae.mkv": [
+      "ffmpeg",
+      "-y",
+      "-loop",
+      "1",
+      "-r",
+      "30",
+      "-i",
+      "../onigiri_tenmusu.png",
+      "-vf",
+      "scale=iw*0.5:ih*0.5,format=rgba,geq=r='r(X/,Y)*(1-clip((clip((T-0)/2/,0/,1)*0.8)/,0/,1))+0*clip((clip((T-0)/2/,0/,1)*0.8)/,0/,1)':g='g(X/,Y)*(1-clip((clip((T-0)/2/,0/,1)*0.8)/,0/,1))+0*clip((clip((T-0)/2/,0/,1)*0.8)/,0/,1)':b='b(X/,Y)*(1-clip((clip((T-0)/2/,0/,1)*0.8)/,0/,1))+255*clip((clip((T-0)/2/,0/,1)*0.8)/,0/,1)':a='alpha(X/,Y)'",
+      "-c:v",
+      "ffv1",
+      "-level",
+      "3",
+      "-pix_fmt",
+      "yuva444p",
+      "-t",
+      "2",
+      "__cache__/artifacts/checkpoint/2fdb2eec/9ba5b46be87bf8ae.mkv"
+    ]
+  }
+}
