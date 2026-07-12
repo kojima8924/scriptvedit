@@ -400,8 +400,7 @@ def subtitles(srt_file, *, style=None):
     }
     try:
         ffp = _file_fingerprint(srt_file)
-        spec["synthetic_source"] = _text_synthetic_source(
-            f"subs|{ffp[0]}|{ffp[1]}|{ffp[2]}|{style}")
+        spec["synthetic_source"] = _text_synthetic_source(f"subs|{ffp}|{style}")
     except OSError:
         spec["synthetic_source"] = _text_synthetic_source(f"subs|{srt_file}|{style}")
     obj = _new_text_object(spec)

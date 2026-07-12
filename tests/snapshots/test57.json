@@ -7,9 +7,9 @@
     "-i",
     "color=c=black:s=1280x720:d=7:r=30",
     "-i",
-    "__cache__/artifacts/aseq/bd173efd380c7a82.m4a",
+    "__cache__/artifacts/aseq/c2a8a14bf064d1b9.m4a",
     "-i",
-    "__cache__/artifacts/sfx/81b5fbefa7889358.m4a",
+    "__cache__/artifacts/sfx/3523264a7832972b.m4a",
     "-filter_complex",
     "[1:a]atrim=duration=3,asetpts=PTS-STARTPTS[a0];[2:a]atrim=duration=4,asetpts=PTS-STARTPTS,adelay=3000:all=1[a1];[a0][a1]amix=inputs=2:normalize=0[aout];[aout]loudnorm=I=-14:TP=-1.5:LRA=11[aout_ln]",
     "-map",
@@ -27,7 +27,7 @@
     "test57.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/aseq/bd173efd380c7a82.m4a": [
+    "__cache__/artifacts/aseq/c2a8a14bf064d1b9.m4a": [
       "ffmpeg",
       "-y",
       "-i",
@@ -42,9 +42,9 @@
       "aac",
       "-b:a",
       "192k",
-      "__cache__/artifacts/aseq/bd173efd380c7a82.m4a"
+      "__cache__/artifacts/aseq/c2a8a14bf064d1b9.m4a"
     ],
-    "__cache__/artifacts/sfx/81b5fbefa7889358.m4a": [
+    "__cache__/artifacts/sfx/3523264a7832972b.m4a": [
       "ffmpeg",
       "-y",
       "-i",
@@ -59,7 +59,7 @@
       "192k",
       "-t",
       "3.858375",
-      "__cache__/artifacts/sfx/81b5fbefa7889358.m4a"
+      "__cache__/artifacts/sfx/3523264a7832972b.m4a"
     ]
   }
 }

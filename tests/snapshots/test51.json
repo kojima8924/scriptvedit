@@ -7,7 +7,7 @@
     "-i",
     "color=c=black:s=1280x720:d=3.5:r=30",
     "-i",
-    "__cache__/artifacts/xfade/97e98e536b4015c7.mkv",
+    "__cache__/artifacts/xfade/a79eb29c1c88597c.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3.5)'[v1]",
     "-map",
@@ -22,7 +22,7 @@
     "test51.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/xfade/97e98e536b4015c7.mkv": [
+    "__cache__/artifacts/xfade/a79eb29c1c88597c.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -49,7 +49,7 @@
       "yuva444p",
       "-t",
       "3.5",
-      "__cache__/artifacts/xfade/97e98e536b4015c7.mkv"
+      "__cache__/artifacts/xfade/a79eb29c1c88597c.mkv"
     ]
   }
 }

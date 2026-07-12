@@ -48,11 +48,11 @@ def _source_signature(path):
     """素材パスの署名を返す（キャッシュ生成物はパス署名、通常素材はFFP署名）"""
     if _is_cache_artifact_path(path):
         # キャッシュ生成物はパス自体が内容由来の鍵を含む（dry_runでは未生成でFFP不可）
-        return f"src={path.replace(chr(92), '/')}"
+        return f"src={_norm_src_path(path)}"
     try:
         return f"ffp={_file_fingerprint(path)}"
     except OSError:
-        return f"src={path.replace(chr(92), '/')}"
+        return f"src={_norm_src_path(path)}"
 
 
 def _xfade_scale_chain(w, h):
@@ -359,7 +359,7 @@ def video_sequence(*objs, transition="fade", t_dur=0.5):
 
 
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
-from scriptvedit.cache import _file_fingerprint, _is_cache_artifact_path
+from scriptvedit.cache import _file_fingerprint, _is_cache_artifact_path, _norm_src_path
 from scriptvedit.ffmpeg import _decoder_input_args, _run_ffmpeg_to_cache
 from scriptvedit.objects import Object
 from scriptvedit.project import Project

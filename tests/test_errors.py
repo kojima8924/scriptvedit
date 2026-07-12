@@ -426,7 +426,13 @@ def check_ffp_change_detection():
         ffp2 = _file_fingerprint(tmp)
         if ffp1 == ffp2:
             return False, f"fingerprintが変わっていない: {ffp1}"
-        return True, f"ffp1={ffp1[1:]}, ffp2={ffp2[1:]}"
+        # 内容ハッシュ方式: touch（mtimeのみ変更）では指紋は変わらないこと
+        with open(tmp, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\xFF" * 200)
+        os.utime(tmp, None)
+        if _file_fingerprint(tmp) != ffp2:
+            return False, "touchで指紋が変わってしまった（内容ハッシュでない）"
+        return True, f"ffp1={ffp1}, ffp2={ffp2}（touchでは不変）"
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -948,8 +954,7 @@ def check_shake_is_live():
 
 
 def check_web_deps_invalidation():
-    """depsファイルのmtime変更でweb cache pathが変わること"""
-    import time as _time
+    """depsファイルの内容変更でweb cache pathが変わること（touchでは変わらないこと）"""
     with tempfile.NamedTemporaryFile(suffix=".css", delete=False, mode="w") as f:
         f.write("body{}")
         dep_path = f.name
@@ -959,14 +964,20 @@ def check_web_deps_invalidation():
         p.configure(width=640, height=360, fps=30, background_color="black")
         obj1 = subtitle_box("test", deps=[dep_path])
         path1 = _web_cache_path(obj1, p)
-        # mtimeを変更
-        _time.sleep(0.05)
+        # touch（内容そのまま）ではキャッシュ鍵が変わらないこと＝移植性
         os.utime(dep_path, None)
+        obj_t = subtitle_box("test", deps=[dep_path])
+        if _web_cache_path(obj_t, p) != path1:
+            Project._current = old
+            return False, "touchでcache pathが変わった（内容ハッシュでない）"
+        # 内容を変更すると鍵が変わること
+        with open(dep_path, "w") as f:
+            f.write("body{color:red}")
         obj2 = subtitle_box("test", deps=[dep_path])
         path2 = _web_cache_path(obj2, p)
         Project._current = old
         if path1 != path2:
-            return True, f"cache path changed on dep touch"
+            return True, "cache path changed on dep content change"
         return False, f"cache path unchanged: {path1}"
     finally:
         os.unlink(dep_path)

@@ -56,9 +56,9 @@ _PLUGIN_PARAM_TYPES = ("number", "int", "expr", "color", "ffcolor", "string", "b
 def _plugin_code_ffp(builder):
     """プラグイン定義ファイルの内容ハッシュ（sha256[:16]）を返す。
 
-    mtime/サイズ方式(_file_fingerprint)ではなく内容ハッシュを使う理由:
-    プラグインを書き換えた時だけキャッシュを無効化したい（コピー/チェックアウトで
-    mtimeが変わっただけの再生成を避ける）ため。取得不能なら "inline" を返す。
+    素材の指紋(_file_fingerprint)と同じ内容ハッシュ方式。プラグインを書き換えた時
+    だけキャッシュを無効化し、コピー/チェックアウトでmtimeが変わっただけの再生成は
+    避ける。取得不能なら "inline" を返す。
     """
     path = getattr(getattr(builder, "__code__", None), "co_filename", None)
     if not path or not os.path.exists(path):

@@ -7,7 +7,7 @@
     "-i",
     "color=c=darkgreen:s=1280x720:d=4:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/4b829017/d60e0693c968ef52.mkv",
+    "__cache__/artifacts/checkpoint/6626a9f7/7e6f78174244d9bd.mkv",
     "-i",
     "assets/audio/Impact-38.mp3",
     "-filter_complex",
@@ -27,7 +27,7 @@
     "test17.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/4b829017/d60e0693c968ef52.mkv": [
+    "__cache__/artifacts/checkpoint/6626a9f7/7e6f78174244d9bd.mkv": [
       "ffmpeg",
       "-y",
       "-i",
@@ -42,7 +42,7 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/4b829017/d60e0693c968ef52.mkv"
+      "__cache__/artifacts/checkpoint/6626a9f7/7e6f78174244d9bd.mkv"
     ]
   }
 }

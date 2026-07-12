@@ -959,8 +959,8 @@ class Project:
                 cur = _file_fingerprint(path)
             except OSError:
                 return False  # 素材が消えた
-            if [cur[1], cur[2]] != list(ffp):
-                return False  # サイズ/mtimeが変わった
+            if cur != ffp:
+                return False  # 素材の内容が変わった（旧形式のlist値もここで不一致→再生成）
         return True
 
     def _should_use_cache(self, spec):
@@ -1772,8 +1772,8 @@ class Project:
         sources_meta = {}
         for src in self._layer_sources.get(spec["filename"], []):
             try:
-                ffp = _file_fingerprint(src)
-                sources_meta[ffp[0]] = [ffp[1], ffp[2]]
+                # キーは指定されたままのパス（相対のまま保つ＝メタも移植可能に）
+                sources_meta[str(src).replace("\\", "/")] = _file_fingerprint(src)
             except OSError:
                 pass
         cache_meta = {"duration": dur, "anchors": anchors, "sources": sources_meta}

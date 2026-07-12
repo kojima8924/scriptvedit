@@ -7,11 +7,11 @@
     "-i",
     "color=c=navy:s=1280x720:d=4:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/7a9b4391/0cf78eb38f3b1383.mkv",
+    "__cache__/artifacts/checkpoint/1bbaba61/a03ad97f09bf8b41.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/a01296c8/2a985a17ffed6103.mkv",
+    "__cache__/artifacts/checkpoint/651a4471/42a16c82ddc8f280.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/7e7730a6/f0fe2d4cd4001720.mkv",
+    "__cache__/artifacts/checkpoint/c3dc4efd/fef10f72601a5fe6.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.2*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v2];[v2][3:v]overlay=trunc(0.8*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v3]",
     "-map",
@@ -26,7 +26,7 @@
     "test07.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/7a9b4391/0cf78eb38f3b1383.mkv": [
+    "__cache__/artifacts/checkpoint/1bbaba61/a03ad97f09bf8b41.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -45,9 +45,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/7a9b4391/0cf78eb38f3b1383.mkv"
+      "__cache__/artifacts/checkpoint/1bbaba61/a03ad97f09bf8b41.mkv"
     ],
-    "__cache__/artifacts/checkpoint/a01296c8/2a985a17ffed6103.mkv": [
+    "__cache__/artifacts/checkpoint/651a4471/42a16c82ddc8f280.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -66,9 +66,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/a01296c8/2a985a17ffed6103.mkv"
+      "__cache__/artifacts/checkpoint/651a4471/42a16c82ddc8f280.mkv"
     ],
-    "__cache__/artifacts/checkpoint/7e7730a6/f0fe2d4cd4001720.mkv": [
+    "__cache__/artifacts/checkpoint/c3dc4efd/fef10f72601a5fe6.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -87,7 +87,7 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/7e7730a6/f0fe2d4cd4001720.mkv"
+      "__cache__/artifacts/checkpoint/c3dc4efd/fef10f72601a5fe6.mkv"
     ]
   }
 }

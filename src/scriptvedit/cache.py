@@ -14,15 +14,112 @@ import difflib as _difflib
 import shutil as _shutil
 import concurrent.futures as _futures
 import inspect as _inspect
+import threading as _threading
+import atexit as _atexit
 
 from scriptvedit.state import _CACHE_DIR
 
 
+# --- ファイル指紋（内容ハッシュ方式）---
+#
+# 指紋は「ファイル内容の sha256 先頭16桁」。パスにも mtime にも依存しないため、
+# 別マシンへの clone・ファイルのコピー・CRLF変換なしの touch ではキャッシュ鍵が
+# 変わらない（＝スナップショットが環境をまたいで一致する＝移植性）。
+#
+# 性能対策は2段構え:
+#   1) プロセス内メモ化（_FFP_MEMO）: 同一 render 中に同じファイルを再ハッシュしない
+#   2) ディスクキャッシュ（__cache__/ffp.json）: (絶対パス, サイズ, mtime_ns) →
+#      内容ハッシュ を記録。mtime が変わらない限り2回目以降は再ハッシュ不要。
+#      壊れていたら黙って捨てて再計算にフォールバックする（正しさは内容ハッシュ側が担保）。
+_FFP_MEMO = {}
+_FFP_DISK = [None]         # 遅延ロードするディスクキャッシュ dict（None=未ロード）
+_FFP_DIRTY = [False]
+_FFP_LOCK = _threading.Lock()
+_FFP_CACHE_VER = 1
+
+
+def _ffp_cache_file():
+    return os.path.join(_CACHE_DIR, "ffp.json")
+
+
+def _hash_file_content(path):
+    """ファイル全内容の sha256 先頭16桁（1MBずつのチャンク読み）"""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def _load_ffp_disk_cache():
+    """ディスクキャッシュを遅延ロード（呼び出し元で _FFP_LOCK 保持のこと）"""
+    if _FFP_DISK[0] is None:
+        entries = {}
+        try:
+            with open(_ffp_cache_file(), encoding="utf-8") as f:
+                data = json.load(f)
+            if (isinstance(data, dict) and data.get("v") == _FFP_CACHE_VER
+                    and isinstance(data.get("entries"), dict)):
+                entries = data["entries"]
+        except (OSError, ValueError):
+            entries = {}  # 破損・不在時は再計算にフォールバック
+        _FFP_DISK[0] = entries
+    return _FFP_DISK[0]
+
+
+def _flush_ffp_disk_cache():
+    """ディスクキャッシュをアトミックに書き出す（atexit / render後に呼ばれる）"""
+    with _FFP_LOCK:
+        if not _FFP_DIRTY[0] or not _FFP_DISK[0]:
+            return
+        entries = dict(_FFP_DISK[0])
+        _FFP_DIRTY[0] = False
+    path = _ffp_cache_file()
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        # 他プロセスが書いた分をマージ（丸ごと上書きで失わないように）
+        try:
+            with open(path, encoding="utf-8") as f:
+                old = json.load(f)
+            if isinstance(old, dict) and old.get("v") == _FFP_CACHE_VER:
+                merged = dict(old.get("entries") or {})
+                merged.update(entries)
+                entries = merged
+        except (OSError, ValueError):
+            pass
+        tmp = f"{path}.tmp{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"v": _FFP_CACHE_VER, "entries": entries}, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # キャッシュ書き出し失敗は致命的ではない
+
+
 def _file_fingerprint(path):
-    """ファイルの(絶対パス, サイズ, mtime_ns)タプルを返す"""
-    abs_path = os.path.abspath(path).replace("\\", "/")
-    stat = os.stat(path)
-    return (abs_path, stat.st_size, stat.st_mtime_ns)
+    """ファイル内容の指紋（sha256 先頭16桁の文字列）を返す。
+
+    パス・mtime に依存しないので、同一内容のファイルはどこに置いても同じ指紋になる。
+    ファイルが無ければ従来通り OSError を送出する。
+    """
+    st = os.stat(path)  # 不在なら OSError（呼び出し側が捕捉している）
+    key = f"{os.path.abspath(path).replace(chr(92), '/')}|{st.st_size}|{st.st_mtime_ns}"
+    with _FFP_LOCK:
+        h = _FFP_MEMO.get(key)
+        if h is not None:
+            return h
+        h = _load_ffp_disk_cache().get(key)
+        if isinstance(h, str):
+            _FFP_MEMO[key] = h
+            return h
+    h = _hash_file_content(path)  # I/O はロック外で
+    with _FFP_LOCK:
+        _FFP_MEMO[key] = h
+        _load_ffp_disk_cache()[key] = h
+        _FFP_DIRTY[0] = True
+    return h
+
+
+_atexit.register(_flush_ffp_disk_cache)
 
 
 def _is_cache_artifact_path(path):
@@ -41,10 +138,19 @@ def _is_pending_cache_path(path):
     return (not os.path.exists(path)) and _is_cache_artifact_path(path)
 
 
+# ファイルパスを値に持つパラメータ（指紋には生パスではなく内容指紋を使う）。
+# 生パスを混ぜるとリポジトリの置き場所でキャッシュ鍵が変わり移植性が失われるため、
+# ここに挙げたキーはパラメータ列挙から除外し、下で *_ffp として内容指紋を足す。
+_OP_PATH_PARAMS = {"lut": ("file",), "mask": ("image",), "mask_wipe": ("image",)}
+
+
 def _op_fingerprint_str(op):
     """単一opのフィンガープリント文字列を生成"""
     parts = [op.name]
+    skip = _OP_PATH_PARAMS.get(op.name, ())
     for k in sorted(op.params):
+        if k in skip:
+            continue
         v = op.params[k]
         parts.append(f"{k}={v.to_ffmpeg('u') if isinstance(v, Expr) else repr(v)}")
     # policy はレンダ結果に影響しないためフィンガープリントに含めない
@@ -56,27 +162,27 @@ def _op_fingerprint_str(op):
             tgt_ffp = _file_fingerprint(op._morph_target.source)
             parts.append(f"tgt_ffp={tgt_ffp}")
         except OSError:
-            parts.append(f"tgt_src={op._morph_target.source}")
+            parts.append(f"tgt_src={_norm_src_path(str(op._morph_target.source))}")
     # assemble_from: 集合元画像のFFPをsignatureに含める
     if op.name == "assemble_from" and hasattr(op, '_assemble_source'):
         try:
             parts.append(f"asm_ffp={_file_fingerprint(op._assemble_source.source)}")
         except OSError:
-            parts.append(f"asm_src={op._assemble_source.source}")
+            parts.append(f"asm_src={_norm_src_path(str(op._assemble_source.source))}")
     # lut: LUTファイルのFFPをsignatureに含める（内容変更でキャッシュ無効化）
     if op.name == "lut":
         lut_file = op.params.get("file")
         try:
             parts.append(f"lut_ffp={_file_fingerprint(lut_file)}")
         except (OSError, TypeError):
-            parts.append(f"lut_src={lut_file}")
+            parts.append(f"lut_src={_norm_src_path(str(lut_file))}")
     # mask/mask_wipe: マスク画像のFFPをsignatureに含める（内容変更でキャッシュ無効化）
     if op.name in ("mask", "mask_wipe"):
         mask_img = op.params.get("image")
         try:
             parts.append(f"mask_ffp={_file_fingerprint(mask_img)}")
         except (OSError, TypeError):
-            parts.append(f"mask_src={mask_img}")
+            parts.append(f"mask_src={_norm_src_path(str(mask_img))}")
     # プラグインEffect: ソースコードの内容ハッシュを鍵に含める
     # （プラグインを書き換えたらキャッシュが再生成されるように）
     plug = _EFFECT_PLUGINS.get(op.name)
@@ -130,13 +236,37 @@ def _compute_save_points(ops):
     return save_points
 
 
+def _src_bucket(path):
+    """キャッシュ生成物を仕分けるサブディレクトリ名（8桁）
+
+    パス文字列ではなく内容指紋から導出するため、リポジトリを別の場所へ置いても
+    同じバケットになる（移植性）。指紋が取れない場合（dry_run 中の未生成キャッシュ
+    予定パスなど）だけ、パス文字列（cwd相対に正規化）で代用する。
+    """
+    try:
+        return _file_fingerprint(path)[:8]
+    except OSError:
+        return hashlib.sha256(_norm_src_path(path).encode()).hexdigest()[:8]
+
+
+def _norm_src_path(path):
+    """パス文字列を正規化（cwd配下なら相対化・区切りは / ）"""
+    try:
+        rel = os.path.relpath(path, os.getcwd())
+        if not rel.startswith(".."):
+            path = rel
+    except ValueError:
+        pass  # 別ドライブ等（Windows）はそのまま
+    return path.replace("\\", "/")
+
+
 def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, quality="final"):
     """チェックポイントのキャッシュファイルパスを計算（signature方式）"""
     try:
         ffp = _file_fingerprint(original_source)
         sigs = [f"ffp={ffp}"]
     except OSError:
-        sigs = [f"src={original_source.replace(chr(92), '/')}"]
+        sigs = [f"src={_norm_src_path(original_source)}"]
     opfp = _op_prefix_fingerprint(ops)
     sigs.append(opfp)
     sigs.append(f"q={quality}")
@@ -151,8 +281,7 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
     # video入力 + transform-only でも動画ならmkv (ffv1)
     is_video = _detect_media_type(original_source) in ("video",)
     ext = ".mkv" if (duration is not None or is_video) else ".png"
-    src_hash = hashlib.sha256(original_source.replace("\\", "/").encode()).hexdigest()[:8]
-    cache_dir = os.path.join(_ARTIFACT_DIR, "checkpoint", src_hash)
+    cache_dir = os.path.join(_ARTIFACT_DIR, "checkpoint", _src_bucket(original_source))
     return os.path.join(cache_dir, f"{key}{ext}")
 
 
@@ -161,12 +290,12 @@ def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     if _is_cache_artifact_path(src_path):
         # キャッシュ生成物はパス自体が内容由来の鍵を含むため、常にパス文字列署名を使う
         # （dry_runでは未生成でFFP不可→実レンダとの鍵不一致を防ぐ）
-        sigs = [f"src={src_path.replace(chr(92), '/')}"]
+        sigs = [f"src={_norm_src_path(src_path)}"]
     else:
         try:
             sigs = [f"ffp={_file_fingerprint(src_path)}"]
         except OSError:
-            sigs = [f"src={src_path.replace(chr(92), '/')}"]
+            sigs = [f"src={_norm_src_path(src_path)}"]
     # ターゲットFFP
     if hasattr(morph_op, '_morph_target'):
         try:
@@ -180,8 +309,7 @@ def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     # 中間物は draft/本番で同一内容のため rq(_ACTIVE_QUALITY)は鍵に含めない
     sigs.append(f"ev={_ENGINE_VER}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
-    src_hash = hashlib.sha256(src_path.replace("\\", "/").encode()).hexdigest()[:8]
-    cache_dir = os.path.join(_ARTIFACT_DIR, "morph", src_hash)
+    cache_dir = os.path.join(_ARTIFACT_DIR, "morph", _src_bucket(src_path))
     return os.path.join(cache_dir, f"{key}.mkv")
 
 
@@ -191,12 +319,12 @@ def _particle_cache_path(img_path, particle_op, duration, fps, quality="final"):
     img_path: 粒子化する単一画像（explode=直前ソース, assemble=集合元）
     """
     if _is_cache_artifact_path(img_path):
-        sigs = [f"src={img_path.replace(chr(92), '/')}"]
+        sigs = [f"src={_norm_src_path(img_path)}"]
     else:
         try:
             sigs = [f"ffp={_file_fingerprint(img_path)}"]
         except OSError:
-            sigs = [f"src={img_path.replace(chr(92), '/')}"]
+            sigs = [f"src={_norm_src_path(img_path)}"]
     sigs.append(f"op={_op_fingerprint_str(particle_op)}")
     sigs.append(f"dur={duration}")
     sigs.append(f"fps={fps}")
@@ -204,8 +332,7 @@ def _particle_cache_path(img_path, particle_op, duration, fps, quality="final"):
     # 中間物は draft/本番で同一内容のため rq(_ACTIVE_QUALITY)は鍵に含めない
     sigs.append(f"ev={_ENGINE_VER}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
-    src_hash = hashlib.sha256(img_path.replace("\\", "/").encode()).hexdigest()[:8]
-    cache_dir = os.path.join(_ARTIFACT_DIR, "particle", src_hash)
+    cache_dir = os.path.join(_ARTIFACT_DIR, "particle", _src_bucket(img_path))
     return os.path.join(cache_dir, f"{key}.mkv")
 
 
@@ -222,7 +349,7 @@ def _morph_input_frame_path(src_path):
     try:
         sig = f"ffp={_file_fingerprint(src_path)}"
     except OSError:
-        sig = f"src={src_path.replace(chr(92), '/')}"
+        sig = f"src={_norm_src_path(src_path)}"
     key = hashlib.sha256(sig.encode()).hexdigest()[:16]
     return os.path.join(_ARTIFACT_DIR, "morph", "src", f"{key}.png")
 

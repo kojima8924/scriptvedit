@@ -7,15 +7,15 @@
     "-i",
     "color=c=darkslategray:s=1280x720:d=4:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/7a9b4391/51714cd1d65d644f.mkv",
+    "__cache__/artifacts/checkpoint/1bbaba61/1f8f3151aee6e9c5.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/a01296c8/4a6d6ed20f79fe27.mkv",
+    "__cache__/artifacts/checkpoint/651a4471/3e2c4c32c0db7ea2.mkv",
     "-loop",
     "1",
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/55339624/0ef1fa9b3b0a9234.png",
+    "__cache__/artifacts/checkpoint/9c59afed/839e5232c286b401.png",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v2];[v2][3:v]overlay=trunc((0.2+(0.6000000000000001*clip((t-0)/4/,0/,1)))*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v3]",
     "-map",
@@ -30,7 +30,7 @@
     "test12.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/7a9b4391/51714cd1d65d644f.mkv": [
+    "__cache__/artifacts/checkpoint/1bbaba61/1f8f3151aee6e9c5.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -49,9 +49,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/7a9b4391/51714cd1d65d644f.mkv"
+      "__cache__/artifacts/checkpoint/1bbaba61/1f8f3151aee6e9c5.mkv"
     ],
-    "__cache__/artifacts/checkpoint/a01296c8/4a6d6ed20f79fe27.mkv": [
+    "__cache__/artifacts/checkpoint/651a4471/3e2c4c32c0db7ea2.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -70,9 +70,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/a01296c8/4a6d6ed20f79fe27.mkv"
+      "__cache__/artifacts/checkpoint/651a4471/3e2c4c32c0db7ea2.mkv"
     ],
-    "__cache__/artifacts/checkpoint/55339624/0ef1fa9b3b0a9234.png": [
+    "__cache__/artifacts/checkpoint/9c59afed/839e5232c286b401.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -83,7 +83,7 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/55339624/0ef1fa9b3b0a9234.png"
+      "__cache__/artifacts/checkpoint/9c59afed/839e5232c286b401.png"
     ]
   }
 }
