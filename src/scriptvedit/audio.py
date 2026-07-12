@@ -14,6 +14,7 @@ import difflib as _difflib
 import shutil as _shutil
 import concurrent.futures as _futures
 import inspect as _inspect
+from importlib import import_module as _import_module
 
 
 # --- オーディオ系ファクトリ ---
@@ -156,7 +157,9 @@ def voice(text, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0, **tts_kwargs):
         v.show(v.duration)
     """
     try:
-        from scriptvedit import tts as _svtts
+        # 属性参照(`from scriptvedit import tts`)ではなくモジュール直接 import。
+        # プラグインがパッケージ名前空間へ同名を注入していても影響を受けない。
+        _svtts = _import_module("scriptvedit.tts")
     except ImportError as e:
         raise ImportError(
             "voice() には scriptvedit.tts (VOICEVOX) が必要です。"
@@ -223,7 +226,8 @@ def narrate(text_content, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0,
         # n.audio / n.subtitle、または audio, sub = narrate(...)
     """
     try:
-        from scriptvedit import tts as _svtts
+        # 属性参照ではなくモジュール直接 import（名前空間注入の影響を受けない）
+        _svtts = _import_module("scriptvedit.tts")
     except ImportError as e:
         raise ImportError(
             "narrate() には scriptvedit.tts (VOICEVOX) が必要です。"
@@ -323,7 +327,8 @@ def beat_sync(audio_source, *, min_bpm=60, max_bpm=200):
         raise FileNotFoundError(
             f"beat_sync: 音声/動画ファイルが見つかりません: {audio_source}")
     try:
-        from scriptvedit import beat as _svbeat
+        # 属性参照ではなくモジュール直接 import（名前空間注入の影響を受けない）
+        _svbeat = _import_module("scriptvedit.beat")
     except ImportError as e:
         raise ImportError(
             "beat_sync() には numpy/scipy が必要です。\n"

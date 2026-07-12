@@ -64,6 +64,11 @@ pytest tests/test_snapshot.py --snapshot-update   # 再生成
 **再生成前に必ず差分を目視確認すること。** 意図しないコマンド変化を
 スナップショットごと上書きしてしまうと、退行がテストをすり抜ける。
 
+**スナップショットの限界: dry_run は寸法を予測できない。** `formula()` の数式PNGは
+dry_run 時点で未生成のため `base_dims=None` になり、`scale` の
+pad（SEGVバリア, §4.1）が付かないコマンドになる。**formula + scale の pad 経路は
+実レンダでしかカバーできない** ので `tests/render_all.py` の `test92` で踏む。
+
 ### 罠: 実レンダの後はキャッシュを消してからスナップショットを回す
 
 実レンダでチェックポイントが**実体化**すると、dry_run が生成する ffmpeg コマンドが
@@ -149,12 +154,19 @@ Effect は2種類ある。
 
 ### キャッシュ鍵（フィンガープリント）
 
-- **素材は内容ハッシュ**（sha256 先頭16桁、`cache.py` L98-119 `_file_fingerprint`）。
+- **素材は内容ハッシュ**（sha256 先頭16桁、`cache.py` `_file_fingerprint`）。
   パスにも mtime にも依存しない。別マシンへ clone してもキャッシュ鍵が変わらない
   ＝スナップショットが環境をまたいで一致する。
-  （mtime はディスクキャッシュ `__cache__/ffp.json` の**参照キー**としてだけ使う。
-  返る指紋の値は内容のみに依存する。）
-- **パラメータは `_op_fingerprint_str`**（`cache.py` L147-191）。
+  高速化はプロセス内メモ化のみ。**ディスクキャッシュ（`__cache__/ffp.json`）は撤廃した**
+  — (パス, サイズ, mtime) を参照キーに永続化すると、mtime を保持するコピー
+  （`cp -p` / `rsync -t` / `tar -x` / `unzip -o`）で同サイズの別内容に差し替えたとき
+  古いハッシュを返し「変更したのに再生成されない」。復活させないこと。
+- **ソース署名は `_src_signature` に一本化**（`cache.py`）。キャッシュ生成物
+  （`__cache__` 配下）は**パス署名**、素材は**内容指紋**。鍵本体もバケット（`_src_bucket`）も
+  同じ方針にすること。片方だけ内容指紋にすると、上流キャッシュ生成物を持つ
+  下流アーティファクト（morph/particle/checkpoint）のパスが `__cache__` の有無で変わり、
+  dry_run と実レンダのパスが食い違う（＝実レンダ後にスナップショットが落ちる）。
+- **パラメータは `_op_fingerprint_str`**（`cache.py`）。
 - **生パスを鍵に混ぜないこと**（リポジトリの置き場所でキャッシュ鍵が変わり移植性が壊れる）。
   パスを取るパラメータは `_OP_PATH_PARAMS`(L144) で除外し、代わりに内容指紋
   （`lut_ffp` / `mask_ffp` / `tgt_ffp` / `asm_ffp`）を混ぜる。プラグインは
@@ -185,9 +197,12 @@ overlay の中央配置は `(W-pad_size[0])/2` で計算される（`filters/vid
   0 は返さない（`clip((t-start)/0,…)` のゼロ除算で ffmpeg が EINVAL になるため、
   fallback=5 へ落とす）。
 - **素材参照は `asset()` / `here()` を使う**（`src/scriptvedit/assets.py`）。cwd 依存にしない。
-  - `asset("images/bg.jpg")` … リポジトリの `assets/` を自動発見して絶対パスを返す。
-    環境変数 `SCRIPTVEDIT_ASSETS` で明示も可。存在しなければ近い名前を提案して
-    `FileNotFoundError`。
+  - `asset("images/bg.jpg")` … `assets/` を自動発見して絶対パスを返す。探索順は
+    `SCRIPTVEDIT_ASSETS` → **cwd から上方向** → 実行中レイヤーファイルから上方向 →
+    パッケージ位置から上方向。**利用者プロジェクトの `assets/` が最優先**
+    （順序を逆にすると editable install ではリポジトリ同梱の assets/ が常に勝ち、
+    利用者自身の assets/ が永久に無視される）。結果はキャッシュしない。
+    存在しなければ近い名前を提案して `FileNotFoundError`。
   - `here("scene.html")` … 実行中のレイヤーファイルと同じディレクトリ。
   - `p.layer("bg.py")` も cwd 非依存に解決される。
 

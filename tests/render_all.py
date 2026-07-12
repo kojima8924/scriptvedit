@@ -348,6 +348,19 @@ def render_test91():
     p.render(out("test91.mp4"))
 
 
+def render_test92():
+    """formula + scale/rotate: pad(SEGVバリア)経路の実レンダカバレッジ
+
+    dry_run では数式PNGが未生成で寸法が取れず base_dims=None になるため、
+    スナップショット（tests/test_snapshot.py）は pad 付きの実コマンドを検証できない。
+    formula + scale の pad/copy バリアはここ（実レンダ）でのみ踏める。
+    """
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer(L("test92_formula_scale.py"), priority=0)
+    p.render(out("test92.mp4"))
+
+
 ALL_RENDERS = [
     ("test01", render_test01),
     ("test02", render_test02),
@@ -391,6 +404,7 @@ ALL_RENDERS = [
     ("test89", render_test89),
     ("test90", render_test90),
     ("test91", render_test91),
+    ("test92", render_test92),
 ]
 
 

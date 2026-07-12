@@ -52,6 +52,28 @@ _EFFECT_PLUGINS = {}
 # 許容するパラメータ型
 _PLUGIN_PARAM_TYPES = ("number", "int", "expr", "color", "ffcolor", "string", "bool", "choice")
 
+# 予約名: scriptvedit のサブモジュール名。
+# beat / tts / viz / morph / testkit 等は遅延 import されるため、import 時点では
+# パッケージ名前空間に存在しない。名前衝突チェックを「既に g にある名前」だけで
+# 行うと、これらの名前をプラグインが横取りでき、後続の
+# `import scriptvedit.beat` が注入済みファクトリ関数に隠されて壊れる。
+# （例: @effect_plugin("beat") → beat_sync() が AttributeError）
+_RESERVED_NAMES_CACHE = [None]
+
+
+def _reserved_plugin_names():
+    """プラグイン名として禁止する予約名（scriptvedit のサブモジュール名）"""
+    if _RESERVED_NAMES_CACHE[0] is None:
+        names = {"beat", "tts", "viz", "morph", "testkit"}  # 遅延importされる主要モジュール
+        try:
+            import pkgutil
+            import scriptvedit as _pkg
+            names |= {m.name for m in pkgutil.iter_modules(_pkg.__path__)}
+        except Exception:
+            pass  # 列挙できなくても既知の予約名だけは守る
+        _RESERVED_NAMES_CACHE[0] = frozenset(names)
+    return _RESERVED_NAMES_CACHE[0]
+
 
 def _plugin_code_ffp(builder):
     """プラグイン定義ファイルの内容ハッシュ（sha256[:16]）を返す。
@@ -224,6 +246,12 @@ def effect_plugin(name, *, bakeable=False, category="その他", params=None,
             raise PluginError(
                 f"プラグイン名は Python 識別子にしてください: {name!r}")
         _validate_plugin_schema(name, params)
+
+        if name in _reserved_plugin_names():
+            raise PluginError(
+                f"プラグイン '{name}' は scriptvedit のサブモジュール名と衝突しています"
+                f"（予約名・上書きは禁止）。\n"
+                f"別の名前を付けてください。")
 
         g = _pkg_ns()
         _all = _pkg_all()

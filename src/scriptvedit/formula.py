@@ -40,8 +40,12 @@ _CSS_COLOR_RE = re.compile(
 
 
 def _katex_fingerprint():
-    """同梱KaTeX（css/js）+ テンプレートHTMLの内容指紋。ベンダ更新でキャッシュを無効化する"""
-    parts = []
+    """同梱KaTeX（vendorディレクトリ配下の**全ファイル**）+ テンプレートHTMLの内容指紋。
+
+    css/js だけでなく **フォント(woff2 20件)も鍵に含める**。Chromium はフォントの
+    読込失敗を例外にせずフォールバック字形でレンダするため、フォントが壊れても鍵が
+    変わらないと、字形が崩れたPNGが焼き付いて二度と再生成されない。
+    """
     for path in (_template_path(_FORMULA_TEMPLATE),
                  os.path.join(_KATEX_DIR, "katex.min.css"),
                  os.path.join(_KATEX_DIR, "katex.min.js")):
@@ -50,7 +54,14 @@ def _katex_fingerprint():
                 f"KaTeX の同梱ファイルが見つかりません: {path}\n"
                 f"formula() は {_KATEX_DIR} に katex.min.css / katex.min.js / fonts/ が"
                 f"配置されている必要があります。")
-        parts.append(_file_fingerprint(path))
+    parts = [f"tpl:{_file_fingerprint(_template_path(_FORMULA_TEMPLATE))}"]
+    # vendor(katex) ディレクトリ全体をハッシュ（相対パス順で決定的に）
+    for root, dirs, files in os.walk(_KATEX_DIR):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, _KATEX_DIR).replace("\\", "/")
+            parts.append(f"{rel}:{_file_fingerprint(path)}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
 
 

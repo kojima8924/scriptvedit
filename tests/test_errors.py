@@ -1,5 +1,6 @@
 # エラーケーステスト: 各種エラー条件の自動検証
 import sys, os, tempfile, shutil, json, re, subprocess
+import pytest
 import scriptvedit as sv
 from scriptvedit import (
     asset,
@@ -26,6 +27,26 @@ from scriptvedit import (
     formula, formula_lines,
     _build_video_pre_filters, _build_effect_filters, _ARTIFACT_DIR,
 )
+
+
+# --- 依存不在時のスキップ ---
+#
+# 依存（numpy/scipy・Playwright・ffprobe 等）が無いときに (True, "スキップ…") を
+# 返すと **pytest では PASS になり、検証が素通りしていることが隠れる**。
+# 必ず pytest.skip() で正直に skip させること。
+def _skip(reason):
+    """依存不在などで検証不能なときに skip する（PASS 扱いにしない）"""
+    pytest.skip(reason)
+
+
+def _require_beat_env():
+    """beat_sync 系テストの前提（音声素材 + numpy/scipy）を要求する"""
+    if not os.path.exists(asset("audio/Impact-38.mp3", must_exist=False)):
+        _skip("素材 assets/audio/Impact-38.mp3 が無い環境")
+    try:
+        import scriptvedit.beat  # noqa: F401
+    except ImportError:
+        _skip("scriptvedit.beat（numpy/scipy）が無い環境")
 
 
 def check_math_sin_in_lambda():
@@ -2828,13 +2849,8 @@ def check_karaoke_end_before_start():
 
 def check_beat_sync_detects_and_caches():
     """beat_sync: 実音声でビート検出し、2回目はJSONキャッシュから即返す"""
+    _require_beat_env()
     audio = asset("audio/Impact-38.mp3")
-    if not os.path.exists(audio):
-        return True, "スキップ（Impact-38.mp3が無い環境）"
-    try:
-        from scriptvedit import beat as svbeat  # noqa: F401
-    except ImportError:
-        return True, "スキップ（svbeat/numpy/scipy不在）"
     from scriptvedit import _ARTIFACT_DIR
     import shutil as _sh
     beats_dir = os.path.join(_ARTIFACT_DIR, "beats")
@@ -3016,7 +3032,7 @@ def check_probe_stream_durations():
     p = _mk_project()
     info = p._probe_media(asset("video/fox_noaudio.mp4"))
     if info is None:
-        return True, "スキップ（probe不能環境）"
+        _skip("ffprobe が使えない環境")
     # 映像ストリーム尺のキーが存在する（コンテナ尺と食い違ってもよい）
     if "video_duration" not in info or "audio_duration" not in info:
         return False, f"stream尺キーが無い: {list(info.keys())}"
@@ -3079,13 +3095,8 @@ def check_export_metadata_json_intro_chapter():
 
 def check_beat_sync_corrupt_cache_self_heal():
     """S11: 破損キャッシュJSONは無視して再解析（self-heal）"""
+    _require_beat_env()
     audio = asset("audio/Impact-38.mp3")
-    if not os.path.exists(audio):
-        return True, "スキップ（Impact-38.mp3が無い環境）"
-    try:
-        from scriptvedit import beat as svbeat  # noqa: F401
-    except ImportError:
-        return True, "スキップ（svbeat/numpy/scipy不在）"
     import glob as _glob
     beats_dir = os.path.join(_ARTIFACT_DIR, "beats")
     # 一旦正常に解析してキャッシュを作る
@@ -3208,6 +3219,66 @@ def check_plugin_builtin_name_conflict():
     except _sv.PluginError as e:
         ok = "組込" in str(e)
         return (True, str(e).split("\n")[0]) if ok else (False, f"メッセージ不適切: {e}")
+
+
+def check_plugin_reserved_submodule_name():
+    """プラグイン: サブモジュール名(beat/tts/viz/morph/testkit)の乗っ取りは禁止
+
+    禁止しないと `import scriptvedit.beat`（beat_sync 等）が注入済みファクトリ関数に
+    隠され AttributeError で壊れる。
+    """
+    for name in ("beat", "tts", "viz", "morph", "testkit"):
+        try:
+            _def_plugin(name)
+            _sv.unregister_plugin(name)
+            return False, f"予約名 '{name}' を乗っ取れてしまいました"
+        except _sv.PluginError as e:
+            if "予約名" not in str(e) and "組込" not in str(e):
+                return False, f"メッセージ不適切（{name}）: {e}"
+    # 予約名の登録が拒否されたので、beat_sync のモジュール参照は健全なまま
+    from importlib import import_module
+    try:
+        mod = import_module("scriptvedit.beat")
+    except ImportError:
+        mod = None  # numpy/scipy 不在。名前が奪われていないことは上で確認済み
+    if mod is not None and not hasattr(mod, "detect_beats"):
+        return False, "scriptvedit.beat が壊れています"
+    return True, "5つの予約名すべてを拒否"
+
+
+def check_ffp_no_disk_cache():
+    """ffp: 内容ハッシュのディスクキャッシュ(ffp.json)を持たない
+
+    (パス, サイズ, mtime) を参照キーにディスクへ永続化すると、mtime を保持する
+    コピー（cp -p / rsync -t / unzip -o 等）で同サイズの別内容へ差し替えたときに
+    古いハッシュを返し、内容ハッシュ化の目的そのものが破れる。
+    """
+    from scriptvedit import _ARTIFACT_DIR
+    from scriptvedit.cache import _FFP_MEMO
+    cache_root = os.path.dirname(_ARTIFACT_DIR)
+    ffp_json = os.path.join(cache_root, "ffp.json")
+    if os.path.exists(ffp_json):
+        return False, f"ffp.json が残っています: {ffp_json}"
+    tmp = tempfile.mkdtemp(prefix="svffp_")
+    try:
+        path = os.path.join(tmp, "a.bin")
+        with open(path, "wb") as f:
+            f.write(b"AAAA")
+        h1 = _file_fingerprint(path)
+        st = os.stat(path)
+        # 同サイズ・同mtimeの別内容へ差し替え（cp -p 相当）
+        with open(path, "wb") as f:
+            f.write(b"BBBB")
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        _FFP_MEMO.clear()  # 別プロセス（別レンダ）相当
+        h2 = _file_fingerprint(path)
+        if h1 == h2:
+            return False, "mtime保持の差し替えで古い指紋が返りました（ディスクキャッシュ残存）"
+        if os.path.exists(ffp_json):
+            return False, "ffp.json が生成されました"
+        return True, f"内容変更で指紋が更新される（{h1} → {h2}）"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def check_plugin_bakeable_checkpoint():
@@ -3404,8 +3475,9 @@ def check_formula_invalid_latex():
         ok = "LaTeX の構文エラー" in msg and "KaTeX" in msg and "\\frac{1}{" in msg
         return (True, msg.split("\n")[0]) if ok else (False, f"メッセージ不適切: {msg}")
     except RuntimeError as e:
-        # Playwright/Chromium が無い環境ではスキップ相当（親切なエラーであることは別checkで検証）
-        return True, f"Playwright未導入のためスキップ: {str(e).splitlines()[0]}"
+        # Playwright/Chromium が無い環境は正直に skip（PASS 扱いにしない）
+        # ※ 親切なエラーメッセージであること自体は check_formula_playwright_missing で検証
+        _skip(f"Playwright/Chromium 未導入: {str(e).splitlines()[0]}")
 
 
 def check_formula_bad_params():
@@ -3519,6 +3591,110 @@ def check_formula_katex_vendored():
     if "http://" in html or "https://" in html:
         return False, "テンプレートが外部URLを参照しています（オフライン動作不可）"
     return True, f"KaTeX同梱OK（フォント{len(fonts)}件・外部URL参照なし）"
+
+
+def check_formula_katex_fingerprint_includes_fonts():
+    """formula: KaTeXフォント(woff2)もキャッシュ鍵に入る（字形崩れPNGの焼き付き防止）"""
+    from scriptvedit.formula import _katex_fingerprint, _KATEX_DIR
+    from scriptvedit.cache import _FFP_MEMO
+    fonts_dir = os.path.join(_KATEX_DIR, "fonts")
+    fonts = sorted(f for f in os.listdir(fonts_dir) if f.endswith(".woff2"))
+    if not fonts:
+        return False, "KaTeXフォントがありません"
+    target = os.path.join(fonts_dir, fonts[0])
+    before = _katex_fingerprint()
+    with open(target, "rb") as f:
+        orig = f.read()
+    try:
+        with open(target, "wb") as f:
+            f.write(orig + b"\x00")  # フォントを壊す（内容を変える）
+        _FFP_MEMO.clear()  # 同一プロセス内メモ化を無効化
+        after = _katex_fingerprint()
+    finally:
+        with open(target, "wb") as f:
+            f.write(orig)
+        _FFP_MEMO.clear()
+    if before == after:
+        return False, "フォントを変更しても指紋が変わりません（鍵にフォントが入っていない）"
+    return True, f"フォント{len(fonts)}件が鍵に反映（{fonts[0]} 変更で指紋変化）"
+
+
+# --- 素材ディレクトリ解決（assets） ---
+
+def check_assets_dir_prefers_user_project():
+    """assets: 利用者プロジェクト(cwd)の assets/ がパッケージ同梱より優先される
+
+    想定運用: 動画編集用フォルダから scriptvedit をライブラリとして使い、
+    そのフォルダ固有の assets/ を持つ（editable install でリポジトリの assets/ に
+    奪われてはならない）。
+    """
+    from scriptvedit import assets_dir
+    tmp = tempfile.mkdtemp(prefix="svproj_")
+    img_dir = os.path.join(tmp, "assets", "images")
+    os.makedirs(img_dir)
+    logo = os.path.join(img_dir, "logo.png")
+    with open(logo, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n dummy")
+    old_cwd = os.getcwd()
+    old_env = os.environ.pop("SCRIPTVEDIT_ASSETS", None)
+    try:
+        os.chdir(tmp)
+        got_dir = assets_dir()
+        got = asset("images/logo.png")
+        if not os.path.samefile(got_dir, os.path.join(tmp, "assets")):
+            return False, f"利用者プロジェクトの assets/ が選ばれていません: {got_dir}"
+        if not os.path.samefile(got, logo):
+            return False, f"asset() が別ファイルを返しました: {got}"
+        # cwd を戻せばリポジトリの assets/ に追随する（キャッシュで固まらない）
+        os.chdir(old_cwd)
+        if os.path.samefile(assets_dir(), os.path.join(tmp, "assets")):
+            return False, "cwd を戻しても前回の assets/ を返しています（キャッシュ汚染）"
+        return True, f"利用者プロジェクト優先を確認: {got}"
+    finally:
+        os.chdir(old_cwd)
+        if old_env is not None:
+            os.environ["SCRIPTVEDIT_ASSETS"] = old_env
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --- thumbnail / storyboard ---
+
+def check_thumbnail_generates_formula_png():
+    """thumbnail(): formula の数式PNGが未生成でも生成される（render不要で完結する）"""
+    if shutil.which("ffmpeg") is None:
+        _skip("ffmpeg が無い環境")
+    try:
+        import playwright.sync_api  # noqa: F401
+    except ImportError:
+        _skip("Playwright が無い環境")
+    layer = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "layers", "test93_formula_thumb.py")
+    out = os.path.join(tempfile.gettempdir(), "sv_thumb_formula.png")
+    if os.path.exists(out):
+        os.remove(out)
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    p.layer(layer, priority=0)
+    try:
+        p.thumbnail(1.0, out)
+    except RuntimeError as e:
+        if "Chromium" in str(e):
+            _skip("Chromium 未導入")
+        raise
+    try:
+        if not os.path.exists(out):
+            return False, "サムネイルが生成されませんでした"
+        pngs = [o.source for o in p.objects
+                if isinstance(o, Object) and getattr(o, "_formula_spec", None)]
+        if not pngs:
+            return False, "formula Object が登録されていません"
+        missing = [s for s in pngs if not os.path.exists(s)]
+        if missing:
+            return False, f"数式PNGが生成されていません: {missing}"
+        return True, f"数式PNG {len(pngs)}件 + サムネイル生成OK"
+    finally:
+        if os.path.exists(out):
+            os.remove(out)
 
 
 # --- ケイパビリティ・マニフェスト（describe） ---
@@ -4103,6 +4279,9 @@ ALL_TESTS = [
     ("plugin スキーマ不正", check_plugin_bad_schema),
     ("plugin マニフェスト", check_plugin_manifest),
     ("plugin 名前空間注入", check_plugin_namespace_injection),
+    ("plugin 予約名(サブモジュール)禁止", check_plugin_reserved_submodule_name),
+    # --- キャッシュ鍵 ---
+    ("ffp ディスクキャッシュ撤廃", check_ffp_no_disk_cache),
     # --- 数式（formula） ---
     ("formula 不正LaTeX", check_formula_invalid_latex),
     ("formula 不正パラメータ", check_formula_bad_params),
@@ -4110,6 +4289,10 @@ ALL_TESTS = [
     ("formula 画像Object+Effect", check_formula_object_is_image),
     ("formula Playwright不在", check_formula_playwright_missing),
     ("formula KaTeX同梱", check_formula_katex_vendored),
+    ("formula 鍵にフォント含む", check_formula_katex_fingerprint_includes_fonts),
+    # --- 素材解決 / thumbnail ---
+    ("assets 利用者プロジェクト優先", check_assets_dir_prefers_user_project),
+    ("thumbnail 数式PNG生成", check_thumbnail_generates_formula_png),
     # --- ケイパビリティ・マニフェスト（describe） ---
     ("describe JSON化可能", check_describe_json_serializable),
     ("describe 網羅性: Effect", check_describe_effect_exhaustive),
@@ -4131,12 +4314,12 @@ ALL_TESTS = [
 ]
 
 
-import pytest
-
-
 @pytest.mark.parametrize("name,check", ALL_TESTS, ids=[n for n, _ in ALL_TESTS])
 def test_error_case(name, check):
-    """各エラーケースを pytest 経由で検証する（失敗時はメッセージを表示）"""
+    """各エラーケースを pytest 経由で検証する（失敗時はメッセージを表示）
+
+    check が pytest.skip() を投げた場合はそのまま skip になる（依存不在を隠さない）。
+    """
     ok, msg = check()
     assert ok, f"{name}: {msg}"
 
@@ -4145,13 +4328,19 @@ if __name__ == "__main__":
     print("エラーケーステスト")
     passed = 0
     failed = 0
+    skipped = 0
     for name, fn in ALL_TESTS:
-        ok, msg = fn()
+        try:
+            ok, msg = fn()
+        except pytest.skip.Exception as e:  # 依存不在は skip として集計
+            print(f"  {name}: SKIP - {str(e)[:80]}")
+            skipped += 1
+            continue
         status = "OK" if ok else "FAIL"
         print(f"  {name}: {status} - {msg[:80]}")
         if ok:
             passed += 1
         else:
             failed += 1
-    print(f"\n結果: {passed} passed, {failed} failed")
+    print(f"\n結果: {passed} passed, {failed} failed, {skipped} skipped")
     sys.exit(1 if failed else 0)

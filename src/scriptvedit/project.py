@@ -768,6 +768,9 @@ class Project:
         self._resolve_anchors()
         if self.duration is None:
             self.duration = self._calc_total_duration()
+        # render() と同じく数式PNG/Webクリップを先に実体化する
+        # （formula の PNG が無いと ffmpeg が "No such file or directory" で落ちる）
+        self._ensure_formula_objects()
         self._ensure_web_objects()
         self._ensure_checkpoints()
 
@@ -868,7 +871,9 @@ class Project:
         省略時はプレーンテキストのレポート文字列を返す（遅延 import）。
         """
         try:
-            from scriptvedit import viz as _svi
+            # 属性参照ではなくモジュール直接 import（プラグインの名前空間注入の影響を受けない）
+            from importlib import import_module as _import_module
+            _svi = _import_module("scriptvedit.viz")
         except ImportError as e:
             raise ImportError(
                 "inspect() には scriptvedit.viz が必要です。"

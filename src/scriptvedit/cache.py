@@ -15,7 +15,6 @@ import shutil as _shutil
 import concurrent.futures as _futures
 import inspect as _inspect
 import threading as _threading
-import atexit as _atexit
 
 from scriptvedit.state import _CACHE_DIR
 
@@ -26,20 +25,21 @@ from scriptvedit.state import _CACHE_DIR
 # 別マシンへの clone・ファイルのコピー・CRLF変換なしの touch ではキャッシュ鍵が
 # 変わらない（＝スナップショットが環境をまたいで一致する＝移植性）。
 #
-# 性能対策は2段構え:
-#   1) プロセス内メモ化（_FFP_MEMO）: 同一 render 中に同じファイルを再ハッシュしない
-#   2) ディスクキャッシュ（__cache__/ffp.json）: (絶対パス, サイズ, mtime_ns) →
-#      内容ハッシュ を記録。mtime が変わらない限り2回目以降は再ハッシュ不要。
-#      壊れていたら黙って捨てて再計算にフォールバックする（正しさは内容ハッシュ側が担保）。
+# 性能対策はプロセス内メモ化（_FFP_MEMO）のみ。
+#   同一 render 中に同じファイルを再ハッシュしないためのメモ化で、
+#   参照キーは (絶対パス, サイズ, mtime_ns)。
+#
+# ディスクキャッシュ（かつての __cache__/ffp.json）は**意図的に廃止**した。
+#   (絶対パス, サイズ, mtime_ns) を参照キーにディスクへ永続化すると、
+#   `cp -p` / `rsync -t` / `tar -x` / `unzip -o` など mtime を保持するツールで
+#   同サイズの別内容へ差し替えたときに古い内容ハッシュを返し、
+#   「素材を変えたのに再生成されない」= 内容ハッシュ化の目的そのものが破れる。
+#   実測でコールド 14.5ms（素材17件11.3MB）しかかからず、正しさとのトレードオフに
+#   見合わない。
+#   プロセス内メモ化も理屈は同じだが、単一レンダの実行中にファイルが差し替わる想定は
+#   非現実的なので許容する。
 _FFP_MEMO = {}
-_FFP_DISK = [None]         # 遅延ロードするディスクキャッシュ dict（None=未ロード）
-_FFP_DIRTY = [False]
 _FFP_LOCK = _threading.Lock()
-_FFP_CACHE_VER = 1
-
-
-def _ffp_cache_file():
-    return os.path.join(_CACHE_DIR, "ffp.json")
 
 
 def _hash_file_content(path):
@@ -49,50 +49,6 @@ def _hash_file_content(path):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()[:16]
-
-
-def _load_ffp_disk_cache():
-    """ディスクキャッシュを遅延ロード（呼び出し元で _FFP_LOCK 保持のこと）"""
-    if _FFP_DISK[0] is None:
-        entries = {}
-        try:
-            with open(_ffp_cache_file(), encoding="utf-8") as f:
-                data = json.load(f)
-            if (isinstance(data, dict) and data.get("v") == _FFP_CACHE_VER
-                    and isinstance(data.get("entries"), dict)):
-                entries = data["entries"]
-        except (OSError, ValueError):
-            entries = {}  # 破損・不在時は再計算にフォールバック
-        _FFP_DISK[0] = entries
-    return _FFP_DISK[0]
-
-
-def _flush_ffp_disk_cache():
-    """ディスクキャッシュをアトミックに書き出す（atexit / render後に呼ばれる）"""
-    with _FFP_LOCK:
-        if not _FFP_DIRTY[0] or not _FFP_DISK[0]:
-            return
-        entries = dict(_FFP_DISK[0])
-        _FFP_DIRTY[0] = False
-    path = _ffp_cache_file()
-    try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        # 他プロセスが書いた分をマージ（丸ごと上書きで失わないように）
-        try:
-            with open(path, encoding="utf-8") as f:
-                old = json.load(f)
-            if isinstance(old, dict) and old.get("v") == _FFP_CACHE_VER:
-                merged = dict(old.get("entries") or {})
-                merged.update(entries)
-                entries = merged
-        except (OSError, ValueError):
-            pass
-        tmp = f"{path}.tmp{os.getpid()}"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"v": _FFP_CACHE_VER, "entries": entries}, f)
-        os.replace(tmp, path)
-    except OSError:
-        pass  # キャッシュ書き出し失敗は致命的ではない
 
 
 def _file_fingerprint(path):
@@ -107,19 +63,10 @@ def _file_fingerprint(path):
         h = _FFP_MEMO.get(key)
         if h is not None:
             return h
-        h = _load_ffp_disk_cache().get(key)
-        if isinstance(h, str):
-            _FFP_MEMO[key] = h
-            return h
     h = _hash_file_content(path)  # I/O はロック外で
     with _FFP_LOCK:
         _FFP_MEMO[key] = h
-        _load_ffp_disk_cache()[key] = h
-        _FFP_DIRTY[0] = True
     return h
-
-
-_atexit.register(_flush_ffp_disk_cache)
 
 
 def _is_cache_artifact_path(path):
@@ -236,13 +183,33 @@ def _compute_save_points(ops):
     return save_points
 
 
+def _src_signature(path):
+    """ソース(素材/中間生成物)の署名。鍵本体・バケットで共通に使う唯一の方針。
+
+    - **キャッシュ生成物（__cache__配下）はパス署名**。パス自体が内容由来の鍵を
+      含むうえ、dry_run 時点では未生成でFFPが取れないため、内容指紋にすると
+      「実レンダ後だけ鍵が変わる」= dry_run と実レンダのパスが食い違う。
+    - **素材は内容指紋**（置き場所に依存しない＝移植性）。
+    - 読めない素材だけパス署名へフォールバック。
+    """
+    if _is_cache_artifact_path(path):
+        return f"src={_norm_src_path(path)}"
+    try:
+        return f"ffp={_file_fingerprint(path)}"
+    except (OSError, TypeError):
+        return f"src={_norm_src_path(path)}"
+
+
 def _src_bucket(path):
     """キャッシュ生成物を仕分けるサブディレクトリ名（8桁）
 
-    パス文字列ではなく内容指紋から導出するため、リポジトリを別の場所へ置いても
-    同じバケットになる（移植性）。指紋が取れない場合（dry_run 中の未生成キャッシュ
-    予定パスなど）だけ、パス文字列（cwd相対に正規化）で代用する。
+    素材は内容指紋から導出するため、リポジトリを別の場所へ置いても同じバケットに
+    なる（移植性）。ソースがキャッシュ生成物ならパスベース（_src_signature と同方針）。
+    バケットだけ方針を変えると、上流キャッシュ生成物を持つ下流アーティファクト
+    （morph/particle/checkpoint）のパスが __cache__ の有無で変わってしまう。
     """
+    if _is_cache_artifact_path(path):
+        return hashlib.sha256(_norm_src_path(path).encode()).hexdigest()[:8]
     try:
         return _file_fingerprint(path)[:8]
     except OSError:
@@ -262,11 +229,8 @@ def _norm_src_path(path):
 
 def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, quality="final"):
     """チェックポイントのキャッシュファイルパスを計算（signature方式）"""
-    try:
-        ffp = _file_fingerprint(original_source)
-        sigs = [f"ffp={ffp}"]
-    except OSError:
-        sigs = [f"src={_norm_src_path(original_source)}"]
+    # 素材=内容指紋 / キャッシュ生成物(web webm 等)=パス署名（dry_runと実レンダで鍵一致）
+    sigs = [_src_signature(original_source)]
     opfp = _op_prefix_fingerprint(ops)
     sigs.append(opfp)
     sigs.append(f"q={quality}")
@@ -287,15 +251,8 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
 
 def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     """morph WebMのキャッシュパスを計算"""
-    if _is_cache_artifact_path(src_path):
-        # キャッシュ生成物はパス自体が内容由来の鍵を含むため、常にパス文字列署名を使う
-        # （dry_runでは未生成でFFP不可→実レンダとの鍵不一致を防ぐ）
-        sigs = [f"src={_norm_src_path(src_path)}"]
-    else:
-        try:
-            sigs = [f"ffp={_file_fingerprint(src_path)}"]
-        except OSError:
-            sigs = [f"src={_norm_src_path(src_path)}"]
+    # キャッシュ生成物はパス署名、素材は内容指紋（_src_signature に一本化）
+    sigs = [_src_signature(src_path)]
     # ターゲットFFP
     if hasattr(morph_op, '_morph_target'):
         try:
@@ -318,13 +275,7 @@ def _particle_cache_path(img_path, particle_op, duration, fps, quality="final"):
 
     img_path: 粒子化する単一画像（explode=直前ソース, assemble=集合元）
     """
-    if _is_cache_artifact_path(img_path):
-        sigs = [f"src={_norm_src_path(img_path)}"]
-    else:
-        try:
-            sigs = [f"ffp={_file_fingerprint(img_path)}"]
-        except OSError:
-            sigs = [f"src={_norm_src_path(img_path)}"]
+    sigs = [_src_signature(img_path)]
     sigs.append(f"op={_op_fingerprint_str(particle_op)}")
     sigs.append(f"dur={duration}")
     sigs.append(f"fps={fps}")
@@ -346,11 +297,7 @@ def _morph_input_frame_path(src_path):
         # キャッシュ生成物: 拡張子差し替え（パス自体が内容由来の鍵を含む）
         return os.path.splitext(src_path)[0] + ".morphsrc.png"
     # 元素材が動画: キャッシュ配下に内容由来の鍵で生成
-    try:
-        sig = f"ffp={_file_fingerprint(src_path)}"
-    except OSError:
-        sig = f"src={_norm_src_path(src_path)}"
-    key = hashlib.sha256(sig.encode()).hexdigest()[:16]
+    key = hashlib.sha256(_src_signature(src_path).encode()).hexdigest()[:16]
     return os.path.join(_ARTIFACT_DIR, "morph", "src", f"{key}.png")
 
 

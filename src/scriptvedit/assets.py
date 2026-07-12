@@ -5,17 +5,25 @@
 本モジュールはリポジトリの `assets/` ディレクトリを自動発見し、
 `asset("images/onigiri_tenmusu.png")` のような相対指定を絶対パスへ解決する。
 
-解決順序:
+解決順序（**利用者プロジェクト優先**）:
   1. 環境変数 SCRIPTVEDIT_ASSETS（明示指定・最優先）
-  2. パッケージ位置から上方向に `assets/` を探索
+  2. カレントディレクトリから上方向に `assets/` を探索
+     （想定運用: 動画編集用フォルダから scriptvedit をライブラリとして使い、
+      そのフォルダ固有の assets/ を持つ）
+  3. 実行中のレイヤーファイルの位置から上方向に `assets/` を探索
+  4. パッケージ位置から上方向に `assets/` を探索
      （editable インストール: <repo>/src/scriptvedit/ → <repo>/assets）
-  3. カレントディレクトリから上方向に `assets/` を探索
+
+注意: パッケージ位置を先に見ると、editable インストール（標準構成）では
+リポジトリ同梱の assets/ が常に勝ち、利用者プロジェクトの assets/ が
+永久に無視される。この順序は逆転させないこと。
+結果はキャッシュしない（cwd 変更・レイヤー切替に追随できなくなるため。
+探索は isdir 数回で十分安い）。
 """
 import inspect as _inspect
 import os
 
 _ENV_VAR = "SCRIPTVEDIT_ASSETS"
-_CACHED_DIR = [None]
 
 
 def _search_up(start):
@@ -31,6 +39,19 @@ def _search_up(start):
         d = parent
 
 
+def _current_layer_dir():
+    """実行中のレイヤーファイルのディレクトリ（レイヤー外なら None）"""
+    try:
+        from scriptvedit.project import Project
+        proj = Project._current
+        cur = getattr(proj, "_current_layer_file", None) if proj is not None else None
+        if cur:
+            return os.path.dirname(os.path.abspath(cur))
+    except Exception:
+        pass
+    return None
+
+
 def assets_dir():
     """素材ディレクトリ(assets/)の絶対パスを返す。見つからなければ例外。"""
     env = os.environ.get(_ENV_VAR)
@@ -39,12 +60,14 @@ def assets_dir():
             raise FileNotFoundError(
                 f"環境変数 {_ENV_VAR} が指すディレクトリがありません: {env}")
         return os.path.abspath(env)
-    if _CACHED_DIR[0] and os.path.isdir(_CACHED_DIR[0]):
-        return _CACHED_DIR[0]
-    for start in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+    starts = [os.getcwd()]
+    layer_dir = _current_layer_dir()
+    if layer_dir:
+        starts.append(layer_dir)
+    starts.append(os.path.dirname(os.path.abspath(__file__)))
+    for start in starts:
         found = _search_up(start)
         if found:
-            _CACHED_DIR[0] = found
             return found
     raise FileNotFoundError(
         "素材ディレクトリ assets/ が見つかりません。\n"

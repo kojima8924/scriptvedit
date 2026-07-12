@@ -19,9 +19,19 @@ import inspect as _inspect
 # --- メディア情報ヘルパー ---
 
 def _get_media_dimensions(filepath):
-    """メディアの幅・高さを取得 (ffprobe)"""
+    """メディアの幅・高さを取得 (ffprobe)
+
+    dry_run では **キャッシュ生成物の寸法は常に不明扱い**にする。
+    生成物の寸法は生成後にしか分からないため、キャッシュの有無で dry_run の出力が
+    変わると「実レンダの後はスナップショットが落ちる」罠になる（scale の pad が
+    付いたり付かなかったりする）。dry_run の出力はキャッシュ状態に依存させない。
+    ※ 実レンダでは通常どおり probe され、pad（SEGVバリア）が正しく入る。
+    """
     if _is_pending_cache_path(filepath):
         # dry_run中の未生成キャッシュ予定パスはprobeしない（警告スパム防止）
+        return None, None
+    proj = Project._current
+    if getattr(proj, "_dry_run", False) and _is_cache_artifact_path(filepath):
         return None, None
     try:
         result = subprocess.run(
@@ -779,7 +789,7 @@ def _build_video_pre_filters(obj, label_prefix="pre"):
 
 
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
-from scriptvedit.cache import _is_pending_cache_path
+from scriptvedit.cache import _is_cache_artifact_path, _is_pending_cache_path
 from scriptvedit.expr import Const, Expr
 from scriptvedit.ffmpeg import _decoder_input_args
 from scriptvedit.plugins import _EFFECT_PLUGINS, _build_plugin_effect_filters
