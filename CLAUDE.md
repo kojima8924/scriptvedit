@@ -1,0 +1,239 @@
+# CLAUDE.md — コーディングAI向けの作業ガイド
+
+このリポジトリで作業する AI（Claude Code / Grok CLI 等）が、最初から正しい前提で
+動けるようにするための文書。**まず「2. 最初に読むもの」を実行すること。**
+
+## 1. プロジェクト概要
+
+Python の DSL で動画を構成し、ffmpeg でレンダリングするライブラリ。
+
+- **1ファイル = 1レイヤー**。`main.py` が構成（設定・レイヤー順・出力）だけを持ち、
+  各レイヤー `.py` が素材とエフェクトを宣言する。
+- 演算子オーバーロードによる DSL: `<=` 適用 / `&` Effect連結 / `|` Transform連結 /
+  `~` fast / `+` force / `-` cache off。
+- レイヤー .py の中で作った `Object` は exec 中に `Project` へ**自動登録**される。
+  `p.objects.append()` の手動追加はしない（render 時のレイヤー再実行で消える）。
+- パッケージ本体は `src/scriptvedit/`（29モジュール）。`pip install -e .` で
+  どのディレクトリからでも `from scriptvedit import *`。
+
+## 2. 最初に読むもの（最重要）
+
+**本体ソースを全部読む必要はない。** 使える機能・シグネチャ・制約は
+ケイパビリティ・マニフェストとして機械可読で取得できる。
+
+```bash
+python -m scriptvedit describe                        # 全機能を JSON で
+python -m scriptvedit describe --format md            # 人間/AI が読みやすい Markdown
+python -m scriptvedit describe --kind effect          # 種別で絞る
+python -m scriptvedit describe --name fade            # 単一エントリだけ
+```
+
+`--kind` は audio_effect / class / effect / expr / factory / meta / object_method /
+plugin / project_method / transform。
+
+出力に含まれるもの:
+
+- `usage` … 概念・main スクリプト雛形・レイヤー雛形・DSL・Expr・**プラグイン雛形**・CLI
+- `constraints` … 守らないと壊れる制約（severity: error/warning/info）
+- `effects`(39) / `transforms`(7) / `audio_effects`(7) / `factories`(29) /
+  `objects`(15) / `object_methods`(9) / `project_methods`(13) / `expr`(98) / `plugins`(3)
+
+各 Effect エントリには `bakeable` フィールドがあり、キャッシュに焼けるかが分かる。
+
+その他の CLI: `python -m scriptvedit cache`（統計/GC/全削除）、
+`python -m scriptvedit watch`（変更監視して再実行）。
+
+補足として `README.md` に DSL 記法と設計思想がまとまっている。
+
+## 3. 開発ワークフロー
+
+```bash
+pip install -e .[all]      # コアは標準ライブラリのみ。extras: morph/web/beat/tools
+pytest tests/              # 311件（約40秒）
+python tests/render_all.py # 実レンダリング（重い。出力は tests/output/）
+```
+
+### スナップショットテスト
+
+`tests/test_snapshot.py` は ffmpeg コマンド列を `tests/snapshots/*.json` と突き合わせる。
+
+```bash
+pytest tests/test_snapshot.py --snapshot-update   # 再生成
+```
+
+**再生成前に必ず差分を目視確認すること。** 意図しないコマンド変化を
+スナップショットごと上書きしてしまうと、退行がテストをすり抜ける。
+
+### 罠: 実レンダの後はキャッシュを消してからスナップショットを回す
+
+実レンダでチェックポイントが**実体化**すると、dry_run が生成する ffmpeg コマンドが
+変わり（キャッシュ済み中間ファイルを入力に使うようになる）、スナップショットが落ちる。
+
+```bash
+python -m scriptvedit cache --clear   # __cache__ を全削除
+pytest tests/
+```
+
+キャッシュはリポジトリルートの `__cache__/` に置かれる（`tests/conftest.py` が
+実行ディレクトリに依存しないようルートへ chdir する）。実レンダ出力は `tests/output/`。
+
+## 4. FFmpeg 8 の地雷（実装済みの回避策。壊さないこと）
+
+以下はすべて実測で踏み抜いた既知の不具合と、その回避策。**フィルタ生成に手を入れる
+ときは、これらを外さないこと。**
+
+### 4.1 `scale(eval=frame)` + `rotate` で SEGV (0xC0000005)
+
+`pad` や `format=rgba` **単体では防げない**。固定サイズ・中央配置の `pad` の直後に
+**`copy` フィルタ**を挟んでバッファを分離するのが唯一の回避策。
+
+- `src/scriptvedit/filters/video.py` L274-299 … pad サイズを scale 式の
+  101点サンプリング（`max(scale_expr.eval_at(i/100) for i in range(101))`）で決定し、
+  `pad=max_w:max_h:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame` → **`copy`**(L298)。
+- 同じバリアが `ken_burns` にも必要（同 L436）。
+
+### 4.2 overlay は全て `eof_action=pass`、start>0 の映像入力に `tpad`
+
+overlay の既定 `eof_action=repeat` は `enable` と組み合わせると誤動作し、
+enable=false の区間でも最終フレームが合成され続ける。全 overlay で
+`eof_action=pass` を使う（`filters/video.py` L169, L183, L458, L477, L567）。
+
+開始が 0 より後の映像入力には `tpad=start_duration=N:start_mode=clone` を入れる
+（同 L125-126）。**`tpad` は trim/setpts の「後」に挿入すること** — 前に置くと
+trim がクローンフレーム込みで尺を切ってしまう。
+※ `blend` 側は `eof_action=repeat` のままで正しい（L496, L523）。
+
+### 4.3 drawtext の fontsize 式アニメは SEGV
+
+`text` / `typewriter` / `counter` の `size` は**定数のみ**。Expr/lambda は構築時に
+`ValueError` で弾かれる（`src/scriptvedit/text.py` L91-100 `_validate_text_size`）。
+x / y / alpha のアニメーションは安全。文字サイズを変えたいときは `scale()` Effect を使う。
+
+### 4.4 `movie=` の1フレーム入力を blend に渡すと式の `T` が約5倍速で進む
+
+framesync のタイムベース評価が壊れるため、メイン入力と同じタイムベースへ正規化する:
+`movie=filename=...,loop=loop=-1:size=1,fps={fps},setpts=N/({fps}*TB)`
+（`filters/video.py` L517-518、`mask_wipe`）。無限ループは各レンダ経路の `-t` で打ち切られる。
+※ T 非依存の素の `mask`(L482-498) は正規化不要。
+
+### 4.5 ネイティブ VP9 デコーダは alpha 非対応
+
+`.webm` 入力には `-c:v libvpx-vp9` を付ける。入力側の分岐は
+`src/scriptvedit/ffmpeg.py` L109-121 `_decoder_input_args` に一本化されている。
+
+### 4.6 長大フィルタは Windows のコマンドライン長制限に当たる
+
+4000文字以上の `-filter_complex` / `-vf` / `-af` は一時ファイルへ書き出し、
+FFmpeg 8 の `-/filter_complex <path>` 構文に自動で切り替える
+（`ffmpeg.py` L19 `_FILTER_SCRIPT_THRESHOLD = 4000`、L22-41 `_externalize_long_filters`、
+`_run_ffmpeg` が finally で一時ファイルを削除）。
+
+## 5. 設計規約（コードを変更するときに守ること）
+
+### bakeable / live
+
+Effect は2種類ある。
+
+- **bakeable** … 中間ファイル（チェックポイント）へ焼き込みキャッシュできる。
+  `src/scriptvedit/state.py` L111-115 の `_BAKEABLE_EFFECTS`（24件）に名前を登録すると
+  キャッシュ対象になる。Transform は全て bakeable。
+- **live** … 毎レンダで ffmpeg フィルタとして適用する。`speed` / `reverse` /
+  `freeze_frame`（`_TIME_LIVE_EFFECTS`）は時間軸を変えるためチェックポイントの
+  尺基準と衝突する。`move` / `shake` は overlay 座標の変調なので焼けない。
+
+判定は `cache.py` L203-209 `_is_bakeable`。**新しい Effect が本当に「焼いても同じ絵に
+なる」ものかを確かめてから登録すること。** 時間依存の尺変更を伴うものは live のまま。
+
+`morph_to` / `explode_to` / `assemble_from` は終端フレーム生成 Effect
+（`_TERMINAL_FRAME_EFFECTS`）で、bakeable な ops の末尾に1つだけ置ける。
+
+### キャッシュ鍵（フィンガープリント）
+
+- **素材は内容ハッシュ**（sha256 先頭16桁、`cache.py` L98-119 `_file_fingerprint`）。
+  パスにも mtime にも依存しない。別マシンへ clone してもキャッシュ鍵が変わらない
+  ＝スナップショットが環境をまたいで一致する。
+  （mtime はディスクキャッシュ `__cache__/ffp.json` の**参照キー**としてだけ使う。
+  返る指紋の値は内容のみに依存する。）
+- **パラメータは `_op_fingerprint_str`**（`cache.py` L147-191）。
+- **生パスを鍵に混ぜないこと**（リポジトリの置き場所でキャッシュ鍵が変わり移植性が壊れる）。
+  パスを取るパラメータは `_OP_PATH_PARAMS`(L144) で除外し、代わりに内容指紋
+  （`lut_ffp` / `mask_ffp` / `tgt_ffp` / `asm_ffp`）を混ぜる。プラグインは
+  ビルダー関数のコード指紋 `plugin_ffp` を混ぜる。
+  素材が読めない場合のみ `_norm_src_path`（cwd相対・`/`区切りへ正規化）へフォールバックする。
+- `policy` は鍵に含めない（意図的）。`quality` は含める。
+
+### キャッシュ書き込みは原子的に
+
+`_run_ffmpeg_to_cache`（`ffmpeg.py` L57-84）を使う。一時パス `<base>.tmp<ext>` へ書いて
+成功時に `os.replace` する。**最終パスへ直接書かない**（中断すると壊れたファイルが
+キャッシュとして残り、次回以降ずっと使われてしまう）。コマンド中に cache_path が
+現れなければ `ValueError` で即失敗する（置換漏れの検出）。
+
+### pad でキャンバスを広げたら `pad_size` を更新する
+
+overlay の中央配置は `(W-pad_size[0])/2` で計算される（`filters/video.py` L581-601
+`_build_move_exprs`）。キャンバスを広げる Effect が `pad_size` を更新しないと配置がずれる。
+既存例: `drop_shadow`(L460-463) / `outline`(L479-481) / `rounded`(L570)。
+プラグインからは `ctx["expand_pad"](dw, dh)` / `ctx["set_pad"](w, h)` を使う。
+
+### その他
+
+- **u 正規化**: エフェクト進行度は `clip((T-start)/dur, 0, 1)` で 0..1 に正規化する
+  （`filters/video.py` L268, L309, L316）。
+- **`_resolve_obj_duration`**（`project.py` L1814-1834）は `obj.length()` ベース。
+  trim / atempo を反映した加工後の尺を返す（チェックポイントのベイクと同一基準）。
+  0 は返さない（`clip((t-start)/0,…)` のゼロ除算で ffmpeg が EINVAL になるため、
+  fallback=5 へ落とす）。
+- **素材参照は `asset()` / `here()` を使う**（`src/scriptvedit/assets.py`）。cwd 依存にしない。
+  - `asset("images/bg.jpg")` … リポジトリの `assets/` を自動発見して絶対パスを返す。
+    環境変数 `SCRIPTVEDIT_ASSETS` で明示も可。存在しなければ近い名前を提案して
+    `FileNotFoundError`。
+  - `here("scene.html")` … 実行中のレイヤーファイルと同じディレクトリ。
+  - `p.layer("bg.py")` も cwd 非依存に解決される。
+
+## 6. 機能を追加するときの判断フロー
+
+1. **まず `python -m scriptvedit describe` で既存機能を確認する。**
+   39 の Effect と 98 の Expr が既にある。車輪の再発明を避ける。
+2. **その動画プロジェクト固有の一発ネタ → `plugins/*.py` に `@effect_plugin`。**
+   コアを汚さない。`plugins/` は自動読込され、`from scriptvedit import *` で使える。
+   雛形は `describe` の `usage.plugin_template` にある。参考実装:
+   `plugins/example_neon.py` / `example_scanline.py` / `example_photo_frame.py`。
+
+   ```python
+   from scriptvedit import effect_plugin
+
+   @effect_plugin("my_glow", bakeable=True, category="視覚効果",
+                  params={"radius": {"type": "number", "default": 10,
+                                     "min": 0, "max": 200, "desc": "ぼかし半径"}})
+   def build_my_glow(params, ctx):
+       """自作グロー（この1行目が要約としてマニフェストに載る）"""
+       return [f"gblur=sigma={params['radius']}"]
+   ```
+
+   `ctx` には `u` / `u_T` / `start` / `dur` / `fps` / `width` / `height` / `label` /
+   `obj` / `project` / `parse_color` / `escape_path` / `pad_size` / `expand_pad` /
+   `set_pad` が入る。ビルダーは ffmpeg フィルタ文字列の `list` を返す。
+3. **汎用的な機能 → `src/scriptvedit/effects/` 等のコアへ。**
+   必ず `tests/` にスナップショット + エラーケースを追加する
+   （`tests/layers/testNN_*.py` にレイヤーを置き、`test_snapshot.py` / `test_errors.py` に登録）。
+4. **マニフェストへの掲載は自動。** 網羅性テストが載せ忘れを検出するので、
+   `manifest.py` を手で書き足す必要は基本的にない。
+
+## 7. コーディング規約
+
+- **UTF-8 / CRLF**。
+- **コメント・docstring・コミットメッセージは日本語。**
+- コミットには `Co-Authored-By: Claude <noreply@anthropic.com>` 相当を含める。
+- Expr の中で Python の `math.sin` 等を使わない。scriptvedit の `sin`/`cos`/`lerp`/`clip`
+  （Expr を返す）を使う。
+
+## 8. やってはいけないこと
+
+- **勝手に `git push` しない。** pre-push フックが `scripts/upload_to_server.py` を呼び、
+  環境変数 `LOLIPOP_FTP_PASS` が設定されていると**全ソースを公開FTPサーバへ
+  アップロードする**（毎回、全削除→全アップロード）。push は明示的に指示されたときだけ。
+- **差分を目視確認せずに `--snapshot-update` しない。**
+- **後方互換のための互換シムを増やさない。** このプロジェクトは後方互換不要の方針。
+  古い API を残すのではなく、呼び出し側を新しい形に直す。
+- `p.objects.append()` でオブジェクトを手動追加しない（レイヤー再実行で消える）。
