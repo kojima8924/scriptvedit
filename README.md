@@ -953,3 +953,26 @@ python test01_main.py          # 個別テスト（MP4生成）
 - numpy + PIL（`svtestkit` の SSIM検証。scipy は任意で高速化）
 - Pillow（`storyboard` 使用時）
 - VOICEVOX エンジン（`voice` / `narrate` 使用時。svtts.py 経由）
+
+## ロードマップ
+
+scriptvedit は「Python DSL として書いていて楽しく、かつコーディングAIが駆動しやすい動画エディタ」を目指している。今後の方向:
+
+### AI駆動・その場で機能追加
+- **ケイパビリティ・マニフェスト**: `--describe` で全 Effect/Transform のシグネチャ・引数レンジ・bakeable/live 区分を JSON Schema で出力し、AIが本体全体を読まずに機能を発見できるようにする。
+- **プラグイン機構**: `@effect` デコレータで、コア（scriptvedit.py）を編集せず `plugins/*.py` に新エフェクトを登録。人にもAIにも「機能をその場で足す」コストを下げる。
+- **MCPサーバー化**: `list_effects` / `render` / `preview_frame` / `describe_project` をツールとして公開し、AIがレンダ→フレーム確認→調整のループを回せるようにする。
+- **JSON中間表現**: Python DSL ⇄ JSON プロジェクトの双方向変換。AIは構造化データを、人はDSLを扱う。
+
+### 教育・解説動画向けの表現力
+- **数式レンダリング** `formula(r"...")`: LaTeX/mathtext → 透過PNG。
+- **キャラクター立ち絵の口パク/まばたき** `character(sprite, voice)`: TTSナレーションに同期。
+- **数学ダイアグラム拡張**: 数直線・関数グラフ・格子・幾何作図・木構造、証明の逐次リビール。
+
+### DSLの遊び
+- 時間スライス `obj[2:5]`（trim）/ `obj[1.5]`（freeze）/ `obj[::-1]`（reverse）。
+- 単位リテラル `3*s` / `500*ms` / `2*beats`（svbeat連携）。
+- `>>`（時間直列）/ `@`（座標配置）などの糖衣（読みやすい通常メソッドの別名として提供）。
+
+### OSS化
+- pip パッケージ化、docsサイト、プラグインエコシステム（プラグイン機構と地続き）。

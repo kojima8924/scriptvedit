@@ -29,3 +29,6 @@ guitar_noaudio.mp4
 # ライセンス未確認の素材
 sample/nc342423_*.mp3
 sample/computer_screen_programming.png
+
+# Claude 引き継ぎ保存データ(個人メモ・ローカル限定、公開しない)
+Claude_backup_*.md
