@@ -1,0 +1,121 @@
+# -*- coding: utf-8 -*-
+
+import subprocess
+import os
+import re
+import sys
+import json
+import hashlib
+import math as _math
+import warnings
+import builtins as _builtins
+import time as _time
+import difflib as _difflib
+import shutil as _shutil
+import concurrent.futures as _futures
+import inspect as _inspect
+
+
+def morph_to(target, blend=None, **morph_params):
+    """モーフィングEffect: 画像→画像の最適輸送モーフ動画を生成"""
+    if not isinstance(target, Object):
+        raise TypeError(f"morph_to の target は Object のみ: {type(target)}")
+    # パラメータのタイポはレンダ深部（チェックポイント生成後）ではなく
+    # 構築時点で検出する。morph モジュールが無い環境ではレンダ時に検出される
+    try:
+        from morph import MORPH_PARAM_KEYS
+    except ImportError:
+        pass
+    else:
+        unknown = set(morph_params) - set(MORPH_PARAM_KEYS)
+        if unknown:
+            raise ValueError(
+                f"morph_to: 未知のパラメータ {sorted(unknown)}"
+                f"（有効なキー: {sorted(MORPH_PARAM_KEYS)}）"
+            )
+    # ターゲットObjectをProjectから除外（morphに消費される）
+    proj = Project._current
+    if proj is not None and target in proj.objects:
+        proj.objects.remove(target)
+        warnings.warn(
+            f"morph_to: ターゲット '{target.source}' はモーフィングに消費されるため"
+            f"Projectから自動的に除外されました。"
+        )
+    # ターゲット素材をレイヤー依存として記録（objectsから除外されるため
+    # _layer_sourcesの通常記録に載らず、キャッシュ鮮度検証から漏れるのを防ぐ）
+    if proj is not None and proj._current_layer_file:
+        tgt_deps = getattr(target, '_origin_sources', None) or [target.source]
+        proj._extra_layer_deps.setdefault(
+            proj._current_layer_file, []).extend(tgt_deps)
+    if blend is None:
+        blend = _resolve_param(lambda u: u * u * (3 - 2 * u))
+    else:
+        blend = _resolve_param(blend)
+    eff = Effect("morph_to", blend=blend, **morph_params)
+    eff._morph_target = target
+    return eff
+
+
+def _check_particle_params(func, params):
+    """explode_to/assemble_from のパラメータのタイポを構築時に検出"""
+    try:
+        from morph import PARTICLE_PARAM_KEYS
+    except ImportError:
+        return
+    unknown = set(params) - set(PARTICLE_PARAM_KEYS)
+    if unknown:
+        raise ValueError(
+            f"{func}: 未知のパラメータ {sorted(unknown)}"
+            f"（有効なキー: {sorted(PARTICLE_PARAM_KEYS)}）")
+
+
+def explode_to(blend=None, **particle_params):
+    """パーティクル飛散Effect: 適用対象自身が粒子化して飛散する。
+
+    morph_to と同じ機構でベイクされる（中間フレーム抽出→mkvキャッシュ）。
+    bakeable opsの末尾に配置する必要がある。blend で進行カーブを指定できる。
+    particle_params: max_pixels, speed, gravity, spread, swirl,
+      particle_size, seed, dissolve, expand。
+    """
+    _check_particle_params("explode_to", particle_params)
+    if blend is None:
+        blend = _resolve_param(lambda u: u)
+    else:
+        blend = _resolve_param(blend)
+    return Effect("explode_to", blend=blend, **particle_params)
+
+
+def assemble_from(source, blend=None, **particle_params):
+    """パーティクル集合Effect: source の粒子が集合して画像になる。
+
+    適用したObjectは「source が集合していくアニメーション」に置き換わる
+    （source はモーフ同様Projectから消費される）。morph_to と同じベイク機構。
+    bakeable opsの末尾に配置する。
+    """
+    if not isinstance(source, Object):
+        raise TypeError(f"assemble_from の source は Object のみ: {type(source)}")
+    _check_particle_params("assemble_from", particle_params)
+    proj = Project._current
+    if proj is not None and source in proj.objects:
+        proj.objects.remove(source)
+        warnings.warn(
+            f"assemble_from: source '{source.source}' は集合アニメに消費されるため"
+            f"Projectから自動的に除外されました。")
+    # source素材をレイヤー依存として記録（objectsから外れるため鮮度検証に載せる）
+    if proj is not None and proj._current_layer_file:
+        src_deps = getattr(source, '_origin_sources', None) or [source.source]
+        proj._extra_layer_deps.setdefault(
+            proj._current_layer_file, []).extend(src_deps)
+    if blend is None:
+        blend = _resolve_param(lambda u: u)
+    else:
+        blend = _resolve_param(blend)
+    eff = Effect("assemble_from", blend=blend, **particle_params)
+    eff._assemble_source = source
+    return eff
+
+
+# --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
+from scriptvedit.expr import _resolve_param
+from scriptvedit.objects import Effect, Object
+from scriptvedit.project import Project

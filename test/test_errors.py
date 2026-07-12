@@ -3391,13 +3391,18 @@ _OP_SECTIONS = (("effects", "effect"), ("transforms", "transform"),
 def _ground_truth_ops():
     """実装コードから「存在しうる操作名」を機械的に抽出する（網羅性検証の正解集合）。
 
-    scriptvedit.py 内で構築される Effect("x")/Transform("x")/AudioEffect("x") の
-    全リテラルに加え、_BAKEABLE_EFFECTS 等のレジストリも突き合わせる。
+    scriptvedit パッケージ内で構築される Effect("x")/Transform("x")/AudioEffect("x")
+    の全リテラルに加え、_BAKEABLE_EFFECTS 等のレジストリも突き合わせる。
     将来 Effect を足してマニフェストに載せ忘れたら、このテストが落ちる。
     """
-    src_path = os.path.join(_REPO_ROOT, "scriptvedit.py")
-    with open(src_path, encoding="utf-8") as f:
-        src = f.read()
+    # パッケージの全 .py を走査（分割後はモジュールをまたいで定義される）
+    pkg_dir = os.path.dirname(os.path.abspath(sv.__file__))
+    src = ""
+    for root, _dirs, files in os.walk(pkg_dir):
+        for fn in sorted(files):
+            if fn.endswith(".py"):
+                with open(os.path.join(root, fn), encoding="utf-8") as f:
+                    src += f.read() + "\n"
     kinds = {"Effect": "effect", "Transform": "transform",
              "AudioEffect": "audio_effect"}
     ground = {"effect": set(), "transform": set(), "audio_effect": set()}

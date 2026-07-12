@@ -32,3 +32,8 @@ sample/computer_screen_programming.png
 
 # Claude 引き継ぎ保存データ(個人メモ・ローカル限定、公開しない)
 Claude_backup_*.md
+
+# パッケージビルド成果物
+src/*.egg-info/
+build/
+dist/

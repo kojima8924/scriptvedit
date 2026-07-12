@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scriptvedit"
+version = "0.1.0"
+description = "スクリプト（Python DSL）から ffmpeg で動画を組み立てるビデオエディタ"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "kojima8924" }]
+# コア（Project/Object/Effect/ffmpeg 呼び出し）は標準ライブラリのみで動作する。
+# 追加機能は extras で導入する。
+dependencies = []
+
+[project.optional-dependencies]
+# morph_to / explode_to / assemble_from（モーフィング・パーティクル）
+morph = ["numpy", "scipy", "opencv-python", "Pillow"]
+# web Object / slide / テンプレート（HTML レンダリング）
+web = ["playwright"]
+# ビート検出（beat_sync）
+beat = ["numpy"]
+# 進捗表示・検証ツール
+tools = ["tqdm", "numpy", "opencv-python"]
+all = ["numpy", "scipy", "opencv-python", "Pillow", "playwright", "tqdm"]
+
+[project.scripts]
+scriptvedit = "scriptvedit.cli:_main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+scriptvedit = ["templates/*.html"]
