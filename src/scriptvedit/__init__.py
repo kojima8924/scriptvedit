@@ -79,11 +79,16 @@ __all__ = [
     "plugin_manifest", "PluginError",
     # ケイパビリティ・マニフェスト
     "describe", "describe_markdown", "MANIFEST_VERSION",
+    # 素材・パス解決（cwd 非依存）
+    "asset", "assets_dir", "here",
 ]
 
 
 # --- 各サブモジュールから全名（内部名を含む）を集約する ---
 # 旧 scriptvedit.py 単一モジュールと同じ属性集合を保つ（テスト/外部ツールが内部名を参照する）
+from scriptvedit.assets import (  # noqa: F401
+    asset, assets_dir, here, resolve_layer_path,
+)
 from scriptvedit.state import (  # noqa: F401
     _ACTIVE_QUALITY, _ARTIFACT_DIR, _AUDIO_EXTS, _AVAILABLE_ENCODERS, _BAKEABLE_EFFECTS,
     _CACHE_DIR, _CHECKPOINT_DIR, _CONFIGURE_KEYS, _ENCODER_MAP, _ENGINE_VER, _GEN_COUNTER,

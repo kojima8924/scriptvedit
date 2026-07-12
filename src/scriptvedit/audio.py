@@ -149,17 +149,17 @@ def voice(text, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0, **tts_kwargs):
     """svtts(VOICEVOX)で text を音声合成し、その wav を素材とする音声Objectを返す。
 
     duration は tts_duration による実長を自動設定するため、字幕・タイムラインと
-    自然に同期する。svtts.py が無い/VOICEVOX 未起動なら親切なエラーを投げる。
+    自然に同期する。scriptvedit.tts が使えない/VOICEVOX 未起動なら親切なエラーを投げる。
 
     使用例:
         v = voice("こんにちは、世界", speaker=3)
         v.show(v.duration)
     """
     try:
-        import svtts as _svtts
+        from scriptvedit import tts as _svtts
     except ImportError as e:
         raise ImportError(
-            "voice() には svtts.py が必要です。"
+            "voice() には scriptvedit.tts (VOICEVOX) が必要です。"
             "scriptvedit.py と同じディレクトリに配置してください。") from e
     wav = _svtts.tts(text, speaker=speaker, speed=speed, pitch=pitch, **tts_kwargs)
     dur = _svtts.tts_duration(wav)
@@ -216,17 +216,17 @@ def narrate(text_content, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0,
     volume/pitch/**tts_kwargs は voice() と同じ意味で音声側にのみ作用する。
 
     戻り値: Narration(audio, subtitle) （タプルとして (a, t) = narrate(...) も可）。
-    svtts.py が無い/VOICEVOX未起動時のエラーはvoice()同様に透過する。
+    scriptvedit.tts が使えない/VOICEVOX未起動時のエラーはvoice()同様に透過する。
 
     使用例:
         n = narrate("こんにちは、世界", speaker=3)
         # n.audio / n.subtitle、または audio, sub = narrate(...)
     """
     try:
-        import svtts as _svtts
+        from scriptvedit import tts as _svtts
     except ImportError as e:
         raise ImportError(
-            "narrate() には svtts.py が必要です。"
+            "narrate() には scriptvedit.tts (VOICEVOX) が必要です。"
             "scriptvedit.py と同じディレクトリに配置してください。") from e
     wav = _svtts.tts(text_content, speaker=speaker, speed=speed, pitch=pitch,
                      **tts_kwargs)
@@ -303,18 +303,18 @@ def audio_viz(source, *, kind="waves", color="white", size=None, duration=None):
 
 
 def beat_sync(audio_source, *, min_bpm=60, max_bpm=200):
-    """svbeat(numpy/scipyのみのビート検出)をDSLに統合し、拍時刻を返す。
+    """scriptvedit.beat(numpy/scipyのみのビート検出)をDSLに統合し、拍時刻を返す。
 
-    audio_source: 音声/動画ファイルパス（svbeatがffmpegでデコードする）
-    min_bpm/max_bpm: svbeat.detect_beatsに渡すテンポ探索範囲
+    audio_source: 音声/動画ファイルパス（scriptvedit.beat がffmpegでデコードする）
+    min_bpm/max_bpm: scriptvedit.beat.detect_beats に渡すテンポ探索範囲
 
     戻り値: {"bpm": float, "beats": [秒,...], "onsets": [秒,...], "duration": float}
-    （svbeat.detect_beats() と同じ形式。そのまま snap_times()/beats_to_keyframes()
+    （detect_beats() と同じ形式。そのまま snap_times()/beats_to_keyframes()
     に渡せる）
 
     解析結果は audio_source のFFP + min_bpm/max_bpm をキーに
     __cache__/artifacts/beats/ へJSONキャッシュし、同じ入力の再解析を避ける。
-    svbeat.py または numpy/scipy が無い場合は導入方法を含む日本語エラーにする。
+    numpy/scipy が無い場合は導入方法を含む日本語エラーにする。
     """
     if not isinstance(audio_source, str):
         raise TypeError(
@@ -323,12 +323,12 @@ def beat_sync(audio_source, *, min_bpm=60, max_bpm=200):
         raise FileNotFoundError(
             f"beat_sync: 音声/動画ファイルが見つかりません: {audio_source}")
     try:
-        import svbeat as _svbeat
+        from scriptvedit import beat as _svbeat
     except ImportError as e:
         raise ImportError(
-            "beat_sync() には svbeat.py と numpy/scipy が必要です。\n"
-            "scriptvedit.py と同じディレクトリに svbeat.py を配置し、"
-            "`pip install numpy scipy` を実行してください。"
+            "beat_sync() には numpy/scipy が必要です。\n"
+            "`pip install numpy scipy`（または `pip install scriptvedit[beat]`）"
+            "を実行してください。"
             f"(元エラー: {e})") from e
 
     sig = _source_signature(audio_source)

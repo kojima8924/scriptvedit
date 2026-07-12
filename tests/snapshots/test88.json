@@ -1,0 +1,47 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=1280x720:d=2:r=30",
+    "-i",
+    "__cache__/artifacts/checkpoint/7a9b4391/82f8cb86d2da8a80.mkv",
+    "-filter_complex",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,2)'[v1]",
+    "-map",
+    "[v1]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "2",
+    "test88.mp4"
+  ],
+  "cache": {
+    "__cache__/artifacts/checkpoint/7a9b4391/82f8cb86d2da8a80.mkv": [
+      "ffmpeg",
+      "-y",
+      "-loop",
+      "1",
+      "-r",
+      "30",
+      "-i",
+      "assets/images/onigiri_tenmusu.png",
+      "-vf",
+      "scale=iw*0.5:ih*0.5,format=rgba,split[fxe0a][fxe0b];[fxe0b]geq=r='0*(r(X/,Y)/255)':g='255*(g(X/,Y)/255)':b='255*(b(X/,Y)/255)':a='alpha(X/,Y)',gblur=sigma=8,geq=r='clip(r(X/,Y)*clip((0.5+clip((T-0)/2/,0/,1))/,0/,4)/,0/,255)':g='clip(g(X/,Y)*clip((0.5+clip((T-0)/2/,0/,1))/,0/,4)/,0/,255)':b='clip(b(X/,Y)*clip((0.5+clip((T-0)/2/,0/,1))/,0/,4)/,0/,255)':a='alpha(X/,Y)'[fxe0g];[fxe0a][fxe0g]blend=all_mode=screen:all_opacity=1,format=rgba,geq=r='r(X/,Y)*(1-clip(clip((T-0)/2/,0/,1)/,0/,1)*lt(mod(Y+30*(T-0)/,6)/,6/2))':g='g(X/,Y)*(1-clip(clip((T-0)/2/,0/,1)/,0/,1)*lt(mod(Y+30*(T-0)/,6)/,6/2))':b='b(X/,Y)*(1-clip(clip((T-0)/2/,0/,1)/,0/,1)*lt(mod(Y+30*(T-0)/,6)/,6/2))':a='alpha(X/,Y)'",
+      "-c:v",
+      "ffv1",
+      "-level",
+      "3",
+      "-pix_fmt",
+      "yuva444p",
+      "-t",
+      "2",
+      "__cache__/artifacts/checkpoint/7a9b4391/82f8cb86d2da8a80.mkv"
+    ]
+  }
+}

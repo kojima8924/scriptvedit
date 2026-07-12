@@ -1,0 +1,47 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=1280x720:d=3:r=30",
+    "-i",
+    "__cache__/artifacts/checkpoint/7a9b4391/bcee6887d2f56caa.mkv",
+    "-filter_complex",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v1]",
+    "-map",
+    "[v1]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "3",
+    "test30.mp4"
+  ],
+  "cache": {
+    "__cache__/artifacts/checkpoint/7a9b4391/bcee6887d2f56caa.mkv": [
+      "ffmpeg",
+      "-y",
+      "-loop",
+      "1",
+      "-r",
+      "30",
+      "-i",
+      "assets/images/onigiri_tenmusu.png",
+      "-vf",
+      "scale=iw*0.3:ih*0.3,scale=w='trunc(iw*((1+(0.5*sin((clip((t-0)/3/,0/,1)*3.141592653589793)))))/2)*2':h='trunc(ih*((1+(0.5*sin((clip((t-0)/3/,0/,1)*3.141592653589793)))))/2)*2':eval=frame,format=rgba,pad=290:360:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy",
+      "-c:v",
+      "ffv1",
+      "-level",
+      "3",
+      "-pix_fmt",
+      "yuva444p",
+      "-t",
+      "3",
+      "__cache__/artifacts/checkpoint/7a9b4391/bcee6887d2f56caa.mkv"
+    ]
+  }
+}

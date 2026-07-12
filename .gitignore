@@ -7,28 +7,28 @@ __cache__/
 
 # レンダリング出力・検証フレーム(生成物)
 output.mp4
+output_showcase.mp4
 check_frames/
-test/output/
-test/*.mp4
-test/frame*.png
-sample/output*.mp4
-sample/frame_*.png
-sample/thumb_*.png
-sample/video_frame_*.png
-sample/showcase_thumbnail.png
-sample/slides/
+tests/output/
+tests/layers/*.mp4
+tests/layers/frame*.png
+examples/showcase/frame_*.png
+examples/showcase/thumb_*.png
+examples/showcase/video_frame_*.png
+examples/showcase/showcase_thumbnail.png
+examples/showcase/slides/*.png
 
 # アーカイブ
 *.zip
 
-# 未参照の大容量素材(必要になったら個別に追跡する)
+# 大容量素材(git 管理外。テストで参照するものはローカルに置く)
 free-video*.mp4
-flowerbg_noaudio.mp4
-guitar_noaudio.mp4
+assets/video/flowerbg_noaudio.mp4
+assets/video/guitar_noaudio.mp4
 
 # ライセンス未確認の素材
-sample/nc342423_*.mp3
-sample/computer_screen_programming.png
+assets/audio/nc342423_*.mp3
+assets/images/computer_screen_programming.png
 
 # Claude 引き継ぎ保存データ(個人メモ・ローカル限定、公開しない)
 Claude_backup_*.md

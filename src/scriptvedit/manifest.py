@@ -613,6 +613,8 @@ def _manifest_constructed_names(fn):
 _MANIFEST_META_NAMES = {
     "describe", "describe_markdown", "plugin_manifest", "effect_plugin",
     "load_plugin", "load_plugins", "unregister_plugin",
+    # 素材・パス解決（cwd 非依存）
+    "asset", "assets_dir", "here",
 }
 
 # 内部にしか存在しない（公開ファクトリを持たない）操作の宣言

@@ -475,9 +475,14 @@ class Project:
             return None
 
     def layer(self, filename, priority=0, cache="off"):
-        """レイヤーファイルを登録（実行はrender時に遅延）"""
+        """レイヤーファイルを登録（実行はrender時に遅延）
+
+        filename は cwd 相対でも、呼び出し元スクリプト/実行中レイヤーからの
+        相対でも解決される（どのディレクトリから実行しても動く）。
+        """
         if cache not in ("off", "auto", "use", "make"):
             raise ValueError(f"cache引数は 'off','auto','use','make' のいずれか: {cache!r}")
+        filename = resolve_layer_path(filename, self)
         self._layer_specs.append({"filename": filename, "priority": priority, "cache": cache})
 
     def _exec_layer(self, filename, priority):
@@ -856,16 +861,16 @@ class Project:
         return out_path
 
     def inspect(self, out_html=None, *, title=None):
-        """svinspect による検査ビュー。
+        """scriptvedit.viz による検査ビュー。
 
         out_html 指定時は HTML ガントチャートを書き出しそのパスを返す。
         省略時はプレーンテキストのレポート文字列を返す（遅延 import）。
         """
         try:
-            import svinspect as _svi
+            from scriptvedit import viz as _svi
         except ImportError as e:
             raise ImportError(
-                "inspect() には svinspect.py が必要です。"
+                "inspect() には scriptvedit.viz が必要です。"
                 "scriptvedit.py と同じディレクトリに配置してください。") from e
         if out_html is not None:
             return _svi.render_timeline(self, out_html, title=title)
@@ -1238,7 +1243,7 @@ class Project:
                     need_render = (policy == "force") or not os.path.exists(morph_path)
                     if need_render:
                         import tempfile
-                        from morph import generate_rgba_frames
+                        from scriptvedit.morph import generate_rgba_frames
                         with tempfile.TemporaryDirectory() as tmpdir:
                             n_frames = int(fps * dur)
                             # blend Exprを数値関数に変換
@@ -1260,7 +1265,7 @@ class Project:
                     current_source = morph_path
                     current_media_type = "video"
                 elif typ == "effect" and op.name in ("explode_to", "assemble_from"):
-                    from morph import (generate_explode_frames,
+                    from scriptvedit.morph import (generate_explode_frames,
                                        generate_assemble_frames)
                     if op.name == "explode_to":
                         # explode: 直前の未ベイクopsを先にベイク（morphと同じ経路）
@@ -2116,6 +2121,7 @@ from scriptvedit.ffmpeg import _decoder_input_args, _ffmpeg_available_encoders, 
 from scriptvedit.filters.audio import _build_audio_effect_filters, _build_audio_pre_filters
 from scriptvedit.filters.video import _build_effect_filters, _build_input_args, _build_move_exprs, _build_transform_filters, _build_video_overlay_parts, _build_video_pre_filters, _get_base_dimensions, _optimize_filter_chain
 from scriptvedit.objects import Object
+from scriptvedit.assets import resolve_layer_path
 from scriptvedit.plugins import _autoload_plugins
 from scriptvedit.state import _ACTIVE_QUALITY, _ARTIFACT_DIR, _CACHE_DIR, _CONFIGURE_KEYS, _ENCODER_MAP, _ENGINE_VER, _GEN_COUNTER, _PRESETS, _TERMINAL_FRAME_EFFECTS, _TIME_LIVE_EFFECTS, _detect_media_type, _suggest_hint
 from scriptvedit.timeline import Pause, Scene, _AnchorMarker, _ScenePad

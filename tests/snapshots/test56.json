@@ -1,0 +1,45 @@
+{
+  "main": [
+    "ffmpeg",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=black:s=1280x720:d=3:r=30",
+    "-i",
+    "__cache__/artifacts/aviz/09e523d92c0665c6.mkv",
+    "-filter_complex",
+    "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.8*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v1]",
+    "-map",
+    "[v1]",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-an",
+    "-t",
+    "3",
+    "test56.mp4"
+  ],
+  "cache": {
+    "__cache__/artifacts/aviz/09e523d92c0665c6.mkv": [
+      "ffmpeg",
+      "-y",
+      "-i",
+      "assets/audio/Impact-38.mp3",
+      "-filter_complex",
+      "[0:a]showwaves=s=640x200:mode=cline:rate=30:colors=cyan[v]",
+      "-map",
+      "[v]",
+      "-c:v",
+      "ffv1",
+      "-level",
+      "3",
+      "-pix_fmt",
+      "yuv420p",
+      "-t",
+      "31.555917",
+      "__cache__/artifacts/aviz/09e523d92c0665c6.mkv"
+    ]
+  }
+}

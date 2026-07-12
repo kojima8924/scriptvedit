@@ -23,7 +23,7 @@ def morph_to(target, blend=None, **morph_params):
     # パラメータのタイポはレンダ深部（チェックポイント生成後）ではなく
     # 構築時点で検出する。morph モジュールが無い環境ではレンダ時に検出される
     try:
-        from morph import MORPH_PARAM_KEYS
+        from scriptvedit.morph import MORPH_PARAM_KEYS
     except ImportError:
         pass
     else:
@@ -59,7 +59,7 @@ def morph_to(target, blend=None, **morph_params):
 def _check_particle_params(func, params):
     """explode_to/assemble_from のパラメータのタイポを構築時に検出"""
     try:
-        from morph import PARTICLE_PARAM_KEYS
+        from scriptvedit.morph import PARTICLE_PARAM_KEYS
     except ImportError:
         return
     unknown = set(params) - set(PARTICLE_PARAM_KEYS)
