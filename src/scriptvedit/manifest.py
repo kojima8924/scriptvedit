@@ -155,6 +155,23 @@ _MANIFEST_PARAM_META = {
     ("opacity", "value"): {"type": "expr", "desc": "不透明度 0〜1（Expr/lambda 可）"},
     ("rounded", "radius"): {"type": "int", "min": 0, "max": 4096, "desc": "角の半径px（0で無効）"},
     ("text", "font"): {"type": "string", "desc": "フォントファイルパス（省略時は日本語フォントを自動選択）"},
+    # 縁取り・影（既定値では drawtext オプションを一切出力しない）
+    ("text", "border"): {"type": "int", "default": 0, "min": 0,
+                         "desc": "縁取り（アウトライン）の太さpx（0で無効）"},
+    ("text", "shadow"): {"type": "any", "default": [0, 0],
+                         "desc": "影のオフセット (x, y) px（(0,0)で無効。例 (2, 2)）"},
+    ("typewriter", "border"): {"type": "int", "default": 0, "min": 0,
+                               "desc": "縁取りの太さpx（0で無効）"},
+    ("typewriter", "shadow"): {"type": "any", "default": [0, 0],
+                               "desc": "影のオフセット (x, y) px（(0,0)で無効）"},
+    ("counter", "border"): {"type": "int", "default": 0, "min": 0,
+                            "desc": "縁取りの太さpx（0で無効）"},
+    ("counter", "shadow"): {"type": "any", "default": [0, 0],
+                            "desc": "影のオフセット (x, y) px（(0,0)で無効）"},
+    ("narrate", "border"): {"type": "int", "default": 0, "min": 0,
+                            "desc": "字幕の縁取り太さpx（text() と同じ。読みやすさ向上に有効）"},
+    ("narrate", "shadow"): {"type": "any", "default": [0, 0],
+                            "desc": "字幕の影オフセット (x, y) px（text() と同じ）"},
     ("typewriter", "font"): {"type": "string", "desc": "フォントファイルパス（省略時は自動選択）"},
     ("counter", "font"): {"type": "string", "desc": "フォントファイルパス（省略時は自動選択）"},
     # choices（実装の検証コードと同じ集合を参照する）
@@ -202,7 +219,8 @@ _MANIFEST_PARAM_META = {
 # エントリごとの注記（AI が踏みがちな地雷。constraints の該当分をここにも展開する）
 _MANIFEST_NOTES = {
     "text": ["size は定数のみ。lambda/Expr を渡すと FFmpeg 8 で SEGV するため拒否される",
-             "x/y/alpha は Expr/lambda 可（アニメーション可能）"],
+             "x/y/alpha は Expr/lambda 可（アニメーション可能）",
+             "border=2 の縁取りや shadow=(2, 2) の影で細い文字の可読性を上げられる"],
     "typewriter": ["size は定数のみ（text と同じ制約）"],
     "counter": ["size は定数のみ（text と同じ制約）"],
     "reverse": ["実効尺は最大30秒（全フレームをメモリに保持するため）。超えると ValueError",

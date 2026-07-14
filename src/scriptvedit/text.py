@@ -100,6 +100,34 @@ def _validate_text_size(func, size_expr):
     return size_expr
 
 
+def _validate_text_border_shadow(func, border, shadow):
+    """縁取り/影パラメータの検証。(border_int, (shadow_x, shadow_y)) を返す。
+    border: 縁取り太さpx（0以上の定数）。shadow: (x, y) の影オフセットpx
+    （負値可・定数のみ）。drawtext の borderw/shadowx/shadowy は整数pxのため
+    int に丸めて返す。"""
+    _require_number(func, "border", border, 0, None)
+    if not isinstance(shadow, (tuple, list)) or len(shadow) != 2:
+        raise ValueError(
+            f"{func}: shadow は (x, y) の2要素タプルで指定してください "
+            f"(例: shadow=(2, 2)): {shadow!r}")
+    sx, sy = shadow
+    _require_number(func, "shadow[0]", sx)
+    _require_number(func, "shadow[1]", sy)
+    return int(border), (int(sx), int(sy))
+
+
+def _text_deco_spec(func, border, border_color, shadow, shadow_color):
+    """縁取り/影の spec 断片と synthetic_source 鍵の断片を返す。
+    既定値（border=0 かつ shadow=(0,0)）では鍵断片は空文字列
+    （既存スペックの合成ソースハッシュを変えない＝キャッシュ互換維持）。"""
+    b, sh = _validate_text_border_shadow(func, border, shadow)
+    frag = {"border": b, "border_color": border_color,
+            "shadow": sh, "shadow_color": shadow_color}
+    if b == 0 and sh == (0, 0):
+        return frag, ""
+    return frag, f"|bd{b}|{border_color}|sh{sh[0]},{sh[1]}|{shadow_color}"
+
+
 def _text_size_opt(size_expr, u_expr):
     """fontsize オプション文字列を返す（size は定数のみ・_validate_text_size で担保）"""
     return f"fontsize={int(size_expr.value)}"
@@ -136,6 +164,16 @@ def _build_drawtext_filter(spec, text_opt, start, dur, *, enable=None):
         opts.append("box=1")
         opts.append(f"boxcolor={spec['box_color']}")
         opts.append(f"boxborderw={spec['box_border']}")
+    # 縁取り（アウトライン）: border=0 では一切出力しない（既存出力と不変）
+    if spec.get("border", 0):
+        opts.append(f"borderw={spec['border']}")
+        opts.append(f"bordercolor={spec['border_color']}")
+    # 影: (0,0) では一切出力しない（既存出力と不変）
+    sh_x, sh_y = spec.get("shadow", (0, 0))
+    if sh_x or sh_y:
+        opts.append(f"shadowx={sh_x}")
+        opts.append(f"shadowy={sh_y}")
+        opts.append(f"shadowcolor={spec['shadow_color']}")
     if enable is not None:
         opts.append(f"enable='{enable}'")
     return "drawtext=" + ":".join(opts)
@@ -276,16 +314,23 @@ def _text_synthetic_source(spec_key):
 
 def text(content, *, x=0.5, y=0.5, size=48, color="white", font=None,
          box=False, box_color="black@0.5", box_border=10,
-         alpha=1.0, anchor="center"):
+         border=0, border_color="black", shadow=(0, 0),
+         shadow_color="black@0.6", alpha=1.0, anchor="center"):
     """drawtextでテキストを直接描画する映像Object（透明キャンバス全面）。
 
     x/y/alpha は 0..1 のキャンバス比率で Expr/lambda 可（liveアニメ）。
     size は定数のみ（FFmpeg 8.0 drawtext の fontsize 式は SEGV のため）。
+    border: 縁取り（アウトライン）の太さpx（0で無効。読みやすさ向上に推奨）
+    border_color: 縁取りの色（ffcolor形式。例 'black', 'black@0.8'）
+    shadow: 影のオフセット (x, y) px（(0,0)で無効。例 shadow=(2, 2)）
+    shadow_color: 影の色（ffcolor形式。既定 'black@0.6'）
     日本語表示にはfont指定を推奨（未指定はmeiryo等の既定候補を自動探索）。
     タイムラインには image と同様 .time(秒) で配置する。
     """
     if anchor not in _TEXT_ANCHORS:
         raise ValueError(f"text: anchor は {_TEXT_ANCHORS} のいずれか: {anchor!r}")
+    deco, deco_key = _text_deco_spec(
+        "text", border, border_color, shadow, shadow_color)
     spec = {
         "kind": "text",
         "content": str(content),
@@ -294,22 +339,26 @@ def text(content, *, x=0.5, y=0.5, size=48, color="white", font=None,
         "alpha": _resolve_param(alpha),
         "color": color, "font": _resolve_font(font),
         "box": bool(box), "box_color": box_color, "box_border": box_border,
-        "anchor": anchor,
+        "anchor": anchor, **deco,
     }
     spec["synthetic_source"] = _text_synthetic_source(
-        f"text|{content}|{x}|{y}|{size}|{color}|{anchor}")
+        f"text|{content}|{x}|{y}|{size}|{color}|{anchor}{deco_key}")
     return _new_text_object(spec)
 
 
 def typewriter(content, *, cps=10, x=0.5, y=0.5, size=48, color="white",
                font=None, box=False, box_color="black@0.5", box_border=10,
-               alpha=1.0, anchor="left"):
+               border=0, border_color="black", shadow=(0, 0),
+               shadow_color="black@0.6", alpha=1.0, anchor="left"):
     """textの派生。1文字ずつ表示（n個のdrawtextを各文字の表示時刻でenable）。
-    cps: 1秒あたりの表示文字数。既定anchorは左上（左揃えで打ち出す）。"""
+    cps: 1秒あたりの表示文字数。既定anchorは左上（左揃えで打ち出す）。
+    border/border_color/shadow/shadow_color は text() と同じ縁取り・影指定。"""
     if anchor not in _TEXT_ANCHORS:
         raise ValueError(f"typewriter: anchor は {_TEXT_ANCHORS} のいずれか: {anchor!r}")
     if cps <= 0:
         raise ValueError(f"typewriter: cps は正の数を指定してください: {cps}")
+    deco, deco_key = _text_deco_spec(
+        "typewriter", border, border_color, shadow, shadow_color)
     spec = {
         "kind": "typewriter",
         "content": str(content), "cps": float(cps),
@@ -318,10 +367,10 @@ def typewriter(content, *, cps=10, x=0.5, y=0.5, size=48, color="white",
         "alpha": _resolve_param(alpha),
         "color": color, "font": _resolve_font(font),
         "box": bool(box), "box_color": box_color, "box_border": box_border,
-        "anchor": anchor,
+        "anchor": anchor, **deco,
     }
     spec["synthetic_source"] = _text_synthetic_source(
-        f"tw|{content}|{cps}|{x}|{y}|{size}|{color}|{anchor}")
+        f"tw|{content}|{cps}|{x}|{y}|{size}|{color}|{anchor}{deco_key}")
     return _new_text_object(spec)
 
 
@@ -353,14 +402,18 @@ def _parse_counter_format(fmt):
 
 def counter(from_, to, *, format="%d", x=0.5, y=0.5, size=48, color="white",
             font=None, box=False, box_color="black@0.5", box_border=10,
-            alpha=1.0, anchor="center"):
+            border=0, border_color="black", shadow=(0, 0),
+            shadow_color="black@0.6", alpha=1.0, anchor="center"):
     """数値カウントアップ映像Object。drawtextの%{eif}式で from_→to を補間表示。
-    format は整数指定(%d, %03d 等)。前後のリテラル文字も表示可能。"""
+    format は整数指定(%d, %03d 等)。前後のリテラル文字も表示可能。
+    border/border_color/shadow/shadow_color は text() と同じ縁取り・影指定。"""
     if anchor not in _TEXT_ANCHORS:
         raise ValueError(f"counter: anchor は {_TEXT_ANCHORS} のいずれか: {anchor!r}")
     prefix, suffix, width = _parse_counter_format(format)
     _escape_counter_literal(prefix)  # アポストロフィ等の早期検証（inline不可文字）
     _escape_counter_literal(suffix)
+    deco, deco_key = _text_deco_spec(
+        "counter", border, border_color, shadow, shadow_color)
     spec = {
         "kind": "counter",
         "from_": _resolve_param(from_), "to": _resolve_param(to),
@@ -370,10 +423,10 @@ def counter(from_, to, *, format="%d", x=0.5, y=0.5, size=48, color="white",
         "alpha": _resolve_param(alpha),
         "color": color, "font": _resolve_font(font),
         "box": bool(box), "box_color": box_color, "box_border": box_border,
-        "anchor": anchor,
+        "anchor": anchor, **deco,
     }
     spec["synthetic_source"] = _text_synthetic_source(
-        f"counter|{from_}|{to}|{format}|{x}|{y}|{size}|{color}|{anchor}")
+        f"counter|{from_}|{to}|{format}|{x}|{y}|{size}|{color}|{anchor}{deco_key}")
     return _new_text_object(spec)
 
 
@@ -397,6 +450,8 @@ def subtitles(srt_file, *, style=None):
         "x": Const(0.5), "y": Const(0.5), "size": Const(48), "alpha": Const(1.0),
         "color": "white", "font": None, "box": False,
         "box_color": "black@0.5", "box_border": 10, "anchor": "center",
+        "border": 0, "border_color": "black",
+        "shadow": (0, 0), "shadow_color": "black@0.6",
     }
     try:
         ffp = _file_fingerprint(srt_file)

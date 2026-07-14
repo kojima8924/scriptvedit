@@ -214,7 +214,9 @@ def narrate(text_content, *, backend=None, speaker=None, speed=1.0, pitch=0.0,
             volume=1.0,
             subtitle=True, subtitle_style=None,
             x=0.5, y=0.9, size=36, color="white", font=None,
-            box=True, box_color="black@0.6", box_border=10, alpha=1.0,
+            box=True, box_color="black@0.6", box_border=10,
+            border=0, border_color="black", shadow=(0, 0),
+            shadow_color="black@0.6", alpha=1.0,
             anchor="center", **tts_kwargs):
     """TTSナレーション音声 + 同期字幕を1回の呼び出しで生成・配置する。
 
@@ -224,10 +226,12 @@ def narrate(text_content, *, backend=None, speaker=None, speed=1.0, pitch=0.0,
     複数回呼べば、音声の実長ぶんタイムラインが進むため順次配置される
     （字幕は各回の音声窓にだけ表示される）。
 
-    x/y/size/color/font/box/box_color/box_border/alpha/anchor は text() と同じ
-    意味の字幕スタイル引数（既定はナレーション向けに下部中央+半透明ボックス）。
+    x/y/size/color/font/box/box_color/box_border/border/border_color/
+    shadow/shadow_color/alpha/anchor は text() と同じ意味の字幕スタイル引数
+    （既定はナレーション向けに下部中央+半透明ボックス）。
+    border=2 等の縁取りや shadow=(2, 2) の影は字幕の読みやすさ向上に有効。
     subtitle_style を渡すと、これらの既定値を辞書キー（同名）で個別に上書きできる
-    （例: subtitle_style={"size": 44, "y": 0.85}）。
+    （例: subtitle_style={"size": 44, "y": 0.85, "border": 2}）。
     backend/speaker/volume/pitch/**tts_kwargs は voice() と同じ意味で音声側にのみ作用する
     （backend: "voicevox"/"edge"/"sapi"。None で自動選択）。
 
@@ -265,6 +269,10 @@ def narrate(text_content, *, backend=None, speaker=None, speed=1.0, pitch=0.0,
             color=st.get("color", color), font=st.get("font", font),
             box=st.get("box", box), box_color=st.get("box_color", box_color),
             box_border=st.get("box_border", box_border),
+            border=st.get("border", border),
+            border_color=st.get("border_color", border_color),
+            shadow=st.get("shadow", shadow),
+            shadow_color=st.get("shadow_color", shadow_color),
             alpha=st.get("alpha", alpha), anchor=st.get("anchor", anchor))
         # current_timeを進めず音声と同じ開始点に配置（音声側で進行させる）
         text_obj.show(dur)

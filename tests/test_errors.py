@@ -1714,6 +1714,41 @@ def check_text_time_omit():
         return (True, msg.split("\n")[0]) if "テキスト" in msg else (False, msg)
 
 
+def check_text_border_negative():
+    """text: border負値 → ValueError"""
+    _mk_project()
+    try:
+        text("あ", border=-1, font="C:/Windows/Fonts/meiryo.ttc")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "border" in msg else (False, msg)
+
+
+def check_text_border_expr_rejected():
+    """text: border=lambda → ValueError（定数のみ）"""
+    _mk_project()
+    try:
+        text("あ", border=lambda u: u * 4, font="C:/Windows/Fonts/meiryo.ttc")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "border" in msg and "定数" in msg else (False, msg)
+
+
+def check_text_shadow_bad_shape():
+    """text: shadowが2要素タプルでない → ValueError"""
+    _mk_project()
+    for bad in (5, (1,), (1, 2, 3), "2,2"):
+        try:
+            text("あ", shadow=bad, font="C:/Windows/Fonts/meiryo.ttc")
+            return False, f"例外が発生しませんでした: shadow={bad!r}"
+        except ValueError as e:
+            if "shadow" not in str(e):
+                return False, f"メッセージが不適切: {e}"
+    return True, "shadow形状の検証OK（4パターン）"
+
+
 def check_typewriter_bad_cps():
     """typewriter: cps<=0 → ValueError"""
     _mk_project()
@@ -1908,6 +1943,64 @@ def check_text_drawtext_in_cmd():
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+def _text_dry_run_cmd(layer_body):
+    """テキスト系レイヤーを dry_run してメインコマンド文字列を返すヘルパー"""
+    layer_code = "from scriptvedit import *\n" + layer_body
+    tmp = os.path.join(os.path.dirname(__file__), "_tmp_text_deco.py")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(layer_code)
+        p = _mk_project()
+        p.layer(tmp, priority=0)
+        cmd = p.render("_tmp.mp4", dry_run=True)
+        return " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def check_text_border_shadow_in_cmd():
+    """text: border/shadow指定 → drawtextに borderw/bordercolor/shadowx/y/color"""
+    s = _text_dry_run_cmd(
+        "t = text('縁取り', border=3, border_color='black@0.8',\n"
+        "         shadow=(2, 2), shadow_color='gray@0.5',\n"
+        "         font='C:/Windows/Fonts/meiryo.ttc')\n"
+        "t.time(2)\n")
+    expected = ("borderw=3:bordercolor=black@0.8",
+                "shadowx=2:shadowy=2:shadowcolor=gray@0.5")
+    for e in expected:
+        if e not in s:
+            return False, f"'{e}' が生成コマンドに見つからない"
+    return True, "borderw/bordercolor/shadowx/shadowy/shadowcolor 出力OK"
+
+
+def check_text_default_no_border_shadow():
+    """text: 既定値では borderw/shadowx 等を一切出力しない（既存出力と不変）"""
+    s = _text_dry_run_cmd(
+        "t = text('既定', font='C:/Windows/Fonts/meiryo.ttc')\n"
+        "t.time(2)\n")
+    for bad in ("borderw", "bordercolor", "shadowx", "shadowy", "shadowcolor"):
+        if bad in s:
+            return False, f"既定値なのに '{bad}' が出力された"
+    return True, "既定値で縁取り・影オプション非出力OK"
+
+
+def check_typewriter_counter_border_in_cmd():
+    """typewriter/counter: border指定がdrawtextに反映される"""
+    s = _text_dry_run_cmd(
+        "tw = typewriter('あい', cps=5, border=2,\n"
+        "                font='C:/Windows/Fonts/meiryo.ttc')\n"
+        "tw.time(2)\n"
+        "c = counter(0, 10, border=2, shadow=(1, 1),\n"
+        "            font='C:/Windows/Fonts/meiryo.ttc')\n"
+        "c.time(2)\n")
+    if s.count("borderw=2:bordercolor=black") < 3:  # typewriter2文字分 + counter
+        return False, "typewriter/counter の borderw 出力が不足"
+    if "shadowx=1:shadowy=1:shadowcolor=black@0.6" not in s:
+        return False, "counter の shadow 出力が見つからない"
+    return True, "typewriter/counter の縁取り・影 出力OK"
 
 
 def check_loudnorm_in_cmd():
@@ -2789,6 +2882,33 @@ def check_narrate_subtitle_false_no_subtitle():
         n = narrate("テスト", subtitle=False)
         ok = n.subtitle is None and n.audio is not None
         return (True, "subtitle=Noneを確認") if ok else (False, f"subtitle={n.subtitle!r}")
+    finally:
+        svtts.tts = orig_tts
+        svtts.tts_duration = orig_dur
+
+
+def check_narrate_subtitle_style_border_shadow():
+    """narrate(subtitle_style={...}): border/shadow が字幕の _text_spec に渡る"""
+    from scriptvedit import tts as svtts
+    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
+    svtts.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    svtts.tts_duration = lambda path: 1.0
+    try:
+        _mk_project()
+        n = narrate("テスト", subtitle=True,
+                    subtitle_style={"border": 2, "border_color": "black@0.9",
+                                    "shadow": (2, 3), "shadow_color": "gray"})
+        spec = n.subtitle._text_spec
+        if spec["border"] != 2 or spec["border_color"] != "black@0.9":
+            return False, f"border が渡っていない: {spec['border']!r}/{spec['border_color']!r}"
+        if spec["shadow"] != (2, 3) or spec["shadow_color"] != "gray":
+            return False, f"shadow が渡っていない: {spec['shadow']!r}/{spec['shadow_color']!r}"
+        # 既定（指定なし）では border=0 / shadow=(0,0) のまま
+        n2 = narrate("テスト2", subtitle=True)
+        spec2 = n2.subtitle._text_spec
+        if spec2["border"] != 0 or spec2["shadow"] != (0, 0):
+            return False, f"既定値が変わっている: {spec2['border']!r}/{spec2['shadow']!r}"
+        return True, "narrate subtitle_style の border/shadow 透過OK"
     finally:
         svtts.tts = orig_tts
         svtts.tts_duration = orig_dur
@@ -4374,6 +4494,9 @@ ALL_TESTS = [
     ("text size式拒否", check_text_size_expr_rejected),
     ("text 不正anchor", check_text_bad_anchor),
     ("text time省略", check_text_time_omit),
+    ("text border負値", check_text_border_negative),
+    ("text border式拒否", check_text_border_expr_rejected),
+    ("text shadow形状不正", check_text_shadow_bad_shape),
     ("typewriter cps不正", check_typewriter_bad_cps),
     ("counter 小数format", check_counter_float_format),
     ("counter アポストロフィformat", check_counter_apostrophe_format),
@@ -4389,6 +4512,9 @@ ALL_TESTS = [
     ("audio_viz ソース不在", check_audio_viz_missing_source),
     ("normalize_audio 範囲外", check_normalize_audio_range),
     ("text drawtext出力", check_text_drawtext_in_cmd),
+    ("text 縁取り・影出力", check_text_border_shadow_in_cmd),
+    ("text 既定で縁取り・影なし", check_text_default_no_border_shadow),
+    ("typewriter/counter 縁取り出力", check_typewriter_counter_border_in_cmd),
     ("normalize_audio loudnorm出力", check_loudnorm_in_cmd),
     # --- 構成・タイムライン・Expr拡張（新機能） ---
     ("explode_to末尾でない", check_explode_to_not_last),
@@ -4454,6 +4580,7 @@ ALL_TESTS = [
     ("narrate VOICEVOX未起動", check_narrate_without_voicevox),
     ("narrate Narrationタプル", check_narrate_returns_narration_tuple),
     ("narrate subtitle=False", check_narrate_subtitle_false_no_subtitle),
+    ("narrate subtitle_style縁取り", check_narrate_subtitle_style_border_shadow),
     # --- TTS バックエンド（voicevox / edge / sapi） ---
     ("tts backend不正", check_tts_backend_invalid),
     ("tts backend環境変数", check_tts_backend_env_selection),
