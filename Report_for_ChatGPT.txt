@@ -63,7 +63,7 @@
     ├── examples/basic/     ← 最小サンプル（main.py / bg.py / onigiri.py）
     ├── examples/showcase/  ← ショーケース動画
     ├── plugins/            ← サンプルプラグイン（example_scanline / neon / photo_frame）
-    └── scripts/            ← 開発用（tools_baseline.py / upload_to_server.py 等）
+    └── scripts/            ← 開発用（tools_baseline.py / scan_bgm.py 等）
 
   ◆ コミット履歴 (古い順)
     9ea9b69 初期コミット: DSLベースの動画構成ツール
