@@ -33,6 +33,9 @@ assets/images/computer_screen_programming.png
 # Claude 引き継ぎ保存データ(個人メモ・ローカル限定、公開しない)
 Claude_backup_*.md
 
+# 共有素材ライブラリから取り込んだ素材(asset() が自動コピーする)
+assets/_imported/
+
 # パッケージビルド成果物
 src/*.egg-info/
 build/

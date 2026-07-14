@@ -2794,6 +2794,205 @@ def check_narrate_subtitle_false_no_subtitle():
         svtts.tts_duration = orig_dur
 
 
+# --- TTS バックエンド（voicevox / edge / sapi） ---
+
+def _tts_scratch_dir():
+    """TTS テスト用の一時キャッシュディレクトリ（テストごとに掃除して使う）"""
+    import tempfile
+    return tempfile.mkdtemp(prefix="svtts_test_")
+
+
+def _edge_or_skip():
+    """edge-tts が使えない環境は正直に skip（PASS 扱いにしない）"""
+    from scriptvedit import tts as svtts
+    if not svtts._edge_available():
+        _skip("edge-tts 未導入（pip install edge-tts）")
+    return svtts
+
+
+def check_tts_backend_invalid():
+    """tts(backend='???'): 未知のバックエンドは ValueError"""
+    from scriptvedit import tts as svtts
+    try:
+        svtts.tts("テスト", backend="unknown_engine")
+        return False, "未知の backend が通ってしまいました"
+    except ValueError as e:
+        msg = str(e)
+        return (True, msg) if "backend" in msg else (False, msg)
+
+
+def check_tts_backend_env_selection():
+    """backend=None の自動選択: 環境変数 SCRIPTVEDIT_TTS_BACKEND が最優先される"""
+    import os
+    from scriptvedit import tts as svtts
+    orig = os.environ.get("SCRIPTVEDIT_TTS_BACKEND")
+    os.environ["SCRIPTVEDIT_TTS_BACKEND"] = "sapi"
+    try:
+        got = svtts._resolve_backend(None)
+        return (True, "env→sapi") if got == "sapi" else (False, f"env が無視された: {got}")
+    finally:
+        if orig is None:
+            os.environ.pop("SCRIPTVEDIT_TTS_BACKEND", None)
+        else:
+            os.environ["SCRIPTVEDIT_TTS_BACKEND"] = orig
+
+
+def check_tts_backend_fallback_to_edge():
+    """backend=None の自動選択: VOICEVOX 未起動なら edge にフォールバックする"""
+    import os
+    from scriptvedit import tts as svtts
+    orig = os.environ.pop("SCRIPTVEDIT_TTS_BACKEND", None)
+    try:
+        # 到達不能ポートを指定して「VOICEVOX 未起動」を再現する
+        got = svtts._resolve_backend(None, port=1)
+        if not svtts._edge_available():
+            _skip("edge-tts 未導入（フォールバック先が無い環境）")
+        return (True, "未起動→edge") if got == "edge" else (False, f"edge にならない: {got}")
+    finally:
+        if orig is not None:
+            os.environ["SCRIPTVEDIT_TTS_BACKEND"] = orig
+
+
+def check_tts_voicevox_error_suggests_edge():
+    """VOICEVOX 未起動エラー: 代替案（backend="edge"）を案内する日本語メッセージ"""
+    from scriptvedit import tts as svtts
+    try:
+        svtts.tts("テスト", backend="voicevox", port=1, cache_dir=_tts_scratch_dir())
+        return False, "未起動なのに例外になりませんでした（ポート1で応答?）"
+    except ConnectionError as e:
+        msg = str(e)
+        ok = "VOICEVOX" in msg and 'backend="edge"' in msg and "edge-tts" in msg
+        return (True, msg.splitlines()[0]) if ok else (False, f"代替案の案内が無い: {msg}")
+
+
+def check_tts_cache_key_includes_backend():
+    """キャッシュ鍵に backend が含まれる（同じ text/speaker でも別ファイルになる）"""
+    from scriptvedit import tts as svtts
+    a = svtts._cache_path("voicevox", "こんにちは", 1, 1.0, 0.0, "c")
+    b = svtts._cache_path("edge", "こんにちは", 1, 1.0, 0.0, "c")
+    if a == b:
+        return False, "backend 違いで同じキャッシュパスになりました"
+    c = svtts._cache_path("edge", "こんにちは", 1, 1.0, 0.0, "c")
+    if b != c:
+        return False, "同一条件でキャッシュパスが安定しません"
+    return True, f"backend でキー分離: {os.path.basename(a)} != {os.path.basename(b)}"
+
+
+def check_tts_edge_rate_pitch_mapping():
+    """edge: speed/pitch を edge-tts の rate/pitch 文字列へ写像する"""
+    from scriptvedit import tts as svtts
+    cases = [
+        (svtts._edge_rate(1.0), "+0%"), (svtts._edge_rate(1.2), "+20%"),
+        (svtts._edge_rate(0.8), "-20%"),
+        (svtts._edge_pitch(0.0), "+0Hz"), (svtts._edge_pitch(0.1), "+10Hz"),
+        (svtts._edge_pitch(-0.1), "-10Hz"),
+    ]
+    bad = [(got, want) for got, want in cases if got != want]
+    if bad:
+        return False, f"写像が不正: {bad}"
+    try:
+        svtts._edge_rate(0)
+        return False, "speed=0 が通ってしまいました"
+    except ValueError:
+        pass
+    return True, "rate/pitch 写像OK（speed<=0 は ValueError）"
+
+
+def check_tts_edge_speaker_resolution():
+    """edge: speaker の解釈（音声名／短縮名／数値は互換のため警告付きで写像）"""
+    import warnings as _w
+    from scriptvedit import tts as svtts
+    if svtts._edge_voice(None) != "ja-JP-NanamiNeural":
+        return False, "既定音声が ja-JP-NanamiNeural ではありません"
+    if svtts._edge_voice("keita") != "ja-JP-KeitaNeural":
+        return False, "短縮名 keita が解決できません"
+    if svtts._edge_voice("ja-JP-NanamiNeural") != "ja-JP-NanamiNeural":
+        return False, "音声名がそのまま通りません"
+    with _w.catch_warnings(record=True) as rec:
+        _w.simplefilter("always")
+        v = svtts._edge_voice(1)
+    if v not in svtts._EDGE_JA_VOICES:
+        return False, f"数値 speaker の写像先が不正: {v}"
+    if not rec:
+        return False, "数値 speaker で警告が出ていません"
+    return True, f"speaker 解決OK（数値1→{v}・警告あり）"
+
+
+def check_tts_edge_synth_wav():
+    """edge: 実際に日本語を合成して wav が得られ、tts_duration で尺が取れる（要ネット）"""
+    import shutil as _sh
+    svtts = _edge_or_skip()
+    cache = _tts_scratch_dir()
+    try:
+        try:
+            wav = svtts.tts("テスト音声です", backend="edge", cache_dir=cache)
+        except ConnectionError as e:
+            _skip(f"edge-tts はオンライン必須（ネットワーク不通）: {str(e).splitlines()[0]}")
+        if not wav.endswith(".wav") or not os.path.exists(wav):
+            return False, f"wav が生成されていません: {wav}"
+        dur = svtts.tts_duration(wav)   # wave モジュールで開ける＝mp3→wav 変換済み
+        if dur <= 0:
+            return False, f"尺が0以下: {dur}"
+        # 2回目はキャッシュヒット（ファイルの mtime が変わらない）
+        mtime = os.path.getmtime(wav)
+        wav2 = svtts.tts("テスト音声です", backend="edge", cache_dir=cache)
+        if wav2 != wav or os.path.getmtime(wav2) != mtime:
+            return False, "2回目にキャッシュが効いていません（再合成された）"
+        # backend を変えれば別キャッシュ（voicevox 未起動でも鍵が違えば別パス）
+        other = svtts._cache_path("voicevox", "テスト音声です", 1, 1.0, 0.0, cache)
+        if other == wav:
+            return False, "backend 違いで同じキャッシュになりました"
+        return True, f"edge 合成OK: {dur:.2f}秒・キャッシュヒット確認"
+    finally:
+        _sh.rmtree(cache, ignore_errors=True)
+
+
+def check_tts_edge_speakers_list():
+    """edge: 話者一覧に日本語音声が含まれる（要ネット）"""
+    svtts = _edge_or_skip()
+    try:
+        sp = svtts.speakers(backend="edge")
+    except ConnectionError as e:
+        _skip(f"edge-tts はオンライン必須（ネットワーク不通）: {str(e).splitlines()[0]}")
+    ids = [s["id"] for s in sp]
+    if "ja-JP-NanamiNeural" not in ids:
+        return False, f"日本語音声が見つかりません: {ids[:5]}"
+    if not all({"id", "name", "style"} <= set(s) for s in sp):
+        return False, "話者エントリのキーが不足しています"
+    return True, f"edge 話者 {len(sp)}件（{ids[:2]}）"
+
+
+def check_voice_edge_backend_object():
+    """voice(backend="edge"): 音声Object が TTS 実長の duration を持つ（要ネット）"""
+    _edge_or_skip()
+    from scriptvedit import voice as _voice
+    _mk_project()
+    try:
+        v = _voice("エッジのテスト", backend="edge")
+    except ConnectionError as e:
+        _skip(f"edge-tts はオンライン必須（ネットワーク不通）: {str(e).splitlines()[0]}")
+    if v.duration is None or v.duration <= 0:
+        return False, f"duration が不正: {v.duration}"
+    if not str(v.source).endswith(".wav"):
+        return False, f"素材が wav ではありません: {v.source}"
+    return True, f"voice(edge) OK: {v.duration:.2f}秒"
+
+
+def check_narrate_edge_backend():
+    """narrate(backend="edge"): 音声+字幕が生成され、字幕窓が音声実長に一致（要ネット）"""
+    _edge_or_skip()
+    _mk_project()
+    try:
+        n = narrate("エッジのナレーション", backend="edge")
+    except ConnectionError as e:
+        _skip(f"edge-tts はオンライン必須（ネットワーク不通）: {str(e).splitlines()[0]}")
+    if n.subtitle is None:
+        return False, "字幕が生成されていません"
+    if abs(n.subtitle.duration - n.audio.duration) > 1e-6:
+        return False, f"字幕窓が音声実長と不一致: {n.subtitle.duration} != {n.audio.duration}"
+    return True, f"narrate(edge) OK: {n.duration:.2f}秒・字幕あり"
+
+
 def check_karaoke_ass_kfired():
     """karaoke: 生成ASSに\\kタグ・Dialogue・スタイル色が含まれる"""
     obj = karaoke([(0.0, 2.0, "abc")], style={"primary": "yellow", "secondary": "white"})
@@ -3627,6 +3826,8 @@ def check_assets_dir_prefers_user_project():
     想定運用: 動画編集用フォルダから scriptvedit をライブラリとして使い、
     そのフォルダ固有の assets/ を持つ（editable install でリポジトリの assets/ に
     奪われてはならない）。
+    SCRIPTVEDIT_ASSETS は assets/ の上書きではなく共有ライブラリの探索パスなので、
+    設定されていてもプロジェクトの assets/ が勝つ（新仕様）。
     """
     from scriptvedit import assets_dir
     tmp = tempfile.mkdtemp(prefix="svproj_")
@@ -3635,8 +3836,14 @@ def check_assets_dir_prefers_user_project():
     logo = os.path.join(img_dir, "logo.png")
     with open(logo, "wb") as f:
         f.write(b"\x89PNG\r\n\x1a\n dummy")
+    # 共有ライブラリ（環境変数）を設定しても assets/ の場所は乗っ取られない
+    lib = os.path.join(tmp, "shared_lib")
+    os.makedirs(os.path.join(lib, "images"))
+    with open(os.path.join(lib, "images", "shared.png"), "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n shared")
     old_cwd = os.getcwd()
-    old_env = os.environ.pop("SCRIPTVEDIT_ASSETS", None)
+    old_env = os.environ.get("SCRIPTVEDIT_ASSETS")
+    os.environ["SCRIPTVEDIT_ASSETS"] = lib
     try:
         os.chdir(tmp)
         got_dir = assets_dir()
@@ -3645,14 +3852,21 @@ def check_assets_dir_prefers_user_project():
             return False, f"利用者プロジェクトの assets/ が選ばれていません: {got_dir}"
         if not os.path.samefile(got, logo):
             return False, f"asset() が別ファイルを返しました: {got}"
+        # 共有ライブラリの素材は assets/_imported/ へコピーされて解決される
+        shared = asset("images/shared.png")
+        want = os.path.join(tmp, "assets", "_imported", "images", "shared.png")
+        if not os.path.samefile(shared, want):
+            return False, f"共有ライブラリの素材が _imported へ取り込まれていません: {shared}"
         # cwd を戻せばリポジトリの assets/ に追随する（キャッシュで固まらない）
         os.chdir(old_cwd)
         if os.path.samefile(assets_dir(), os.path.join(tmp, "assets")):
             return False, "cwd を戻しても前回の assets/ を返しています（キャッシュ汚染）"
-        return True, f"利用者プロジェクト優先を確認: {got}"
+        return True, f"利用者プロジェクト優先＋共有ライブラリ取り込みを確認: {got}"
     finally:
         os.chdir(old_cwd)
-        if old_env is not None:
+        if old_env is None:
+            os.environ.pop("SCRIPTVEDIT_ASSETS", None)
+        else:
             os.environ["SCRIPTVEDIT_ASSETS"] = old_env
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -3867,7 +4081,7 @@ def check_describe_constraints_nonempty():
         return False, "constraints が空です"
     ids = {c["id"] for c in cons}
     required = {"text_size_const", "reverse_max_30s", "alpha_container",
-                "layer_cache_no_audio", "blend_mode_canvas", "voicevox_required",
+                "layer_cache_no_audio", "blend_mode_canvas", "tts_backend",
                 "scipy_required", "one_file_one_layer", "terminal_frame_effect_last"}
     missing = required - ids
     if missing:
@@ -4240,6 +4454,18 @@ ALL_TESTS = [
     ("narrate VOICEVOX未起動", check_narrate_without_voicevox),
     ("narrate Narrationタプル", check_narrate_returns_narration_tuple),
     ("narrate subtitle=False", check_narrate_subtitle_false_no_subtitle),
+    # --- TTS バックエンド（voicevox / edge / sapi） ---
+    ("tts backend不正", check_tts_backend_invalid),
+    ("tts backend環境変数", check_tts_backend_env_selection),
+    ("tts backend自動edge", check_tts_backend_fallback_to_edge),
+    ("tts VOICEVOX未起動の代替案", check_tts_voicevox_error_suggests_edge),
+    ("tts キャッシュ鍵にbackend", check_tts_cache_key_includes_backend),
+    ("tts edge rate/pitch写像", check_tts_edge_rate_pitch_mapping),
+    ("tts edge speaker解決", check_tts_edge_speaker_resolution),
+    ("tts edge 合成wav", check_tts_edge_synth_wav),
+    ("tts edge 話者一覧", check_tts_edge_speakers_list),
+    ("voice edge バックエンド", check_voice_edge_backend_object),
+    ("narrate edge バックエンド", check_narrate_edge_backend),
     ("karaoke ASS \\k生成", check_karaoke_ass_kfired),
     ("karaoke 均等割り", check_karaoke_word_durations_equal_split),
     ("karaoke word_durations不一致", check_karaoke_word_durations_mismatch),

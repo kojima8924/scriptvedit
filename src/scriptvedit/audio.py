@@ -146,14 +146,24 @@ def sfx(source, at, *, volume=1.0):
     return _finalize_generated_object(cache_path, cmd, [source], total)
 
 
-def voice(text, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0, **tts_kwargs):
-    """svtts(VOICEVOX)で text を音声合成し、その wav を素材とする音声Objectを返す。
+def voice(text, *, backend=None, speaker=None, speed=1.0, pitch=0.0, volume=1.0,
+          **tts_kwargs):
+    """svtts で text を音声合成し、その wav を素材とする音声Objectを返す。
+
+    backend: "voicevox"（キャラボイス・オフライン。要エンジン起動）/
+             "edge"（pip install edge-tts。導入が楽・オンライン必須）/
+             "sapi"（Windows標準・追加導入不要）。
+             None なら自動選択（環境変数 SCRIPTVEDIT_TTS_BACKEND →
+             VOICEVOX 起動中なら voicevox → 無ければ edge）。
+    speaker: バックエンドごとに解釈が違う（voicevox: 数値ID / edge: 音声名
+             （例 "ja-JP-NanamiNeural"） / sapi: 音声名）。None で各既定。
 
     duration は tts_duration による実長を自動設定するため、字幕・タイムラインと
-    自然に同期する。scriptvedit.tts が使えない/VOICEVOX 未起動なら親切なエラーを投げる。
+    自然に同期する。scriptvedit.tts が使えない/バックエンド未使用可なら親切なエラーを投げる。
 
     使用例:
-        v = voice("こんにちは、世界", speaker=3)
+        v = voice("こんにちは、世界", speaker=3)                       # VOICEVOX
+        v = voice("こんにちは、世界", backend="edge")                  # edge-tts
         v.show(v.duration)
     """
     try:
@@ -162,9 +172,10 @@ def voice(text, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0, **tts_kwargs):
         _svtts = _import_module("scriptvedit.tts")
     except ImportError as e:
         raise ImportError(
-            "voice() には scriptvedit.tts (VOICEVOX) が必要です。"
+            "voice() には scriptvedit.tts が必要です。"
             "scriptvedit.py と同じディレクトリに配置してください。") from e
-    wav = _svtts.tts(text, speaker=speaker, speed=speed, pitch=pitch, **tts_kwargs)
+    wav = _svtts.tts(text, backend=backend, speaker=speaker, speed=speed,
+                     pitch=pitch, **tts_kwargs)
     dur = _svtts.tts_duration(wav)
     obj = Object(wav)
     obj.duration = dur
@@ -199,7 +210,8 @@ class Narration:
         return self.audio.duration
 
 
-def narrate(text_content, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0,
+def narrate(text_content, *, backend=None, speaker=None, speed=1.0, pitch=0.0,
+            volume=1.0,
             subtitle=True, subtitle_style=None,
             x=0.5, y=0.9, size=36, color="white", font=None,
             box=True, box_color="black@0.6", box_border=10, alpha=1.0,
@@ -216,13 +228,15 @@ def narrate(text_content, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0,
     意味の字幕スタイル引数（既定はナレーション向けに下部中央+半透明ボックス）。
     subtitle_style を渡すと、これらの既定値を辞書キー（同名）で個別に上書きできる
     （例: subtitle_style={"size": 44, "y": 0.85}）。
-    volume/pitch/**tts_kwargs は voice() と同じ意味で音声側にのみ作用する。
+    backend/speaker/volume/pitch/**tts_kwargs は voice() と同じ意味で音声側にのみ作用する
+    （backend: "voicevox"/"edge"/"sapi"。None で自動選択）。
 
     戻り値: Narration(audio, subtitle) （タプルとして (a, t) = narrate(...) も可）。
-    scriptvedit.tts が使えない/VOICEVOX未起動時のエラーはvoice()同様に透過する。
+    scriptvedit.tts が使えない/バックエンド未使用可時のエラーはvoice()同様に透過する。
 
     使用例:
-        n = narrate("こんにちは、世界", speaker=3)
+        n = narrate("こんにちは、世界", speaker=3)                # VOICEVOX
+        n = narrate("こんにちは、世界", backend="edge")           # edge-tts
         # n.audio / n.subtitle、または audio, sub = narrate(...)
     """
     try:
@@ -230,10 +244,10 @@ def narrate(text_content, *, speaker=1, speed=1.0, pitch=0.0, volume=1.0,
         _svtts = _import_module("scriptvedit.tts")
     except ImportError as e:
         raise ImportError(
-            "narrate() には scriptvedit.tts (VOICEVOX) が必要です。"
+            "narrate() には scriptvedit.tts が必要です。"
             "scriptvedit.py と同じディレクトリに配置してください。") from e
-    wav = _svtts.tts(text_content, speaker=speaker, speed=speed, pitch=pitch,
-                     **tts_kwargs)
+    wav = _svtts.tts(text_content, backend=backend, speaker=speaker, speed=speed,
+                     pitch=pitch, **tts_kwargs)
     dur = _svtts.tts_duration(wav)
     # dur<=0（空テキスト等）だと show(0) で current_time が進まず
     # 連続 narrate が同じ開始点に重なるため明示エラーにする。

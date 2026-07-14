@@ -130,6 +130,16 @@ def _main(argv=None):
     p_cache.add_argument("--clear", action="store_true", help="キャッシュを全削除")
     p_cache.add_argument("--dir", default=_CACHE_DIR, help="キャッシュディレクトリ")
 
+    p_new = sub.add_parser("new", help="動画プロジェクトの雛形を生成する")
+    p_new.add_argument("path", help="生成先ディレクトリ")
+    p_new.add_argument("--template", choices=list(_SCAFFOLD_TEMPLATES), default="minimal",
+                       help="雛形の種類（既定: minimal / explainer=数式・字幕・BGM入り）")
+    p_new.add_argument("--force", action="store_true",
+                       help="生成先が空でなくても生成する")
+    p_new.add_argument("--width", type=int, default=1280, help="幅（既定: 1280）")
+    p_new.add_argument("--height", type=int, default=720, help="高さ（既定: 720）")
+    p_new.add_argument("--fps", type=int, default=30, help="fps（既定: 30）")
+
     p_watch = sub.add_parser("watch", help="スクリプト変更を監視して再実行")
     p_watch.add_argument("script", help="監視する Python スクリプト")
     p_watch.add_argument("--out", help="出力パス（スクリプトへ引数として渡す）")
@@ -167,6 +177,14 @@ def _main(argv=None):
         else:
             cache_stats(args.dir)  # 既定は統計表示
         return 0
+    if args.command == "new":
+        try:
+            new_project(args.path, template=args.template, force=args.force,
+                        width=args.width, height=args.height, fps=args.fps)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0
     if args.command == "watch":
         watch(args.script, out=args.out, interval=args.interval,
               max_cycles=args.max_cycles)
@@ -183,4 +201,5 @@ def _main(argv=None):
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
 from scriptvedit.cache import cache_clear, cache_gc, cache_stats
 from scriptvedit.manifest import _MANIFEST_KIND_SECTIONS, describe, describe_markdown
+from scriptvedit.scaffold import TEMPLATES as _SCAFFOLD_TEMPLATES, new_project
 from scriptvedit.state import _CACHE_DIR

@@ -40,7 +40,8 @@ plugin / project_method / transform。
 
 各 Effect エントリには `bakeable` フィールドがあり、キャッシュに焼けるかが分かる。
 
-その他の CLI: `python -m scriptvedit cache`（統計/GC/全削除）、
+その他の CLI: `python -m scriptvedit new <path>`（プロジェクト雛形生成）、
+`python -m scriptvedit cache`（統計/GC/全削除）、
 `python -m scriptvedit watch`（変更監視して再実行）。
 
 補足として `README.md` に DSL 記法と設計思想がまとまっている。
@@ -197,12 +198,23 @@ overlay の中央配置は `(W-pad_size[0])/2` で計算される（`filters/vid
   0 は返さない（`clip((t-start)/0,…)` のゼロ除算で ffmpeg が EINVAL になるため、
   fallback=5 へ落とす）。
 - **素材参照は `asset()` / `here()` を使う**（`src/scriptvedit/assets.py`）。cwd 依存にしない。
-  - `asset("images/bg.jpg")` … `assets/` を自動発見して絶対パスを返す。探索順は
-    `SCRIPTVEDIT_ASSETS` → **cwd から上方向** → 実行中レイヤーファイルから上方向 →
-    パッケージ位置から上方向。**利用者プロジェクトの `assets/` が最優先**
-    （順序を逆にすると editable install ではリポジトリ同梱の assets/ が常に勝ち、
-    利用者自身の assets/ が永久に無視される）。結果はキャッシュしない。
+  - `asset("images/bg.jpg")` の解決順は
+    `<project>/assets/` → `<project>/assets/_imported/` →
+    **共有素材ライブラリ**（環境変数 `SCRIPTVEDIT_ASSETS`。`;` 区切りで複数可）。
+    共有ライブラリで見つかった素材は `assets/_imported/<relpath>` へ**コピーしてから**
+    そのコピー先のパスを返す（プロジェクトが自己完結する）。コピーは dry_run でも
+    常に行う（戻り値が ffmpeg コマンドに埋まるため、dry_run と本レンダでパスが
+    食い違うとスナップショットが壊れる）。キャッシュ鍵は内容ハッシュなので
+    パスが変わっても再レンダは起きない。取り込み済みと共有ライブラリの内容が違う
+    場合は警告して取り込み済みを優先（黙って上書きしない）。
     存在しなければ近い名前を提案して `FileNotFoundError`。
+  - `<project>/assets` 自体の発見順は **cwd から上方向** → 実行中レイヤーファイルから
+    上方向 → パッケージ位置から上方向（環境変数による上書きは無い）。
+    **利用者プロジェクトの `assets/` が最優先**（順序を逆にすると editable install では
+    リポジトリ同梱の assets/ が常に勝ち、利用者自身の assets/ が永久に無視される）。
+    結果はキャッシュしない。
+  - 新規プロジェクトは `python -m scriptvedit new <path> [--template explainer]` で
+    雛形生成（`src/scriptvedit/scaffold.py`）。生成直後に `python main.py` でレンダできる。
   - `here("scene.html")` … 実行中のレイヤーファイルと同じディレクトリ。
   - `p.layer("bg.py")` も cwd 非依存に解決される。
 
@@ -245,9 +257,9 @@ overlay の中央配置は `(W-pad_size[0])/2` で計算される（`filters/vid
 
 ## 8. やってはいけないこと
 
-- **勝手に `git push` しない。** pre-push フックが `scripts/upload_to_server.py` を呼び、
-  環境変数 `LOLIPOP_FTP_PASS` が設定されていると**全ソースを公開FTPサーバへ
-  アップロードする**（毎回、全削除→全アップロード）。push は明示的に指示されたときだけ。
+- **勝手に `git push` しない。** push は明示的に指示されたときだけ行う。
+  （以前は pre-push フックで全ソースを公開FTPサーバへ上げていたが、その仕組みは廃止した。
+  現在フックが行うのは `C:/code/scriptvedit_N.zip` のアーカイブ生成のみ。）
 - **差分を目視確認せずに `--snapshot-update` しない。**
 - **後方互換のための互換シムを増やさない。** このプロジェクトは後方互換不要の方針。
   古い API を残すのではなく、呼び出し側を新しい形に直す。

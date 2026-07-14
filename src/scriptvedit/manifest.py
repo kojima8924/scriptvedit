@@ -181,6 +181,20 @@ _MANIFEST_PARAM_META = {
     ("assemble_from", "source"): {"type": "string", "required": True, "desc": "集合元の画像パス"},
     ("narrate", "text_content"): {"type": "string", "required": True, "desc": "読み上げテキスト"},
     ("voice", "text"): {"type": "string", "required": True, "desc": "読み上げテキスト"},
+    # TTS バックエンド（None で自動選択: env SCRIPTVEDIT_TTS_BACKEND → VOICEVOX 起動判定 → edge）
+    ("voice", "backend"): {"type": "choice", "default": None,
+                           "choices": ["voicevox", "edge", "sapi"],
+                           "desc": "TTSバックエンド（voicevox=要エンジン起動・オフライン / "
+                                   "edge=pip install edge-tts・オンライン必須 / "
+                                   "sapi=Windows標準）。None で自動選択"},
+    ("narrate", "backend"): {"type": "choice", "default": None,
+                             "choices": ["voicevox", "edge", "sapi"],
+                             "desc": "TTSバックエンド（voice と同じ。None で自動選択）"},
+    ("voice", "speaker"): {"type": "any", "default": None,
+                           "desc": "話者（voicevox=数値ID / edge=音声名 例 ja-JP-NanamiNeural / "
+                                   "sapi=音声名）。None で各バックエンドの既定"},
+    ("narrate", "speaker"): {"type": "any", "default": None,
+                             "desc": "話者（voice と同じ。None で各バックエンドの既定）"},
     ("slide", "html_file"): {"type": "string", "required": True, "desc": "HTMLファイルパス"},
     ("beat_sync", "audio_source"): {"type": "string", "required": True, "desc": "音声ファイルパス"},
 }
@@ -204,8 +218,12 @@ _MANIFEST_NOTES = {
     "assemble_from": ["bakeable ops の末尾に1つだけ置ける（終端フレーム生成Effect）"],
     "rotate": ["時間依存の式（u を含む式）は不可。時間変化する回転は rotate_to() を使う"],
     "scale": ["pad サイズ決定のため、u のみに依存する数値評価可能な式であること"],
-    "narrate": ["VOICEVOX（別プロセス）が起動している必要がある"],
-    "voice": ["VOICEVOX（別プロセス）が起動している必要がある"],
+    "narrate": ['backend="voicevox"（既定候補）は VOICEVOX（別プロセス）の起動が必要',
+                'backend="edge" なら pip install edge-tts で使える（オンライン必須）',
+                "backend=None は自動選択（VOICEVOX 起動中なら voicevox、無ければ edge）"],
+    "voice": ['backend="voicevox"（既定候補）は VOICEVOX（別プロセス）の起動が必要',
+              'backend="edge" なら pip install edge-tts で使える（オンライン必須）',
+              "speaker の意味はバックエンドごとに違う（数値ID / 音声名）"],
     "beat_sync": ["scipy が必要（未インストールなら ImportError）"],
     "slide": ["HTML レンダリングに web 経路（Playwright 等）を使う"],
     "lut": [".cube 形式のみ"],
@@ -295,11 +313,17 @@ _MANIFEST_CONSTRAINTS = [
                 "オブジェクト単位の局所合成ではなく、bakeable にもできない。",
     },
     {
-        "id": "voicevox_required",
+        "id": "tts_backend",
         "topic": "外部依存",
         "severity": "error",
         "applies_to": ["narrate", "voice"],
-        "text": "narrate/voice は VOICEVOX エンジンが起動している必要がある（既定 127.0.0.1:50021）。",
+        "text": "narrate/voice の TTS はバックエンドを選べる。"
+                'backend="voicevox"（既定 127.0.0.1:50021。エンジンの別途起動が必要・'
+                'オフライン・キャラボイス）、backend="edge"（pip install edge-tts。'
+                '導入が容易だがオンライン必須。speaker は "ja-JP-NanamiNeural" のような音声名）、'
+                'backend="sapi"（Windows標準・追加導入不要）。'
+                "backend=None は自動選択（環境変数 SCRIPTVEDIT_TTS_BACKEND → "
+                "VOICEVOX 起動中なら voicevox → 無ければ edge）。",
     },
     {
         "id": "scipy_required",
@@ -369,6 +393,11 @@ _MANIFEST_USAGE = {
         "<= 演算子で Object に Transform/Effect/AudioEffect を適用する（適用順に実行される）",
         "u: エフェクトの進行度 0..1。lambda u: ... または Expr で時間変化を書く",
         "Expr: FFmpeg 式へ展開される式オブジェクト。lambda u: lerp(0, 1, u) は自動で Expr になる",
+        "asset('images/bg.jpg'): プロジェクトの assets/ → assets/_imported/ → "
+        "共有ライブラリ(環境変数 SCRIPTVEDIT_ASSETS、; 区切り)の順に解決する。"
+        "共有ライブラリで見つかった素材は assets/_imported/ へコピーしてそのパスを返す"
+        "（プロジェクトが自己完結する。キャッシュ鍵は内容ハッシュなので再レンダは起きない）",
+        "here('scene.html'): 実行中のレイヤーファイルと同じディレクトリ（cwd 非依存）",
     ],
     "main_script": (
         "import os\n"
@@ -435,6 +464,8 @@ _MANIFEST_USAGE = {
         "5. 足りない Effect は plugins/*.py に @effect_plugin で足す（コア編集不要）",
     ],
     "cli": [
+        "python -m scriptvedit new myvideo              # 動画プロジェクトの雛形を生成",
+        "python -m scriptvedit new myvideo --template explainer  # 数式・字幕・BGM入り",
         "python -m scriptvedit describe                 # 全マニフェスト（JSON）",
         "python -m scriptvedit describe --format md     # 人間可読 Markdown",
         "python -m scriptvedit describe --kind effect   # 種別で絞る",
