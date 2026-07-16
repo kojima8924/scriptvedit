@@ -341,7 +341,7 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
                 )
         elif e.name == "wipe":
             prog_expr = e.params.get("progress", Const(1))
-            # geqの時間変数は大文字T（小文字tは未定義。fade L319と同じ）
+            # geqの時間変数は大文字T（小文字tは未定義。fade 経路と同じ）
             u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
             ffmpeg_str = prog_expr.to_ffmpeg(u_expr)
             direction = e.params.get("direction", "left")
