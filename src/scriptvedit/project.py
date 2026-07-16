@@ -2047,7 +2047,10 @@ class Project:
             current_base = out_label
 
         # --- 音声チェーン ---
-        audio_objects = [o for o in sorted_objects if o.has_audio]
+        # サムネイル等の映像専用出力では音声枝を構築しない。構築だけして
+        # -map しないと、loudnorm 等の終端が未接続になり ffmpeg が EINVAL で落ちる。
+        audio_objects = ([o for o in sorted_objects if o.has_audio]
+                         if fmt["has_audio"] else [])
         audio_out = None
 
         if audio_objects:
