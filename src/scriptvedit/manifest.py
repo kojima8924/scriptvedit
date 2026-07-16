@@ -405,6 +405,15 @@ _MANIFEST_CONSTRAINTS = [
                 "明示的な音声削除には adelete() を使う。将来の audit/strict モードでは"
                 "無視されたヒントを info/warning 級lintとして報告する予定。",
     },
+    {
+        "id": "render_timeout",
+        "topic": "出力",
+        "severity": "info",
+        "applies_to": ["Project.render"],
+        "text": "render() の timeout は既定値 None（無制限）。制限が必要な場合だけ"
+                "秒数を明示する。単一出力は一時パスから原子的に確定し、明示"
+                "タイムアウトまたはCtrl+Cによる中断時は書きかけを削除する。",
+    },
 ]
 
 # AI 向けの使い方（describe の出力だけでスクリプトが書けることを目標にする）

@@ -666,7 +666,7 @@ class Project:
                 if until_name and until_name not in self._anchors:
                     raise RuntimeError(f"未定義のアンカー: '{until_name}'")
 
-    def render(self, output_path, *, dry_run=False, timeout=1800,
+    def render(self, output_path, *, dry_run=False, timeout=None,
                start=None, end=None, draft=False, alpha=False):
         # _ACTIVE_QUALITY を try/finally で復元（draft レンダ後に "draft" が
         # 残留して別レンダの鍵に混入するのを防ぐ。dry_run早期returnや例外時も復元）
@@ -678,8 +678,9 @@ class Project:
         finally:
             _ACTIVE_QUALITY[0] = _prev_active_quality
 
-    def _render_impl(self, output_path, *, dry_run=False, timeout=1800,
+    def _render_impl(self, output_path, *, dry_run=False, timeout=None,
                      start=None, end=None, draft=False, alpha=False):
+        output_path = os.fsdecode(output_path)
         self._reset_runtime_state()
         self._dry_run = dry_run
         self._draft = bool(draft)
@@ -770,7 +771,29 @@ class Project:
         print(f"実行コマンド:")
         print(f"  ffmpeg {' '.join(cmd[1:])}")
         print()
-        _run_ffmpeg(cmd, timeout=timeout)
+        fmt = self._resolve_output_format(output_path)
+        if fmt["kind"] == "pngseq":
+            # 連番は単一パスへ原子的に確定できないため従来どおり直接出力する。
+            _run_ffmpeg(cmd, timeout=timeout)
+        else:
+            # 最終単一出力もキャッシュと同じく、同拡張子の一時パスへ書いてから
+            # 原子的に確定する。timeout/Ctrl+C/ffmpeg失敗では一時ファイルだけを
+            # 消すため、壊れた新規出力も、既存の正常な完成品の消失も防げる。
+            final_path = fmt["output_path"]
+            tmp_path = _unique_tmp_path(final_path)
+            run_cmd = list(cmd)
+            if not run_cmd or os.fsdecode(run_cmd[-1]) != final_path:
+                raise ValueError(
+                    "render: ffmpegコマンドの最終出力パスを一時パスへ置換できません")
+            run_cmd[-1] = tmp_path
+            try:
+                _run_ffmpeg(run_cmd, timeout=timeout)
+                os.replace(tmp_path, final_path)
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
         self._generate_pending_caches()
         elapsed = _time.perf_counter() - _t0
         generated = _GEN_COUNTER[0]
