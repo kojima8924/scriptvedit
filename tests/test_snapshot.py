@@ -10,17 +10,32 @@ import pytest
 from scriptvedit import *
 from scriptvedit.text import _resolve_font
 
-
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffprobe") is None,
-    reason="ffprobe が見つからないためスナップショットテストをスキップします",
-)
-
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TESTS_DIR)               # リポジトリルート
 LAYERS_DIR = os.path.join(TESTS_DIR, "layers")  # レイヤー定義（testNN_*.py）
 SNAPSHOT_DIR = os.path.join(TESTS_DIR, "snapshots")
 PLUGINS_DIR = os.path.join(ROOT, "plugins")     # サンプルプラグイン（明示ロード用）
+
+# ffprobe 不在でスナップショット結果が変わるテストだけを依存対象にする。
+# モジュール全体を skip すると、影響を受けないフィルタ文字列の回帰まで見逃してしまう。
+_FFPROBE_TESTS = frozenset({
+    "test01", "test02", "test06", "test07", "test08", "test09", "test11",
+    "test12", "test13", "test14", "test15", "test17", "test18", "test20",
+    "test23", "test25", "test30", "test36", "test56", "test57", "test58",
+    "test79", "test80", "test82", "test84", "test89",
+})
+
+_SNAPSHOT_ASSETS = {
+    "test79": ("video/flowerbg_noaudio.mp4",),
+    "test82": ("video/guitar_noaudio.mp4",),
+    "test83": ("video/guitar_noaudio.mp4",),
+    "test84": ("video/flowerbg_noaudio.mp4",),
+}
+
+_TEST91_CHECKPOINT_RE = re.compile(
+    r"__cache__/artifacts/checkpoint/[0-9a-fA-F]{8}/[0-9a-fA-F]{16}\.mkv")
+_TEST91_CHECKPOINT_TOKEN = (
+    "__cache__/artifacts/checkpoint/<HASH8>/<HASH16>.mkv")
 
 
 def L(name):
@@ -60,6 +75,36 @@ def normalize_cmd(cmd):
     return cmd
 
 
+def _normalize_snapshot_comparison(name, value):
+    """test91 の環境依存 checkpoint ハッシュだけを比較時に正規化する。
+
+    formula PNG のパスやフィルタ文字列はレンダ内容そのものなので保持する。
+    スナップショット保存前には呼ばず、具体的なキャッシュ鍵も記録に残す。
+    """
+    if name != "test91":
+        return value
+    if isinstance(value, dict):
+        return {
+            _normalize_snapshot_comparison(name, key):
+            _normalize_snapshot_comparison(name, item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_snapshot_comparison(name, item) for item in value]
+    if isinstance(value, str):
+        return _TEST91_CHECKPOINT_RE.sub(_TEST91_CHECKPOINT_TOKEN, value)
+    return value
+
+
+def _skip_missing_snapshot_assets(name):
+    """gitignore 対象の大容量素材が無いテストを正直に skip する。"""
+    for relpath in _SNAPSHOT_ASSETS.get(name, ()):
+        try:
+            asset(relpath)
+        except FileNotFoundError:
+            pytest.skip(f"素材 assets/{relpath} が無い環境")
+
+
 def load_snapshot(name):
     path = os.path.join(SNAPSHOT_DIR, f"{name}.json")
     if not os.path.exists(path):
@@ -83,14 +128,16 @@ def run_test(name, setup_fn, update=False):
         save_snapshot(name, cmd)
         print(f"  {name}: スナップショット{'更新' if expected else '作成'}")
         return True
-    if cmd != expected:
+    actual_cmp = _normalize_snapshot_comparison(name, cmd)
+    expected_cmp = _normalize_snapshot_comparison(name, expected)
+    if actual_cmp != expected_cmp:
         print(f"  {name}: 不一致!")
-        for i, (a, b) in enumerate(zip(cmd, expected)):
+        for i, (a, b) in enumerate(zip(actual_cmp, expected_cmp)):
             if a != b:
                 print(f"    [{i}] 期待: {b}")
                 print(f"    [{i}] 実際: {a}")
-        if len(cmd) != len(expected):
-            print(f"    長さ: 期待={len(expected)}, 実際={len(cmd)}")
+        if len(actual_cmp) != len(expected_cmp):
+            print(f"    長さ: 期待={len(expected_cmp)}, 実際={len(actual_cmp)}")
         return False
     print(f"  {name}: OK")
     return True
@@ -976,6 +1023,9 @@ def _snapshot_update_requested(request):
 @pytest.mark.parametrize("name,setup_fn", ALL_TESTS, ids=[n for n, _ in ALL_TESTS])
 def test_snapshot(name, setup_fn, request):
     """dry_run で生成した ffmpeg コマンドがスナップショットと一致すること"""
+    if name in _FFPROBE_TESTS and shutil.which("ffprobe") is None:
+        pytest.skip("ffprobe が見つからないためスキップします")
+    _skip_missing_snapshot_assets(name)
     if name in {"test52", "test53", "test54", "test85"}:
         try:
             _resolve_font(None)
@@ -989,7 +1039,59 @@ def test_snapshot(name, setup_fn, request):
     assert expected is not None, (
         f"{name}: スナップショットがありません。"
         f"`pytest tests/test_snapshot.py --snapshot-update` で生成してください")
-    assert cmd == expected, f"{name}: ffmpegコマンドがスナップショットと一致しません"
+    actual_cmp = _normalize_snapshot_comparison(name, cmd)
+    expected_cmp = _normalize_snapshot_comparison(name, expected)
+    assert actual_cmp == expected_cmp, (
+        f"{name}: ffmpegコマンドがスナップショットと一致しません")
+
+
+def test_test91_checkpoint_hash_normalization():
+    """test91 は checkpoint ハッシュだけが違っても同一と判定する。"""
+    actual = {
+        "main": [
+            "__cache__/artifacts/checkpoint/aaaaaaaa/1111111111111111.mkv",
+            "__cache__/artifacts/formula/formula-a.png",
+            "-filter_complex", "overlay=x=10:y=20",
+        ],
+        "cache": {
+            "__cache__/artifacts/checkpoint/aaaaaaaa/1111111111111111.mkv": [
+                "__cache__/artifacts/checkpoint/aaaaaaaa/1111111111111111.mkv"],
+        },
+    }
+    expected = {
+        "main": [
+            "__cache__/artifacts/checkpoint/bbbbbbbb/2222222222222222.mkv",
+            "__cache__/artifacts/formula/formula-a.png",
+            "-filter_complex", "overlay=x=10:y=20",
+        ],
+        "cache": {
+            "__cache__/artifacts/checkpoint/bbbbbbbb/2222222222222222.mkv": [
+                "__cache__/artifacts/checkpoint/bbbbbbbb/2222222222222222.mkv"],
+        },
+    }
+    assert (_normalize_snapshot_comparison("test91", actual)
+            == _normalize_snapshot_comparison("test91", expected))
+    # test91 以外には同じ救済を適用しない。
+    assert (_normalize_snapshot_comparison("test90", actual)
+            != _normalize_snapshot_comparison("test90", expected))
+
+
+@pytest.mark.parametrize("index,replacement", [
+    (1, "__cache__/artifacts/formula/formula-b.png"),
+    (3, "overlay=x=11:y=20"),
+])
+def test_test91_normalization_preserves_render_differences(index, replacement):
+    """formula 素材やフィルタの実質差分は正規化後も検出する。"""
+    actual = [
+        "__cache__/artifacts/checkpoint/aaaaaaaa/1111111111111111.mkv",
+        "__cache__/artifacts/formula/formula-a.png",
+        "-filter_complex", "overlay=x=10:y=20",
+    ]
+    expected = list(actual)
+    expected[0] = "__cache__/artifacts/checkpoint/bbbbbbbb/2222222222222222.mkv"
+    expected[index] = replacement
+    assert (_normalize_snapshot_comparison("test91", actual)
+            != _normalize_snapshot_comparison("test91", expected))
 
 
 if __name__ == "__main__":

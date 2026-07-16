@@ -49,6 +49,14 @@ def _require_beat_env():
         _skip("scriptvedit.beat（numpy/scipy）が無い環境")
 
 
+def _require_asset(relpath):
+    """gitignore 対象を含む素材が無い環境では正直に skip する。"""
+    try:
+        return asset(relpath)
+    except FileNotFoundError:
+        _skip(f"素材 assets/{relpath} が無い環境")
+
+
 def check_math_sin_in_lambda():
     """lambda内でmath.sinを使用 → TypeErrorかつ案内メッセージ"""
     import math
@@ -2585,6 +2593,7 @@ def check_blend_mode_alias():
 
 def check_reverse_too_long():
     """reverse: 実効尺が30秒超（speedで引き伸ばし） → ValueError"""
+    _require_asset("video/guitar_noaudio.mp4")
     layer = (
         "from scriptvedit import *\n"
         "obj = Object(asset(\"video/guitar_noaudio.mp4\"))\n"
@@ -2610,9 +2619,10 @@ def check_reverse_too_long():
 
 def check_video_sequence_tdur_too_big():
     """video_sequence: t_dur が最短クリップ以上 → ValueError"""
+    guitar = _require_asset("video/guitar_noaudio.mp4")
     _mk_project()
     try:
-        video_sequence(asset("video/fox_noaudio.mp4"), asset("video/guitar_noaudio.mp4"), t_dur=6.0)
+        video_sequence(asset("video/fox_noaudio.mp4"), guitar, t_dur=6.0)
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -2957,13 +2967,11 @@ def check_tts_backend_env_selection():
 def check_tts_backend_fallback_to_edge():
     """backend=None の自動選択: VOICEVOX 未起動なら edge にフォールバックする"""
     import os
-    from scriptvedit import tts as svtts
+    svtts = _edge_or_skip()
     orig = os.environ.pop("SCRIPTVEDIT_TTS_BACKEND", None)
     try:
         # 到達不能ポートを指定して「VOICEVOX 未起動」を再現する
         got = svtts._resolve_backend(None, port=1)
-        if not svtts._edge_available():
-            _skip("edge-tts 未導入（フォールバック先が無い環境）")
         return (True, "未起動→edge") if got == "edge" else (False, f"edge にならない: {got}")
     finally:
         if orig is not None:
