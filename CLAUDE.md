@@ -50,7 +50,7 @@ plugin / project_method / transform。
 
 ```bash
 pip install -e .[all]      # コアは標準ライブラリのみ。extras: morph/web/beat/tools
-pytest tests/              # 349件（約30秒）
+pytest tests/              # 392件（約30秒）
 python tests/render_all.py # 実レンダリング（重い。出力は tests/output/）
 ```
 

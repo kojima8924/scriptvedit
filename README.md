@@ -39,7 +39,7 @@ scriptvedit/
 │   ├── assets.py        素材パス解決（asset / here / layer、共有ライブラリ取り込み）
 │   └── templates/       テンプレートHTML + vendor/katex（同梱、CDN参照なし）
 ├── assets/              素材（images/ video/ audio/）
-├── tests/               pytest（349件）
+├── tests/               pytest（392件）
 │   ├── layers/          レイヤー定義（testNN_*.py）とフィクスチャ
 │   └── snapshots/       ffmpegコマンドのスナップショット
 ├── examples/basic/      最小サンプル
@@ -1152,7 +1152,7 @@ cmd = p.render("output.mp4", dry_run=True)
 pytest で実行する（どのディレクトリからでも可。`cd tests` は不要）。
 
 ```
-pytest tests/                             # 全349件（スナップショット/エラーケース/素材解決/雛形生成）
+pytest tests/                             # 全392件（スナップショット/エラーケース/素材解決/雛形生成/堅牢性/フォント解決）
 pytest tests/test_snapshot.py             # スナップショットのみ
 pytest tests/test_errors.py -k plugin     # 名前で絞り込み
 pytest tests/test_snapshot.py --snapshot-update   # スナップショット再生成
