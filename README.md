@@ -736,7 +736,7 @@ subtitles("subs.srt", style="FontName=Meiryo,FontSize=28").time(30)           # 
 
 - `x` / `y` / `alpha` は 0..1 のキャンバス比率で Expr/lambda 可（liveアニメ）
 - `size` は定数のみ（FFmpeg 8.0 の drawtext fontsize 式は SEGV のため）
-- 日本語は `font=` 指定を推奨（未指定時は meiryo 等の既定候補を自動探索）
+- フォントは未指定時に OS 別の既定候補を自動探索する（Windows: メイリオ等 / Linux: Noto Sans CJK・IPAゴシック / macOS: ヒラギノ）。環境変数 `SCRIPTVEDIT_FONT` で既定フォントを上書き可能（CI・Docker での固定に便利）。見つからない場合は OS 別の導入例（`apt install fonts-noto-cjk` 等）つきのエラーで案内する
 - `counter` の `format` は整数指定（`%d` / `%03d` 等）のみ。前後のリテラル文字も表示可能
 - `subtitles` は SRT 自身のタイムコードで表示されるため `.time(全体尺)` で開始0に配置する
 

@@ -3,7 +3,7 @@
 #   pytest tests/test_snapshot.py                    # 検証（どのディレクトリからでも実行可）
 #   pytest tests/test_snapshot.py --snapshot-update  # スナップショット再生成
 #   python tests/test_snapshot.py --update           # 同上（pytest 無しでも可）
-import sys, os, json, shutil
+import sys, os, re, json, shutil
 
 import pytest
 
@@ -33,7 +33,11 @@ def _rel_to_root(s):
     t = (s.replace(root_win + "\\", "")
           .replace(root_ffesc + "/", "")
           .replace(root_posix + "/", ""))
-    return t.replace("\\", "/")
+    t = t.replace("\\", "/")
+    # フォントパスの正規化: 既定フォントの解決結果は OS ごとに異なる絶対パスに
+    # なるため、fontfile='...' の値だけを <FONT> トークンへ畳む（issue #1）。
+    # 対象を fontfile パラメータに限定し、それ以外の差分の検出力は落とさない。
+    return re.sub(r"fontfile='[^']*'", "fontfile='<FONT>'", t)
 
 
 def normalize_cmd(cmd):

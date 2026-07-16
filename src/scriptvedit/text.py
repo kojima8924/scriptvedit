@@ -18,33 +18,107 @@ import inspect as _inspect
 
 # --- テキスト/字幕（drawtext・subtitles）ヘルパー ---
 
-# 日本語表示用フォントの既定候補（Windows）。先頭から存在するものを採用。
-_DEFAULT_FONT_CANDIDATES = [
-    "C:/Windows/Fonts/meiryo.ttc",
-    "C:/Windows/Fonts/YuGothM.ttc",
-    "C:/Windows/Fonts/msgothic.ttc",
-    "C:/Windows/Fonts/msmincho.ttc",
-]
+# 日本語表示用フォントの既定候補（OS別）。実行OSのグループを先頭に並べ替えて
+# 先頭から存在するものを採用する（他OSの候補も残す: コンテナ等で判定が
+# 実態とずれても救済できるように）。
+_FONT_CANDIDATES_BY_OS = {
+    "windows": [
+        "C:/Windows/Fonts/meiryo.ttc",
+        "C:/Windows/Fonts/YuGothM.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
+        "C:/Windows/Fonts/msmincho.ttc",
+    ],
+    "linux": [
+        # Noto Sans CJK（Debian/Ubuntu: fonts-noto-cjk）
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+        # Fedora / RHEL 系（google-noto-sans-cjk-jp-fonts）
+        "/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        # Arch（noto-fonts-cjk）
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        # openSUSE
+        "/usr/share/fonts/truetype/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        # IPAゴシック（Debian/Ubuntu: fonts-ipafont-gothic）
+        "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+    ],
+    "darwin": [
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
+    ],
+}
+
+# フォントが見つからないときの OS 別導入例（エラーメッセージ用）
+_FONT_INSTALL_HINTS = {
+    "windows": "Windows: 通常 C:/Windows/Fonts/meiryo.ttc が標準で存在します",
+    "linux": ("Linux: sudo apt install fonts-noto-cjk (Debian/Ubuntu) / "
+              "sudo dnf install google-noto-sans-cjk-jp-fonts (Fedora) / "
+              "sudo pacman -S noto-fonts-cjk (Arch)"),
+    "darwin": "macOS: ヒラギノが標準搭載です（/System/Library/Fonts/ 配下）",
+}
+
+
+def _platform_key():
+    """実行OSを windows / linux / darwin のいずれかに分類する"""
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "darwin"
+    return "linux"
+
+
+def _ordered_font_candidates(os_key=None):
+    """既定フォント候補を、指定OS（省略時は実行OS）のグループを先頭に並べて返す"""
+    key = os_key if os_key is not None else _platform_key()
+    ordered = list(_FONT_CANDIDATES_BY_OS.get(key, []))
+    for k, cands in _FONT_CANDIDATES_BY_OS.items():
+        if k != key:
+            ordered.extend(cands)
+    return ordered
+
+
+# 後方参照用のフラットな候補リスト（実行OSの候補が先頭）
+_DEFAULT_FONT_CANDIDATES = _ordered_font_candidates()
 
 
 def _resolve_font(font):
-    """フォントパスを解決。font省略時は既定候補から存在するものを返す。
-    見つからない場合は日本語エラーで案内する。"""
+    """フォントパスを解決。font省略時は環境変数 SCRIPTVEDIT_FONT →
+    既定候補（実行OSの候補を優先）の順で存在するものを返す。
+    見つからない場合は OS 別の導入例を含む日本語エラーで案内する。"""
     if font is not None:
         path = font.replace("\\", "/")
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"指定フォントが見つかりません: {font}\n"
                 f"日本語表示には .ttc/.ttf の実在パスを指定してください "
-                f"(例: C:/Windows/Fonts/meiryo.ttc)")
+                f"(例: Windows 'C:/Windows/Fonts/meiryo.ttc' / "
+                f"Linux '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc' / "
+                f"macOS '/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc')")
+        return path
+    env_font = os.environ.get("SCRIPTVEDIT_FONT")
+    if env_font:
+        path = env_font.replace("\\", "/")
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"環境変数 SCRIPTVEDIT_FONT のフォントが見つかりません: {env_font}\n"
+                f"実在する .ttc/.ttf のパスを設定するか、変数を解除してください。")
         return path
     for cand in _DEFAULT_FONT_CANDIDATES:
         if os.path.exists(cand):
             return cand
     raise FileNotFoundError(
         "既定の日本語フォントが見つかりませんでした。\n"
-        "font= に実在するフォントパスを明示してください "
-        "(例: font='C:/Windows/Fonts/meiryo.ttc')。\n"
+        "システムに日本語フォントを導入するか、font= または環境変数 "
+        "SCRIPTVEDIT_FONT で実在するフォントパスを明示してください。\n"
+        f"導入例 — {_FONT_INSTALL_HINTS['linux']}\n"
+        f"       — {_FONT_INSTALL_HINTS['windows']}\n"
+        f"       — {_FONT_INSTALL_HINTS['darwin']}\n"
         f"探索した候補: {', '.join(_DEFAULT_FONT_CANDIDATES)}")
 
 

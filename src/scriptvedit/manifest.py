@@ -154,7 +154,7 @@ _MANIFEST_PARAM_META = {
                                    "desc": "静止させる長さ（秒。実効尺がこの分伸びる）"},
     ("opacity", "value"): {"type": "expr", "desc": "不透明度 0〜1（Expr/lambda 可）"},
     ("rounded", "radius"): {"type": "int", "min": 0, "max": 4096, "desc": "角の半径px（0で無効）"},
-    ("text", "font"): {"type": "string", "desc": "フォントファイルパス（省略時は日本語フォントを自動選択）"},
+    ("text", "font"): {"type": "string", "desc": "フォントファイルパス（省略時はOS別の日本語フォント候補から自動選択。環境変数 SCRIPTVEDIT_FONT で上書き可）"},
     # 縁取り・影（既定値では drawtext オプションを一切出力しない）
     ("text", "border"): {"type": "int", "default": 0, "min": 0,
                          "desc": "縁取り（アウトライン）の太さpx（0で無効）"},
