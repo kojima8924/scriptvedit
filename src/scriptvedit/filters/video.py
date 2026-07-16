@@ -341,7 +341,8 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
                 )
         elif e.name == "wipe":
             prog_expr = e.params.get("progress", Const(1))
-            u_expr = f"clip((t-{start})/{dur}\\,0\\,1)"
+            # geqの時間変数は大文字T（小文字tは未定義。fade L319と同じ）
+            u_expr = f"clip((T-{start})/{dur}\\,0\\,1)"
             ffmpeg_str = prog_expr.to_ffmpeg(u_expr)
             direction = e.params.get("direction", "left")
             filters.append("format=rgba")
@@ -360,16 +361,23 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
                 h_str = e.params["hue"].to_ffmpeg(u_expr)
                 parts.append(f"hue=h={h_str}")
             eq_parts = []
+            eq_dynamic = False
             if "saturation" in e.params:
                 s_str = e.params["saturation"].to_ffmpeg(u_expr)
                 eq_parts.append(f"saturation={s_str}")
+                eq_dynamic = eq_dynamic or not isinstance(e.params["saturation"], Const)
             if "brightness" in e.params:
                 b_str = e.params["brightness"].to_ffmpeg(u_expr)
                 eq_parts.append(f"brightness={b_str}")
+                eq_dynamic = eq_dynamic or not isinstance(e.params["brightness"], Const)
             for p in parts:
                 filters.append(p)
             if eq_parts:
-                filters.append("eq=" + ":".join(eq_parts))
+                eq_filter = "eq=" + ":".join(eq_parts)
+                if eq_dynamic:
+                    # eqの既定はeval=init（初期化時1回のみ評価）→ 動的式は毎フレーム評価が必要
+                    eq_filter += ":eval=frame"
+                filters.append(eq_filter)
         elif e.name == "chroma_key":
             color = e.params.get("color", "green")
             sim = e.params.get("similarity", 0.1)

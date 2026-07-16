@@ -152,7 +152,7 @@ def ease_out_elastic(t):
 def ease_in_out_elastic(t):
     t = _to_expr(t)
     branch1 = -pow(2, Const(20) * t - Const(10)) * sin((Const(20) * t - Const(11.125)) * Const(_EASE_C5)) / Const(2)
-    branch2 = pow(2, Const(-20) * t + Const(10)) * sin((Const(20) * t - Const(11.125)) * Const(_EASE_C5)) / Const(-2) + Const(1)
+    branch2 = pow(2, Const(-20) * t + Const(10)) * sin((Const(20) * t - Const(11.125)) * Const(_EASE_C5)) / Const(2) + Const(1)
     inner = if_(lt(t, 0.5), branch1, branch2)
     return if_(lt(t, Const(0.001)), Const(0),
            if_(lt(Const(0.999), t), Const(1), inner))

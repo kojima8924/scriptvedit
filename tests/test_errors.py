@@ -4400,6 +4400,189 @@ def check_describe_cli_output_file():
             os.remove(out)
 
 
+# --- issue #3〜#7 の回帰テスト（dry_runでは検出できないffmpeg式レベルのバグ） ---
+
+def check_easing_numeric_regression():
+    """#3: 全easing 34本が標準定義（easings.net）と数値一致（誤差<1e-3）"""
+    import math as _m
+    _PI = _m.pi
+    c1 = 1.70158
+    c2 = c1 * 1.525
+    c3 = c1 + 1
+    c4 = (2 * _PI) / 3
+    c5 = (2 * _PI) / 4.5
+
+    def _out_bounce(t):
+        n1, d1 = 7.5625, 2.75
+        if t < 1 / d1:
+            return n1 * t * t
+        if t < 2 / d1:
+            t -= 1.5 / d1
+            return n1 * t * t + 0.75
+        if t < 2.5 / d1:
+            t -= 2.25 / d1
+            return n1 * t * t + 0.9375
+        t -= 2.625 / d1
+        return n1 * t * t + 0.984375
+
+    def _in_out_elastic(t):
+        if t <= 0.001:
+            return 0.0
+        if t >= 0.999:
+            return 1.0
+        if t < 0.5:
+            return -(2 ** (20 * t - 10)) * _m.sin((20 * t - 11.125) * c5) / 2
+        return (2 ** (-20 * t + 10)) * _m.sin((20 * t - 11.125) * c5) / 2 + 1
+
+    refs = {
+        "linear": lambda t: t,
+        "ease_in_quad": lambda t: t ** 2,
+        "ease_out_quad": lambda t: 1 - (1 - t) ** 2,
+        "ease_in_out_quad": lambda t: 2 * t * t if t < 0.5 else 1 - (-2 * t + 2) ** 2 / 2,
+        "ease_in_cubic": lambda t: t ** 3,
+        "ease_out_cubic": lambda t: 1 - (1 - t) ** 3,
+        "ease_in_out_cubic": lambda t: 4 * t ** 3 if t < 0.5 else 1 - (-2 * t + 2) ** 3 / 2,
+        "ease_in_quart": lambda t: t ** 4,
+        "ease_out_quart": lambda t: 1 - (1 - t) ** 4,
+        "ease_in_out_quart": lambda t: 8 * t ** 4 if t < 0.5 else 1 - (-2 * t + 2) ** 4 / 2,
+        "ease_in_quint": lambda t: t ** 5,
+        "ease_out_quint": lambda t: 1 - (1 - t) ** 5,
+        "ease_in_out_quint": lambda t: 16 * t ** 5 if t < 0.5 else 1 - (-2 * t + 2) ** 5 / 2,
+        "ease_in_sine": lambda t: 1 - _m.cos(t * _PI / 2),
+        "ease_out_sine": lambda t: _m.sin(t * _PI / 2),
+        "ease_in_out_sine": lambda t: (1 - _m.cos(t * _PI)) / 2,
+        "ease_in_expo": lambda t: 0.0 if t <= 0.001 else 2 ** (10 * t - 10),
+        "ease_out_expo": lambda t: 1.0 if t >= 0.999 else 1 - 2 ** (-10 * t),
+        "ease_in_out_expo": lambda t: (
+            0.0 if t <= 0.001 else 1.0 if t >= 0.999 else
+            2 ** (20 * t - 10) / 2 if t < 0.5 else (2 - 2 ** (-20 * t + 10)) / 2),
+        "ease_in_circ": lambda t: 1 - _m.sqrt(1 - t * t),
+        "ease_out_circ": lambda t: _m.sqrt(1 - (t - 1) ** 2),
+        "ease_in_out_circ": lambda t: (
+            (1 - _m.sqrt(1 - (2 * t) ** 2)) / 2 if t < 0.5
+            else (_m.sqrt(1 - (2 * t - 2) ** 2) + 1) / 2),
+        "ease_in_back": lambda t: c3 * t ** 3 - c1 * t ** 2,
+        "ease_out_back": lambda t: 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2,
+        "ease_in_out_back": lambda t: (
+            ((2 * t) ** 2 * ((c2 + 1) * 2 * t - c2)) / 2 if t < 0.5
+            else ((2 * t - 2) ** 2 * ((c2 + 1) * (2 * t - 2) + c2) + 2) / 2),
+        "ease_in_elastic": lambda t: (
+            0.0 if t <= 0.001 else 1.0 if t >= 0.999 else
+            -(2 ** (10 * t - 10)) * _m.sin((10 * t - 10.75) * c4)),
+        "ease_out_elastic": lambda t: (
+            0.0 if t <= 0.001 else 1.0 if t >= 0.999 else
+            2 ** (-10 * t) * _m.sin((10 * t - 0.75) * c4) + 1),
+        "ease_in_out_elastic": _in_out_elastic,
+        "ease_in_bounce": lambda t: 1 - _out_bounce(1 - t),
+        "ease_out_bounce": _out_bounce,
+        "ease_in_out_bounce": lambda t: (
+            (1 - _out_bounce(1 - 2 * t)) / 2 if t < 0.5
+            else (1 + _out_bounce(2 * t - 1)) / 2),
+    }
+    points = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+    bad = []
+    for name, ref in refs.items():
+        fn = getattr(sv, name)
+        for t in points:
+            got = fn(sv.Const(t)).eval_at(0)
+            want = ref(t)
+            if abs(got - want) >= 1e-3:
+                bad.append(f"{name}(t={t}): got={got:.6f} want={want:.6f}")
+    # #3 の症状固有チェック: t=0.5 で 0.5（修正前は 1.5）かつ連続
+    v_mid = sv.ease_in_out_elastic(sv.Const(0.5)).eval_at(0)
+    if abs(v_mid - 0.5) >= 1e-6:
+        bad.append(f"ease_in_out_elastic(0.5)={v_mid:.4f}（0.5であるべき）")
+    lo = sv.ease_in_out_elastic(sv.Const(0.4999999)).eval_at(0)
+    hi = sv.ease_in_out_elastic(sv.Const(0.5000001)).eval_at(0)
+    if abs(hi - lo) >= 1e-3:
+        bad.append(f"t=0.5で不連続: {lo:.4f} → {hi:.4f}")
+    if bad:
+        return False, "; ".join(bad[:5])
+    return True, f"easing {len(refs)}本 × {len(points)}点が標準定義と一致"
+
+
+def check_and_or_no_unknown_ffmpeg_funcs():
+    """#4: and_/or_ が ffmpeg 非対応の and()/or() を出力せず、0/1論理値は従来と同値"""
+    u = sv.Var("u")
+    a = sv.and_(sv.gt(u, 0.2), sv.lt(u, 0.8))
+    o = sv.or_(sv.lt(u, 0.2), sv.gt(u, 0.8))
+    sa = a.to_ffmpeg("T")
+    so = o.to_ffmpeg("T")
+    if "and(" in sa or "or(" in sa:
+        return False, f"and_ が and()/or() を出力: {sa}"
+    if "and(" in so or "or(" in so:
+        return False, f"or_ が and()/or() を出力: {so}"
+    # eval_at の論理値が従来（a!=0 and/or b!=0 → 1.0/0.0）と同値であること
+    cases = [
+        (a.eval_at(0.1), 0.0), (a.eval_at(0.5), 1.0), (a.eval_at(0.9), 0.0),
+        (o.eval_at(0.1), 1.0), (o.eval_at(0.5), 0.0), (o.eval_at(0.9), 1.0),
+        # 非0/1入力（負数・2）でも真理値互換
+        (sv.and_(sv.Const(-1), sv.Const(1)).eval_at(0), 1.0),
+        (sv.and_(sv.Const(2), sv.Const(0)).eval_at(0), 0.0),
+        (sv.or_(sv.Const(0), sv.Const(0)).eval_at(0), 0.0),
+        (sv.or_(sv.Const(-2), sv.Const(0)).eval_at(0), 1.0),
+    ]
+    for i, (got, want) in enumerate(cases):
+        if got != want:
+            return False, f"eval_at不一致 case[{i}]: got={got} want={want}"
+    return True, f"and_={sa[:40]}… / or_={so[:40]}…"
+
+
+def check_min_max_two_arg_fold():
+    """#5: 3引数以上の min/max が2引数の左畳み込み（ffmpegは2引数固定）"""
+    u = sv.Var("u")
+    m = sv.min(u, 0.5, 0.8)
+    sm = m.to_ffmpeg("T")
+    if sm != "min(min(T\\,0.5)\\,0.8)":
+        return False, f"min の畳み込み不正: {sm}"
+    x = sv.max(u, 0.5, 0.8, 0.9)
+    sx = x.to_ffmpeg("T")
+    if sx != "max(max(max(T\\,0.5)\\,0.8)\\,0.9)":
+        return False, f"max の畳み込み不正: {sx}"
+    # eval_at は従来通り
+    if m.eval_at(0.9) != 0.5 or m.eval_at(0.3) != 0.3:
+        return False, f"min eval_at 不一致: {m.eval_at(0.9)}, {m.eval_at(0.3)}"
+    if x.eval_at(0.95) != 0.95 or x.eval_at(0.1) != 0.9:
+        return False, f"max eval_at 不一致: {x.eval_at(0.95)}, {x.eval_at(0.1)}"
+    # 非Expr は builtins へ委譲
+    if sv.min(3, 1, 2) != 1 or sv.max(3, 1, 2) != 3:
+        return False, "非Expr の min/max が builtins と不一致"
+    return True, f"{sm} / {sx}"
+
+
+def check_wipe_geq_uses_uppercase_T():
+    """#6: wipe の geq 進行度式が大文字 T（geq に小文字 t は無い）"""
+    _mk_project()
+    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj <= wipe("left")
+    flat = str(_build_effect_filters(obj, 0, 2))
+    if "clip((t-" in flat:
+        return False, f"小文字 t が残存: {flat[:300]}"
+    if "clip((T-0)" not in flat:
+        return False, f"大文字 T の進行度式が無い: {flat[:300]}"
+    return True, "wipe の geq が大文字 T を使用"
+
+
+def check_color_shift_eq_eval_frame():
+    """#7: color_shift の動的 saturation/brightness に eval=frame が付く（定数には付かない）"""
+    _mk_project()
+    # 動的式 → eval=frame 必須（既定 eval=init だと t=0 で凍結する）
+    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj <= color_shift(saturation=lambda u: 1 + u, brightness=lambda u: 0.2 * u)
+    flat = str(_build_effect_filters(obj, 0, 2))
+    if "eq=saturation=" not in flat or ":eval=frame" not in flat:
+        return False, f"動的式に eval=frame が無い: {flat[:300]}"
+    # 定数のみ → eval=frame 不要（挙動不変の最小差分）
+    obj2 = Object(asset("images/onigiri_tenmusu.png"))
+    obj2 <= color_shift(saturation=1.2)
+    flat2 = str(_build_effect_filters(obj2, 0, 2))
+    if "eval=frame" in flat2:
+        return False, f"定数のみなのに eval=frame が付いた: {flat2[:300]}"
+    if "eq=saturation=1.2" not in flat2:
+        return False, f"eq フィルタが無い: {flat2[:300]}"
+    return True, "動的=eval=frame付与 / 定数=付与なし"
+
+
 ALL_TESTS = [
     ("math.sin in lambda", check_math_sin_in_lambda),
     ("未定義アンカー参照", check_undefined_anchor),
@@ -4664,6 +4847,12 @@ ALL_TESTS = [
     ("describe CLI JSON", check_describe_cli_json),
     ("describe CLI md/filter", check_describe_cli_md_and_filters),
     ("describe CLI -o出力", check_describe_cli_output_file),
+    # --- issue #3〜#7 回帰 ---
+    ("#3 easing 34本数値回帰", check_easing_numeric_regression),
+    ("#4 and_/or_ ffmpeg対応関数", check_and_or_no_unknown_ffmpeg_funcs),
+    ("#5 min/max 2引数畳み込み", check_min_max_two_arg_fold),
+    ("#6 wipe geq 大文字T", check_wipe_geq_uses_uppercase_T),
+    ("#7 color_shift eval=frame", check_color_shift_eq_eval_frame),
 ]
 
 

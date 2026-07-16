@@ -243,8 +243,8 @@ class _FuncCall(Expr):
                 'gt': lambda x, e: 1.0 if x > e else 0.0,
                 'eq': lambda a, b: 1.0 if a == b else 0.0,
                 'if': lambda c, t, e: t if c != 0 else e,
-                'and': lambda a, b: 1.0 if (a != 0 and b != 0) else 0.0,
-                'or': lambda a, b: 1.0 if (a != 0 or b != 0) else 0.0,
+                # 注意: ffmpegの式評価器に and()/or() は存在しない。
+                # 論理AND/ORは and_()/or_() が gt/abs の組み合わせへ変換する。
                 'not': lambda a: 1.0 if a == 0 else 0.0,
                 'between': lambda x, lo, hi: 1.0 if lo <= x <= hi else 0.0,
                 'sign': lambda x: (1.0 if x > 0 else (-1.0 if x < 0 else 0.0)),
@@ -438,12 +438,22 @@ def abs(x):
 
 def min(*args):
     if any(isinstance(a, Expr) for a in args):
-        return _make_func("min", [_to_expr(a) for a in args])
+        # ffmpegのmin/maxは厳密に2引数固定 → 3引数以上は左畳み込みでネストする
+        exprs = [_to_expr(a) for a in args]
+        result = exprs[0]
+        for e in exprs[1:]:
+            result = _make_func("min", [result, e])
+        return result
     return _builtins.min(*args)
 
 def max(*args):
     if any(isinstance(a, Expr) for a in args):
-        return _make_func("max", [_to_expr(a) for a in args])
+        # ffmpegのmin/maxは厳密に2引数固定 → 3引数以上は左畳み込みでネストする
+        exprs = [_to_expr(a) for a in args]
+        result = exprs[0]
+        for e in exprs[1:]:
+            result = _make_func("max", [result, e])
+        return result
     return _builtins.max(*args)
 
 def round(x):
@@ -492,12 +502,24 @@ def neq(a, b):
     return _make_func("not", [_make_func("eq", [_to_expr(a), _to_expr(b)])])
 
 def and_(a, b):
-    """論理AND"""
-    return _make_func("and", [_to_expr(a), _to_expr(b)])
+    """論理AND（a≠0 かつ b≠0 → 1.0, else → 0.0）
+
+    ffmpeg の式評価器（eval.c）には and()/or() が存在せず Unknown function に
+    なるため、0/1 を返す比較の積で表現する。eval_at の結果は従来と同値。
+    """
+    av = _to_expr(a)
+    bv = _to_expr(b)
+    return _make_func("gt", [abs(av), Const(0)]) * _make_func("gt", [abs(bv), Const(0)])
 
 def or_(a, b):
-    """論理OR"""
-    return _make_func("or", [_to_expr(a), _to_expr(b)])
+    """論理OR（a≠0 または b≠0 → 1.0, else → 0.0）
+
+    ffmpeg に or() は無いため |a|+|b| > 0 の比較で表現する。
+    eval_at の結果は従来と同値。
+    """
+    av = _to_expr(a)
+    bv = _to_expr(b)
+    return _make_func("gt", [abs(av) + abs(bv), Const(0)])
 
 def not_(a):
     """論理NOT"""

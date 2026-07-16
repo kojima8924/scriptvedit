@@ -32,7 +32,7 @@
       "-i",
       "assets/images/onigiri_tenmusu.png",
       "-vf",
-      "scale=iw*0.5:ih*0.5,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='if(lte(X/,W*(clip((t-0)/2/,0/,1)))/,alpha(X/,Y)/,0)'",
+      "scale=iw*0.5:ih*0.5,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='if(lte(X/,W*(clip((T-0)/2/,0/,1)))/,alpha(X/,Y)/,0)'",
       "-c:v",
       "ffv1",
       "-level",
