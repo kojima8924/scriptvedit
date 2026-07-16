@@ -28,7 +28,7 @@ import inspect as _inspect
 #   - 出力スキーマはプラグイン（@effect_plugin の params）と同一形式に揃える。
 #     型: number/int/expr/color/ffcolor/string/bool/choice/any
 
-MANIFEST_VERSION = "1.0"
+MANIFEST_VERSION = "1.1"
 
 # 色として扱うパラメータ名（型の自動判定に使う）
 _MANIFEST_COLOR_PARAMS = {
@@ -395,6 +395,16 @@ _MANIFEST_CONSTRAINTS = [
                 "各エントリの bakeable フィールドで判別できる。"
                 "speed/reverse/freeze_frame/blend_mode/move/shake は live。",
     },
+    {
+        "id": "fast_quality_hint",
+        "topic": "演算子",
+        "severity": "info",
+        "applies_to": [],
+        "text": "`~op` は内容を削除しない品質ヒント。軽い代替処理を持つopだけが"
+                "それを使い、持たないopは通常と同一の処理を警告なしで行う。"
+                "明示的な音声削除には adelete() を使う。将来の audit/strict モードでは"
+                "無視されたヒントを info/warning 級lintとして報告する予定。",
+    },
 ]
 
 # AI 向けの使い方（describe の出力だけでスクリプトが書けることを目標にする）
@@ -449,8 +459,8 @@ _MANIFEST_USAGE = {
         "start": "obj.show(3)                          # 現在位置から3秒表示（順次配置）",
         "anchor": "obj.time(3, name='intro'); pause.until('intro')",
         "length": "obj.length()                        # trim/atempo を反映した実効尺",
-        "quality": "~fade(1.0)                         # ~op で quality='fast'",
-        "policy": "+fade(1.0) / -fade(1.0)             # +op=force, -op=off（無効化）",
+        "quality": "~fade(1.0)                         # ~op は品質ヒント（内容は削除しない）",
+        "policy": "+fade(1.0) / -fade(1.0)             # +op=force, -op=cache off",
     },
     "expr": {
         "lambda": "lambda u: lerp(0.2, 0.8, u)   # u は 0..1 の進行度",
@@ -745,6 +755,10 @@ def _manifest_entry(name, fn, kind, *, category=None, bakeable=None,
         entry["bakeable"] = bakeable
     if effect_names:
         entry["effect_names"] = effect_names
+    if kind in ("effect", "transform", "audio_effect"):
+        internal_names = effect_names or [name]
+        entry["respects_fast_hint"] = any(
+            _respects_fast_hint(n) for n in internal_names)
     if name in _MANIFEST_EXAMPLES:
         entry["example"] = _MANIFEST_EXAMPLES[name]
     notes = list(_MANIFEST_NOTES.get(name, []))
@@ -864,11 +878,14 @@ def describe(kind=None, name=None):
         if spec.get("example"):
             entry["example"] = spec["example"]
         if spec["kind"] == "transform":
+            entry["respects_fast_hint"] = _respects_fast_hint(iname)
             transforms.append(entry)
         elif spec["kind"] == "effect":
             entry["bakeable"] = iname in _BAKEABLE_EFFECTS
+            entry["respects_fast_hint"] = _respects_fast_hint(iname)
             effects.append(entry)
         else:
+            entry["respects_fast_hint"] = _respects_fast_hint(iname)
             audio_effects.append(entry)
 
     # Expr のチェーンメソッド（.smooth() / .invert() ...）
@@ -917,6 +934,7 @@ def describe(kind=None, name=None):
             "kind": "plugin",
             "category": s.category,
             "bakeable": s.bakeable,
+            "respects_fast_hint": False,
             "summary": s.doc,
             "signature": _manifest_signature(pname, _pkg_ns().get(pname)),
             "params": params,
@@ -1033,6 +1051,9 @@ def _manifest_md_entry(e, lines):
     meta = [f"kind: {e['kind']}", f"category: {e.get('category', '-')}"]
     if "bakeable" in e:
         meta.append("bakeable: " + ("yes" if e["bakeable"] else "no（live）"))
+    if "respects_fast_hint" in e:
+        meta.append("fast hint: " + (
+            "respected" if e["respects_fast_hint"] else "ignored（通常と同一）"))
     lines.append("*" + " / ".join(meta) + "*")
     if e.get("summary"):
         lines.append("")
@@ -1127,6 +1148,7 @@ def describe_markdown(manifest=None):
 
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
 from scriptvedit.effects.composite import _BLEND_MODES, _BLEND_MODE_ALIASES
+from scriptvedit.cache import _respects_fast_hint
 from scriptvedit.expr import Expr
 from scriptvedit.media import _XFADE_TRANSITIONS
 from scriptvedit.objects import Object, group

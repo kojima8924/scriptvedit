@@ -46,6 +46,8 @@ _DEFAULT_SR = 22050
 _N_FFT = 2048
 # STFT を処理するフレームチャンク数(メモリ節約)
 _CHUNK_FRAMES = 4096
+# ffmpeg デコードの上限（他の ffmpeg 実行経路と同じ）
+_DECODE_TIMEOUT = 600
 
 
 # ---------------------------------------------------------------------------
@@ -68,9 +70,14 @@ def _load_mono(audio_path, sr=_DEFAULT_SR):
         "-",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True)
+        proc = subprocess.run(
+            cmd, capture_output=True, timeout=_DECODE_TIMEOUT)
     except FileNotFoundError:
         raise RuntimeError("ffmpeg が見つかりません。PATH を確認してください。")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"ffmpeg デコードが {_DECODE_TIMEOUT} 秒でタイムアウトしました: "
+            f"{audio_path}") from exc
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"ffmpeg デコード失敗: {audio_path}\n{err}")

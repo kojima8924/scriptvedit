@@ -215,6 +215,7 @@ def look_at(path, *, offset_deg=0.0, expand=True, fill="0x00000000"):
     path: move系Effect（move_along/path_bezier/throw/inertia）または
       (x_expr, y_expr) のタプル。パスの微分(有限差分)から角度を求める。
     """
+    fill = _validate_ffmpeg_color("look_at", fill)
     if isinstance(path, Effect) and hasattr(path, "_path_xy"):
         x_expr, y_expr = path._path_xy
     elif isinstance(path, (tuple, list)) and len(path) == 2:
@@ -256,3 +257,4 @@ from scriptvedit.easing import phase
 from scriptvedit.expr import Const, Var, _to_expr, clip, exp, if_, lerp, lt, sin
 from scriptvedit.objects import Effect
 from scriptvedit.timeline import anchor
+from scriptvedit.validate import _validate_ffmpeg_color

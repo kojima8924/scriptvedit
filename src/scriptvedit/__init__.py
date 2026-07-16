@@ -127,7 +127,8 @@ from scriptvedit.cache import (  # noqa: F401
     _apply_time_effects_to_duration, _build_morph_frame_extract_cmd, _build_unified_ops,
     _checkpoint_cache_path, _compute_save_points, _file_fingerprint, _fmt_size, _is_bakeable,
     _is_cache_artifact_path, _is_pending_cache_path, _iter_cache_files, _layer_cache_paths,
-    _morph_cache_path, _morph_input_frame_path, _op_fingerprint_str, _op_prefix_fingerprint,
+    _effective_quality, _morph_cache_path, _morph_input_frame_path, _op_fingerprint_str,
+    _op_prefix_fingerprint, _ops_effective_quality, _respects_fast_hint,
     _particle_cache_path, _prune_empty_dirs, _split_ops, _validate_morph_position,
     _web_cache_path, cache_clear, cache_gc, cache_stats,
 )
@@ -149,7 +150,7 @@ from scriptvedit.filters.audio import (  # noqa: F401
 )
 from scriptvedit.objects import (  # noqa: F401
     AudioEffect, AudioEffectChain, AudioView, Effect, EffectChain, Group, Object, Transform,
-    TransformChain, VideoView, _DisabledAudioEffect, _SLIDE_PAGE_KEY, _WEB_KWARGS, group, tile,
+    TransformChain, VideoView, _SLIDE_PAGE_KEY, _WEB_KWARGS, group, tile,
 )
 from scriptvedit.timeline import (  # noqa: F401
     Pause, Scene, _AnchorMarker, _PauseFactory, _ScenePad, anchor, pause, scene,

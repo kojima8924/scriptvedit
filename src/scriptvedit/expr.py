@@ -250,7 +250,9 @@ class _FuncCall(Expr):
                 'sign': lambda x: (1.0 if x > 0 else (-1.0 if x < 0 else 0.0)),
                 'random': lambda seed: 0.5,  # eval_at用ダミー（ffmpegランタイムで評価）
                 'log10': lambda x: _math.log10(x),
-                'cbrt': lambda x: x ** (1/3) if x >= 0 else -((-x) ** (1/3)),
+                'cbrt': lambda x: (
+                    (1.0 if x > 0 else (-1.0 if x < 0 else 0.0))
+                    * _builtins.pow(_builtins.abs(x), 1/3)),
             }
         return cls._EVAL_FUNCS
 
@@ -398,7 +400,8 @@ def log10(x):
     return _make_func("log", [_to_expr(x)]) / Const(_LN10)
 
 def cbrt(x):
-    return _make_func("pow", [_to_expr(x), Const(1/3)])
+    xv = _to_expr(x)
+    return sign(xv) * pow(abs(xv), Const(1/3))
 
 def lerp(a, b, t):
     a, b, t = _to_expr(a), _to_expr(b), _to_expr(t)

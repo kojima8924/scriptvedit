@@ -36,12 +36,16 @@ class TransformChain:
 
     def __pos__(self):
         """+(tf1 | tf2 | tf3) → 末尾opに policy='force'"""
+        if not self.transforms:
+            raise ValueError("空のTransformChainには + を適用できません")
         new_list = list(self.transforms)
         new_list[-1] = new_list[-1]._copy(policy="force")
         return TransformChain(new_list)
 
     def __neg__(self):
         """-(tf1 | tf2 | tf3) → 末尾opに policy='off'"""
+        if not self.transforms:
+            raise ValueError("空のTransformChainには - を適用できません")
         new_list = list(self.transforms)
         new_list[-1] = new_list[-1]._copy(policy="off")
         return TransformChain(new_list)
@@ -70,12 +74,16 @@ class EffectChain:
 
     def __pos__(self):
         """+(eff1 & eff2) → 末尾opに policy='force'"""
+        if not self.effects:
+            raise ValueError("空のEffectChainには + を適用できません")
         new_list = list(self.effects)
         new_list[-1] = new_list[-1]._copy(policy="force")
         return EffectChain(new_list)
 
     def __neg__(self):
         """-(eff1 & eff2) → 末尾opに policy='off'"""
+        if not self.effects:
+            raise ValueError("空のEffectChainには - を適用できません")
         new_list = list(self.effects)
         new_list[-1] = new_list[-1]._copy(policy="off")
         return EffectChain(new_list)
@@ -86,21 +94,27 @@ class EffectChain:
 
 class AudioEffect:
     """音声エフェクト（again, afade, adelete, atrim, atempo等）"""
-    def __init__(self, name, **params):
+    def __init__(self, name, *, quality="final", **params):
         self.name = name
         self.params = params
+        self.quality = quality
+
+    def _copy(self, **overrides):
+        """属性をコピーした新AudioEffectを返す"""
+        kw = dict(quality=self.quality, **self.params)
+        kw.update(overrides)
+        return AudioEffect(self.name, **kw)
 
     def __and__(self, other):
         if isinstance(other, AudioEffect):
             return AudioEffectChain([self, other])
         if isinstance(other, AudioEffectChain):
             return AudioEffectChain([self] + other.effects)
-        if isinstance(other, _DisabledAudioEffect):
-            return AudioEffectChain([self, other])
         return NotImplemented
 
     def __invert__(self):
-        return _DisabledAudioEffect(self)
+        """~op → 軽い代替処理を要求する品質ヒント"""
+        return self._copy(quality="fast")
 
     def __repr__(self):
         return f"AudioEffect({self.name}, {self.params})"
@@ -116,38 +130,15 @@ class AudioEffectChain:
             return AudioEffectChain(self.effects + [other])
         if isinstance(other, AudioEffectChain):
             return AudioEffectChain(self.effects + other.effects)
-        if isinstance(other, _DisabledAudioEffect):
-            return AudioEffectChain(self.effects + [other])
         return NotImplemented
 
     def __invert__(self):
-        return _DisabledAudioEffect(self)
+        """~chain → 全opへ軽い代替処理を要求する品質ヒント"""
+        return AudioEffectChain(
+            [effect._copy(quality="fast") for effect in self.effects])
 
     def __repr__(self):
         return f"AudioEffectChain({self.effects})"
-
-
-class _DisabledAudioEffect:
-    """無効化AudioEffect"""
-    def __init__(self, original):
-        self.original = original
-
-    def __and__(self, other):
-        if isinstance(other, (AudioEffect, _DisabledAudioEffect)):
-            return AudioEffectChain([self, other])
-        if isinstance(other, AudioEffectChain):
-            return AudioEffectChain([self] + other.effects)
-        return NotImplemented
-
-    def __rand__(self, other):
-        if isinstance(other, AudioEffect):
-            return AudioEffectChain([other, self])
-        if isinstance(other, AudioEffectChain):
-            return AudioEffectChain(other.effects + [self])
-        return NotImplemented
-
-    def __invert__(self):
-        return self.original
 
 
 class Transform:
@@ -397,8 +388,6 @@ class Object:
 
     def __le__(self, rhs):
         """<= 演算子: Transform/Effect/AudioEffect等を適用"""
-        if isinstance(rhs, _DisabledAudioEffect):
-            return self  # AudioのDisableだけ残す
         if isinstance(rhs, Transform):
             self.transforms.append(rhs)
         elif isinstance(rhs, TransformChain):
@@ -415,8 +404,6 @@ class Object:
                 self.audio_effects.append(rhs)
         elif isinstance(rhs, AudioEffectChain):
             for e in rhs.effects:
-                if isinstance(e, _DisabledAudioEffect):
-                    continue
                 if e.name == "adelete":
                     self._audio_deleted = True
                 else:
@@ -504,6 +491,11 @@ class Object:
         # 親 = 現在レイヤーを実行中のProject（sub = Project() が _current を
         # 奪うため、_exec_stack から特定する）。レイヤー外では復元先のみ保持
         parent = Project._exec_stack[-1] if Project._exec_stack else None
+        if parent is None:
+            raise ValueError(
+                "from_project: レイヤー実行中の親Projectがありません。"
+                "Object.from_project() は Project.layer() から読み込まれる"
+                "レイヤーファイル内で呼び出してください。")
         if sub_project is parent:
             raise ValueError("from_project: 親Project自身は指定できません")
         if not sub_project._layer_specs:
@@ -592,10 +584,7 @@ class Object:
         except OSError:
             sigs.append(f"src={self.source.replace(chr(92), '/')}")
         sigs.append(_op_prefix_fingerprint(ops))
-        quality = "final"
-        for _, op in ops:
-            if getattr(op, 'quality', 'final') == "fast":
-                quality = "fast"
+        quality = _ops_effective_quality(ops)
         sigs.append(f"q={quality}")
         sigs.append(f"ev={_ENGINE_VER}")
         if duration is not None:
@@ -848,7 +837,7 @@ class AudioView:
 
     def __le__(self, rhs):
         """音声系のみ受け入れ"""
-        if isinstance(rhs, (AudioEffect, AudioEffectChain, _DisabledAudioEffect)):
+        if isinstance(rhs, (AudioEffect, AudioEffectChain)):
             self._clip.__le__(rhs)
             return self
         raise TypeError(f"AudioView <= には音声系のみ: {type(rhs)}")
@@ -936,7 +925,7 @@ def group(*objects):
 
 
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
-from scriptvedit.cache import _build_unified_ops, _file_fingerprint, _op_prefix_fingerprint, _web_cache_path
+from scriptvedit.cache import _build_unified_ops, _file_fingerprint, _op_prefix_fingerprint, _ops_effective_quality, _web_cache_path
 from scriptvedit.expr import clip, min
 from scriptvedit.ffmpeg import _decoder_input_args, _run_ffmpeg_to_cache
 from scriptvedit.filters.video import _build_effect_filters, _build_transform_filters, _build_video_pre_filters, _get_base_dimensions

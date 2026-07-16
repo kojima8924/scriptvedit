@@ -38,6 +38,8 @@ class Project:
         self._current_layer_file = None  # 現在実行中のレイヤーファイル
         self._probe_cache = {}  # path → {"duration": float, "has_audio": bool}
         self._layer_sources = {}  # layer filename → [参照ソースパス]（キャッシュ鮮度検証用）
+        self._layer_audio_sources = {}  # layer filename → [音声ソース]（再生時の脱落警告用）
+        self._layer_unknown_audio_sources = {}  # ffprobe失敗で音声有無が不明な動画
         self._extra_layer_deps = {}  # layer filename → [追加依存パス]（morph_toターゲット等）
         self._layer_meta_cache = {}  # anchors.jsonパス → パース済みメタ（二重読み防止）
         self._loudnorm_target = None  # normalize_audio() 設定時のLUFS目標
@@ -62,6 +64,9 @@ class Project:
                 f"不明な設定キー: {', '.join(sorted(unknown))}。"
                 f"使用可能: {', '.join(sorted(_CONFIGURE_KEYS))}{hint}"
             )
+        if "background_color" in kwargs:
+            kwargs["background_color"] = _validate_ffmpeg_color(
+                "configure", kwargs["background_color"])
         # preset: width/height/fps をまとめて設定（個別指定で上書き可能なので先に適用）
         if "preset" in kwargs:
             name = kwargs.pop("preset")
@@ -215,8 +220,19 @@ class Project:
             lines.append("0:00 イントロ")
         for t, label in markers:
             lines.append(f"{self._fmt_timestamp(t)} {label}")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+        parent_dir = os.path.dirname(path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+        tmp_path = _unique_tmp_path(path)
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            os.replace(tmp_path, path)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
         return path
 
     def export_metadata(self, path=None, *, title=None, description=None, tags=None):
@@ -243,7 +259,10 @@ class Project:
         chapters = [{"time": t, "label": label} for t, label in markers]
         if not markers or markers[0][0] > 0.001:
             chapters.insert(0, {"time": 0.0, "label": "イントロ"})
-        tag_list = [str(t) for t in tags] if tags else []
+        if isinstance(tags, str):
+            tag_list = [tags] if tags else []
+        else:
+            tag_list = [str(t) for t in tags] if tags else []
 
         if path is None:
             path = "metadata.json"
@@ -251,34 +270,40 @@ class Project:
         d = os.path.dirname(path)
         if d:
             os.makedirs(d, exist_ok=True)
-        tmp_path = path + ".tmp"
-        if ext == ".txt":
-            lines = []
-            if title:
-                lines.append(title)
-                lines.append("")
-            if description:
-                lines.append(description)
-                lines.append("")
-            if chapter_lines:
-                lines.extend(chapter_lines)
-                lines.append("")
-            if tag_list:
-                lines.append(" ".join(f"#{t}" for t in tag_list))
-            content = "\n".join(lines).rstrip("\n") + "\n"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(content)
-        else:
-            data = {
-                "title": title,
-                "description": description,
-                "tags": tag_list,
-                "chapters": chapters,
-                "chapters_text": "\n".join(chapter_lines),
-            }
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
+        tmp_path = _unique_tmp_path(path)
+        try:
+            if ext == ".txt":
+                lines = []
+                if title:
+                    lines.append(title)
+                    lines.append("")
+                if description:
+                    lines.append(description)
+                    lines.append("")
+                if chapter_lines:
+                    lines.extend(chapter_lines)
+                    lines.append("")
+                if tag_list:
+                    lines.append(" ".join(f"#{t}" for t in tag_list))
+                content = "\n".join(lines).rstrip("\n") + "\n"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            else:
+                data = {
+                    "title": title,
+                    "description": description,
+                    "tags": tag_list,
+                    "chapters": chapters,
+                    "chapters_text": "\n".join(chapter_lines),
+                }
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
         return path
 
     def _chapters_metadata_path(self):
@@ -408,6 +433,8 @@ class Project:
         self._probe_cache = {k: v for k, v in self._probe_cache.items()
                              if v is not None}
         self._layer_meta_cache = {}
+        self._layer_audio_sources = {}
+        self._layer_unknown_audio_sources = {}
 
     def _probe_media(self, path):
         """ffprobeでメディア情報を取得（キャッシュあり）"""
@@ -465,7 +492,8 @@ class Project:
         except FileNotFoundError:
             # 失敗もrender内ではキャッシュ（_reset_runtime_stateでNoneのみ破棄され、
             # renderをまたげば再試行される）
-            warnings.warn(f"ffprobeが見つかりません。PATHを確認してください。")
+            warnings.warn(
+                f"ffprobeが見つかりません ({path})。PATHを確認してください。")
             self._probe_cache[path] = None
             return None
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError,
@@ -523,6 +551,28 @@ class Project:
         # morph_toターゲット等、objectsから除外された依存を併合
         sources.extend(self._extra_layer_deps.get(filename, []))
         self._layer_sources[filename] = sources
+        cache_mode = next(
+            (spec["cache"] for spec in self._layer_specs
+             if spec["filename"] == filename), "off")
+        audio_sources = []
+        unknown_audio_sources = []
+        if cache_mode != "off":
+            for o in self.objects[start_idx:end_idx]:
+                if not isinstance(o, Object) or o._audio_deleted:
+                    continue
+                source_text = str(os.fspath(o.source)).replace("\\", "/")
+                has_audio = o._has_audio
+                if has_audio is None:
+                    info = self._probe_media(o.source)
+                    if info is None:
+                        if o.media_type == "video":
+                            unknown_audio_sources.append(source_text)
+                        continue
+                    has_audio = bool(info.get("has_audio"))
+                if has_audio:
+                    audio_sources.append(source_text)
+        self._layer_audio_sources[filename] = audio_sources
+        self._layer_unknown_audio_sources[filename] = unknown_audio_sources
         self._current_layer_file = None
 
     def _fill_auto_durations(self, start_idx, end_idx):
@@ -1020,6 +1070,56 @@ class Project:
             for name, time_val in cache_meta.get("anchors", {}).items():
                 self._anchors[name] = time_val
                 self._anchor_defined_in[name] = spec["filename"]
+        filename = spec["filename"]
+        has_runtime_audio_info = filename in self._layer_audio_sources
+        audio_sources = self._layer_audio_sources.get(filename, [])
+        unknown_audio_sources = self._layer_unknown_audio_sources.get(filename, [])
+        if not has_runtime_audio_info and cache_meta is not None:
+            audio_sources = cache_meta.get("audio_sources", [])
+            unknown_audio_sources = cache_meta.get("unknown_audio_sources", [])
+        legacy_audio_sources = []
+        if (not has_runtime_audio_info and not audio_sources
+                and not unknown_audio_sources and cache_meta is not None
+                and "audio_sources" not in cache_meta):
+            # issue #8以前のメタには音声情報がない。旧キャッシュをcache='use'で
+            # 再生しても無言脱落を見逃さないよう、記録済み素材をprobeして補う。
+            using_legacy_audio_info = True
+            for source in cache_meta.get("sources", {}):
+                media_type = _detect_media_type(source)
+                if media_type == "audio":
+                    legacy_audio_sources.append(source)
+                    continue
+                info = self._probe_media(source)
+                if info and info.get("has_audio"):
+                    legacy_audio_sources.append(source)
+                elif info is None and media_type == "video":
+                    unknown_audio_sources.append(source)
+            audio_sources = legacy_audio_sources
+        else:
+            using_legacy_audio_info = False
+        if audio_sources or unknown_audio_sources:
+            if using_legacy_audio_info:
+                details = list(audio_sources) + list(unknown_audio_sources)
+                warnings.warn(
+                    f"旧形式のレイヤーキャッシュを再生するため音声が脱落する"
+                    f"可能性があります (cache='{spec['cache']}', "
+                    f"{spec['filename']}): {', '.join(details)}。"
+                    f"cache='make' で再生成するか、音声素材を cache='off' の"
+                    f"別レイヤーへ分離してください。")
+            elif unknown_audio_sources:
+                details = list(audio_sources) + list(unknown_audio_sources)
+                warnings.warn(
+                    f"レイヤーキャッシュを再生しますが、ffprobeで音声の有無を"
+                    f"確認できない動画があるため音声が脱落する可能性があります "
+                    f"(cache='{spec['cache']}', {spec['filename']}): "
+                    f"{', '.join(details)}。"
+                    f"音声素材を cache='off' の別レイヤーへ分離してください。")
+            else:
+                warnings.warn(
+                    f"レイヤーキャッシュを再生するため音声が脱落します "
+                    f"(cache='{spec['cache']}', {spec['filename']}): "
+                    f"{', '.join(audio_sources)}。"
+                    f"音声素材を cache='off' の別レイヤーへ分離してください。")
         self.objects.append(cached_obj)
         end_idx = len(self.objects)
         self._layers.append((start_idx, end_idx, spec["priority"]))
@@ -1725,13 +1825,17 @@ class Project:
         renderable = sorted(
             [o for o in objects if isinstance(o, Object) and o.has_video],
             key=lambda o: o.priority)
-        # レイヤーキャッシュは映像のみ保存するため、音声を含むレイヤーは明示警告
-        audio_sources = [o.source for o in objects
-                         if isinstance(o, Object) and o.has_audio]
-        if audio_sources:
+        # レイヤーキャッシュは映像のみ保存するため、既知の音声と判定不能動画を警告
+        audio_sources = self._layer_audio_sources.get(spec["filename"], [])
+        unknown_audio_sources = self._layer_unknown_audio_sources.get(
+            spec["filename"], [])
+        if audio_sources or unknown_audio_sources:
+            details = list(audio_sources) + list(unknown_audio_sources)
+            status = ("音声はキャッシュ再生時に脱落します" if not unknown_audio_sources
+                      else "音声がキャッシュ再生時に脱落する可能性があります")
             warnings.warn(
                 f"レイヤーキャッシュ ({spec['filename']}) は映像のみ保存します。"
-                f"以下の音声はキャッシュ再生時に脱落します: {', '.join(audio_sources)}\n"
+                f"{status}: {', '.join(details)}\n"
                 f"回避策: 音声を持つ素材は cache を付けない別レイヤーに分離してください"
                 f"（透過VP9への音声多重化はレイヤー内amix/adelay/duck_underの"
                 f"再現が必要で本ウェーブでは見送り）。")
@@ -1800,7 +1904,14 @@ class Project:
                 sources_meta[str(src).replace("\\", "/")] = _file_fingerprint(src)
             except OSError:
                 pass
-        cache_meta = {"duration": dur, "anchors": anchors, "sources": sources_meta}
+        cache_meta = {
+            "duration": dur,
+            "anchors": anchors,
+            "sources": sources_meta,
+            "audio_sources": self._layer_audio_sources.get(spec["filename"], []),
+            "unknown_audio_sources": self._layer_unknown_audio_sources.get(
+                spec["filename"], []),
+        }
         # アトミック書き込み（webmと同様、中断による壊れたメタの残留を防ぐ）。
         # 一時パスは pid + 乱数でユニーク化（並列レイヤー生成での衝突防止）
         tmp_json = _unique_tmp_path(json_path)
@@ -2156,5 +2267,5 @@ from scriptvedit.assets import resolve_layer_path
 from scriptvedit.plugins import _autoload_plugins
 from scriptvedit.state import _ACTIVE_QUALITY, _ARTIFACT_DIR, _CACHE_DIR, _CONFIGURE_KEYS, _ENCODER_MAP, _ENGINE_VER, _GEN_COUNTER, _PRESETS, _TERMINAL_FRAME_EFFECTS, _TIME_LIVE_EFFECTS, _detect_media_type, _suggest_hint
 from scriptvedit.timeline import Pause, Scene, _AnchorMarker, _ScenePad
-from scriptvedit.validate import _require_number
+from scriptvedit.validate import _require_number, _validate_ffmpeg_color
 from scriptvedit.web import label

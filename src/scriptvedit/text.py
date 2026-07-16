@@ -123,9 +123,14 @@ def _resolve_font(font):
 
 
 def _escape_ffpath(path):
-    """フィルタグラフのファイルパスをエスケープ（\\→/、:→\\:）してクォート。
-    fontfile / subtitles=filename 用。"""
+    """フィルタグラフのファイルパスをエスケープしてクォート。
+
+    パス区切りとドライブレターに加え、単一引用符は一度クォートを閉じて
+    filtergraph/AVOption の2段階を越える形でエスケープする。
+    fontfile / subtitles=filename / lut3d=file 用。
+    """
     p = path.replace("\\", "/").replace(":", "\\:")
+    p = p.replace("'", r"'\\\''")
     return f"'{p}'"
 
 
@@ -195,6 +200,8 @@ def _text_deco_spec(func, border, border_color, shadow, shadow_color):
     既定値（border=0 かつ shadow=(0,0)）では鍵断片は空文字列
     （既存スペックの合成ソースハッシュを変えない＝キャッシュ互換維持）。"""
     b, sh = _validate_text_border_shadow(func, border, shadow)
+    border_color = _validate_ffmpeg_color(func, border_color)
+    shadow_color = _validate_ffmpeg_color(func, shadow_color)
     frag = {"border": b, "border_color": border_color,
             "shadow": sh, "shadow_color": shadow_color}
     if b == 0 and sh == (0, 0):
@@ -403,6 +410,8 @@ def text(content, *, x=0.5, y=0.5, size=48, color="white", font=None,
     """
     if anchor not in _TEXT_ANCHORS:
         raise ValueError(f"text: anchor は {_TEXT_ANCHORS} のいずれか: {anchor!r}")
+    color = _validate_ffmpeg_color("text", color)
+    box_color = _validate_ffmpeg_color("text", box_color)
     deco, deco_key = _text_deco_spec(
         "text", border, border_color, shadow, shadow_color)
     spec = {
@@ -431,6 +440,8 @@ def typewriter(content, *, cps=10, x=0.5, y=0.5, size=48, color="white",
         raise ValueError(f"typewriter: anchor は {_TEXT_ANCHORS} のいずれか: {anchor!r}")
     if cps <= 0:
         raise ValueError(f"typewriter: cps は正の数を指定してください: {cps}")
+    color = _validate_ffmpeg_color("typewriter", color)
+    box_color = _validate_ffmpeg_color("typewriter", box_color)
     deco, deco_key = _text_deco_spec(
         "typewriter", border, border_color, shadow, shadow_color)
     spec = {
@@ -486,6 +497,8 @@ def counter(from_, to, *, format="%d", x=0.5, y=0.5, size=48, color="white",
     prefix, suffix, width = _parse_counter_format(format)
     _escape_counter_literal(prefix)  # アポストロフィ等の早期検証（inline不可文字）
     _escape_counter_literal(suffix)
+    color = _validate_ffmpeg_color("counter", color)
+    box_color = _validate_ffmpeg_color("counter", box_color)
     deco, deco_key = _text_deco_spec(
         "counter", border, border_color, shadow, shadow_color)
     spec = {
@@ -715,4 +728,4 @@ from scriptvedit.objects import Object
 from scriptvedit.project import Project
 from scriptvedit.state import _ARTIFACT_DIR
 from scriptvedit.timeline import anchor
-from scriptvedit.validate import _require_number
+from scriptvedit.validate import _require_number, _validate_ffmpeg_color

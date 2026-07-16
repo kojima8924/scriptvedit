@@ -8,6 +8,13 @@ import sys, os, re, json, shutil
 import pytest
 
 from scriptvedit import *
+from scriptvedit.text import _resolve_font
+
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("ffprobe") is None,
+    reason="ffprobe が見つからないためスナップショットテストをスキップします",
+)
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TESTS_DIR)               # リポジトリルート
@@ -969,6 +976,11 @@ def _snapshot_update_requested(request):
 @pytest.mark.parametrize("name,setup_fn", ALL_TESTS, ids=[n for n, _ in ALL_TESTS])
 def test_snapshot(name, setup_fn, request):
     """dry_run で生成した ffmpeg コマンドがスナップショットと一致すること"""
+    if name in {"test52", "test53", "test54", "test85"}:
+        try:
+            _resolve_font(None)
+        except FileNotFoundError as exc:
+            pytest.skip(str(exc))
     cmd = normalize_cmd(setup_fn())
     if _snapshot_update_requested(request):
         save_snapshot(name, cmd)

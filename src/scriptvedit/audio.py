@@ -292,6 +292,7 @@ def audio_viz(source, *, kind="waves", color="white", size=None, duration=None):
     """音声を showwaves/showspectrum/showcqt で可視化した映像Objectを生成（キャッシュ生成物）。
     kind: 'waves' | 'spectrum' | 'cqt'。"""
     _validate_audio_source("audio_viz", source)
+    color = _validate_ffmpeg_color("audio_viz", color)
     if kind not in ("waves", "spectrum", "cqt"):
         hint = _suggest_hint(str(kind), ("waves", "spectrum", "cqt"))
         raise ValueError(
@@ -403,5 +404,5 @@ from scriptvedit.project import Project
 from scriptvedit.state import _ARTIFACT_DIR, _ENGINE_VER, _detect_media_type, _suggest_hint
 from scriptvedit.text import text
 from scriptvedit.timeline import anchor
-from scriptvedit.validate import _require_number
+from scriptvedit.validate import _require_number, _validate_ffmpeg_color
 from scriptvedit.web import subtitle

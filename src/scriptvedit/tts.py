@@ -57,12 +57,14 @@ import urllib.request
 import warnings
 import wave
 
+from scriptvedit.ffmpeg import _unique_tmp_path
+
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 50021
 _DEFAULT_CACHE_DIR = "__cache__/tts"
 
-_CONNECT_TIMEOUT = 5   # audio_query / speakers 用（接続確認を兼ねる）
-_SYNTH_TIMEOUT = 60    # synthesis 用（長文の合成に時間がかかるため長め）
+_CONNECT_TIMEOUT = 5   # 接続確認 / speakers 用
+_SYNTH_TIMEOUT = 60    # audio_query / synthesis 用（長文の合成に時間がかかるため長め）
 
 _BACKENDS = ("voicevox", "edge", "sapi")
 _ENV_BACKEND = "SCRIPTVEDIT_TTS_BACKEND"
@@ -130,8 +132,7 @@ def _cache_path(backend, text, speaker, speed, pitch, cache_dir):
 def _atomic_write_bytes(path, data):
     """一時パスへ書き込み → os.replace で確定（壊れた部分ファイルを残さない）"""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    base_path, ext = os.path.splitext(path)
-    tmp_path = f"{base_path}.tmp{ext}"
+    tmp_path = _unique_tmp_path(path)
     try:
         with open(tmp_path, "wb") as f:
             f.write(data)
@@ -300,10 +301,10 @@ def _synth_voicevox(text, speaker, speed, pitch, cache_path, host, port):
     base = _base_url(host, port)
 
     # 1) audio_query: テキストから合成用クエリ(JSON)を生成
-    #    （接続確認を兼ねるため短いタイムアウト）
+    #    長文ではクエリ生成にも時間がかかるため synthesis と同じ上限を使う
     query_qs = urllib.parse.urlencode({"text": text, "speaker": int(speaker)})
     raw = _request(f"{base}/audio_query?{query_qs}", host=host, port=port,
-                   method="POST", timeout=_CONNECT_TIMEOUT)
+                   method="POST", timeout=_SYNTH_TIMEOUT)
     query = json.loads(raw)
 
     # 2) 話速・音高を調整
@@ -439,7 +440,7 @@ def _synth_edge(text, voice, speed, pitch, cache_path):
     pitch_s = _edge_pitch(pitch)
 
     base, _ = os.path.splitext(cache_path)
-    tmp_mp3 = f"{base}.tmp.mp3"
+    tmp_mp3 = _unique_tmp_path(f"{base}.mp3")
 
     async def _save():
         comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch_s)
@@ -550,8 +551,7 @@ def _synth_sapi(text, voice, speed, pitch, cache_path):
     # SAPI の Rate は -10〜10（0 が標準）。speed=1.0→0, 2.0→10 程度に写像する
     rate = max(-10, min(10, round((float(speed) - 1.0) * 10)))
 
-    base, ext = os.path.splitext(cache_path)
-    tmp_path = f"{base}.tmp{ext}"
+    tmp_path = _unique_tmp_path(cache_path)
     select = (f"$s.SelectVoice((($s.GetInstalledVoices() | "
               f"ForEach-Object {{ $_.VoiceInfo.Name }} | "
               f"Where-Object {{ $_ -like {_ps_quote('*' + str(voice) + '*')} }})"

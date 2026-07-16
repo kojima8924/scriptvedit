@@ -411,9 +411,8 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
                 f"[{p}a][{p}c]blend=all_mode=screen:all_opacity={it}"
             )
         elif e.name == "lut":
-            # lut3d: パスはフィルタグラフ用に / 区切り + ':' エスケープ
-            lut_path = e.params["file"].replace("\\", "/").replace(":", "\\:")
-            filters.append(f"lut3d=file='{lut_path}'")
+            # lut3d も fontfile/subtitles と同じパスエスケープを使う
+            filters.append(f"lut3d=file={_escape_ffpath(e.params['file'])}")
         elif e.name == "glitch":
             # rgbashift + noise のプリセット。interval指定時は間欠発動
             strength = e.params.get("strength", 1.0)

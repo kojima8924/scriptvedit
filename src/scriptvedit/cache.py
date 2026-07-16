@@ -90,6 +90,29 @@ def _is_pending_cache_path(path):
 # ここに挙げたキーはパラメータ列挙から除外し、下で *_ffp として内容指紋を足す。
 _OP_PATH_PARAMS = {"lut": ("file",), "mask": ("image",), "mask_wipe": ("image",)}
 
+# `~` の軽量代替を実装済みの内部op名。未対応opの品質ヒントは出力を変えず、
+# 同一出力のキャッシュ鍵を分裂させない。対応を追加するときは、実処理と同時に
+# ここへ内部op名を登録する。
+_FAST_HINT_OPS = frozenset()
+
+
+def _respects_fast_hint(op):
+    """op（または内部op名）が `~` の軽量代替を実装しているか返す"""
+    name = op if isinstance(op, str) else getattr(op, "name", None)
+    return name in _FAST_HINT_OPS
+
+
+def _effective_quality(op):
+    """実際の出力へ影響する品質値だけを返す"""
+    if _respects_fast_hint(op) and getattr(op, "quality", "final") == "fast":
+        return "fast"
+    return "final"
+
+
+def _ops_effective_quality(ops):
+    """op列に軽量代替を使うものが1つでもあればfast、それ以外はfinal"""
+    return "fast" if any(_effective_quality(op) == "fast" for _, op in ops) else "final"
+
 
 def _op_fingerprint_str(op):
     """単一opのフィンガープリント文字列を生成"""
@@ -101,7 +124,7 @@ def _op_fingerprint_str(op):
         v = op.params[k]
         parts.append(f"{k}={v.to_ffmpeg('u') if isinstance(v, Expr) else repr(v)}")
     # policy はレンダ結果に影響しないためフィンガープリントに含めない
-    quality = getattr(op, 'quality', 'final')
+    quality = _effective_quality(op)
     parts.append(f"q={quality}")
     # morph_to: ターゲット画像のFFPをsignatureに含める
     if op.name == "morph_to" and hasattr(op, '_morph_target'):
@@ -233,6 +256,8 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
     sigs = [_src_signature(original_source)]
     opfp = _op_prefix_fingerprint(ops)
     sigs.append(opfp)
+    # 呼び出し側のraw hintではなく、prefix全体で出力に効く品質だけを鍵へ入れる。
+    quality = _ops_effective_quality(ops)
     sigs.append(f"q={quality}")
     # 注: 生成される中間物の内容は draft/本番で同一のため、_ACTIVE_QUALITY(rq)は
     # 鍵に含めない（含めると本番↔draft で全キャッシュミスになり無駄な再生成が起きる）
@@ -262,6 +287,7 @@ def _morph_cache_path(src_path, morph_op, duration, fps, quality="final"):
     sigs.append(f"op={_op_fingerprint_str(morph_op)}")
     sigs.append(f"dur={duration}")
     sigs.append(f"fps={fps}")
+    quality = _effective_quality(morph_op)
     sigs.append(f"q={quality}")
     # 中間物は draft/本番で同一内容のため rq(_ACTIVE_QUALITY)は鍵に含めない
     sigs.append(f"ev={_ENGINE_VER}")
@@ -279,6 +305,7 @@ def _particle_cache_path(img_path, particle_op, duration, fps, quality="final"):
     sigs.append(f"op={_op_fingerprint_str(particle_op)}")
     sigs.append(f"dur={duration}")
     sigs.append(f"fps={fps}")
+    quality = _effective_quality(particle_op)
     sigs.append(f"q={quality}")
     # 中間物は draft/本番で同一内容のため rq(_ACTIVE_QUALITY)は鍵に含めない
     sigs.append(f"ev={_ENGINE_VER}")

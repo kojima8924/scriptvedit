@@ -37,6 +37,7 @@ def rotate(*, deg=None, rad=None, expand=False, fill="0x00000000"):
         raise ValueError(
             "rotate() に時間依存の式（u を含む式）は使えません。"
             "時間変化する回転には rotate_to() を使ってください。")
+    fill = _validate_ffmpeg_color("rotate", fill)
     return Transform("rotate", rad=rad_val, expand=expand, fill=fill)
 
 
@@ -51,6 +52,7 @@ def pad(w=None, h=None, x=-1, y=-1, color="black"):
     """パディングTransform。w,h: 出力サイズ、x,y: 配置位置(-1=中央)。"""
     if w is None or h is None:
         raise ValueError("pad: w と h は必須です")
+    color = _validate_ffmpeg_color("pad", color)
     return Transform("pad", w=w, h=h, x=x, y=y, color=color)
 
 
@@ -105,6 +107,7 @@ def rotate_to(deg=None, rad=None, *, from_deg=None, from_rad=None,
       そのパスの進行方向を向く回転になる（look_at と同義）。offset_deg で
       向きを補正する。
     """
+    fill = _validate_ffmpeg_color("rotate_to", fill)
     if follow is not None:
         return look_at(follow, offset_deg=offset_deg, expand=expand, fill=fill)
     has_from_to = any(v is not None for v in (from_deg, from_rad, to_deg, to_rad))
@@ -203,3 +206,4 @@ def atempo(rate=1.0):
 from scriptvedit.effects.paths import look_at
 from scriptvedit.expr import Const, Expr, _resolve_param, _to_expr, deg2rad, lerp
 from scriptvedit.objects import AudioEffect, Effect, Transform
+from scriptvedit.validate import _validate_ffmpeg_color

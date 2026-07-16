@@ -18,7 +18,7 @@ import hashlib
 from scriptvedit.state import _ARTIFACT_DIR
 from scriptvedit.cache import _file_fingerprint
 from scriptvedit.objects import Object
-from scriptvedit.validate import _require_number
+from scriptvedit.validate import _FFMPEG_COLOR_NAMES, _require_number
 from scriptvedit.web import _TEMPLATES_DIR, _template_path
 
 
@@ -34,9 +34,18 @@ _FORMULA_VER = "1"
 # ビューポート/出力サイズの上限（巨大な数式で Chromium を殺さない）
 _FORMULA_MAX_PX = 8192
 
-# CSS カラーの簡易バリデーション（#rgb / #rrggbb(aa) / 名前 / rgb()/rgba()/hsl()/hsla()）
+# CSS カラー関数の簡易バリデーション。16進の桁数と色名は別途厳密に検証する。
+_CSS_COLOR_FUNC_RE = re.compile(
+    r"^(rgb|rgba|hsl|hsla)\([0-9a-zA-Z.,%\s/+-]+\)$")
+_CSS_ONLY_COLOR_NAMES = frozenset({
+    "transparent", "rebeccapurple", "grey", "darkgrey", "darkslategrey",
+    "dimgrey", "lightgray", "lightslategrey", "slategrey",
+})
+# 旧内部名は参照互換のため従来の広い正規表現を残す。厳密な桁数・色名検証は
+# _validate_color が担うため、新規コードはこの正規表現だけで受理判定しないこと。
 _CSS_COLOR_RE = re.compile(
-    r"^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+|(rgb|rgba|hsl|hsla)\([0-9a-zA-Z.,%\s/+-]+\))$")
+    r"^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+|(rgb|rgba|hsl|hsla)"
+    r"\([0-9a-zA-Z.,%\s/+-]+\))$")
 
 
 def _katex_fingerprint():
@@ -86,11 +95,23 @@ def _validate_latex(fn, latex):
 
 
 def _validate_color(fn, color):
-    if not isinstance(color, str) or not _CSS_COLOR_RE.match(color.strip()):
+    if not isinstance(color, str):
+        valid = False
+        value = color
+    else:
+        value = color.strip()
+        valid_hex = bool(re.fullmatch(
+            r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]|[0-9a-fA-F]{3}|[0-9a-fA-F]{5})?",
+            value))
+        # 上の正規表現が受理するのは #RGB/#RGBA/#RRGGBB/#RRGGBBAA のみ。
+        valid = (valid_hex or value.lower() in _FFMPEG_COLOR_NAMES
+                 or value.lower() in _CSS_ONLY_COLOR_NAMES
+                 or bool(_CSS_COLOR_FUNC_RE.fullmatch(value)))
+    if not valid:
         raise ValueError(
             f"{fn}: color はCSSカラー文字列で指定してください: {color!r}\n"
             f"例: 'white' / '#ffcc00' / 'rgb(255,0,0)' / 'rgba(255,255,255,0.8)'")
-    return color.strip()
+    return value
 
 
 def _build_formula_spec(fn, lines, size, color, display, padding, gap, align):

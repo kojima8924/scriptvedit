@@ -73,7 +73,7 @@ def _op_summary(op):
         parts.append(f"policy={policy}")
     quality = getattr(op, "quality", None)
     if quality and quality != "final":
-        parts.append(f"quality={quality}")
+        parts.append(f"quality_hint={quality}")
     return f"{name}({', '.join(parts)})"
 
 
