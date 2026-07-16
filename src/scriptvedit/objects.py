@@ -233,6 +233,20 @@ _WEB_KWARGS = {"duration", "size", "fps", "data", "name", "debug_frames", "deps"
 _SLIDE_PAGE_KEY = "__svt_slide_page__"
 
 
+def _web_frame_count(duration, fps):
+    """Web Objectのキャプチャフレーム数を返す（短尺でも最低1フレームを保証）。
+
+    旧実装の int(dur * fps) は duration < 1/fps で 0 フレームになり、
+    ffmpeg が入力なしで失敗していた。切り上げ + 最低1で全尺をカバーする。
+    """
+    if not isinstance(duration, (int, float)) or duration <= 0:
+        raise ValueError(
+            f"web Object の duration は正の数値が必要です: {duration!r}")
+    if not isinstance(fps, (int, float)) or fps <= 0:
+        raise ValueError(f"web Object の fps は正の数値が必要です: {fps!r}")
+    return _builtins.max(1, int(_math.ceil(float(duration) * float(fps))))
+
+
 class Object:
     def __init__(self, source, **kwargs):
         self.source = source
@@ -274,6 +288,10 @@ class Object:
                 raise ValueError("web Object には size が必須です")
             self._web_source = source
             self.duration = kwargs["duration"]
+            if not isinstance(self.duration, (int, float)) or \
+                    isinstance(self.duration, bool) or self.duration <= 0:
+                raise ValueError(
+                    f"web Object の duration は正の数値が必要です: {self.duration!r}")
             self._web_size = kwargs["size"]
             self._web_fps = kwargs.get("fps")
             self._web_data = kwargs.get("data", {})
@@ -706,11 +724,16 @@ class Object:
         name = self._web_name
         cache_dir = os.path.join(_CACHE_DIR, "webclip")
         frames_dir = os.path.join(cache_dir, f"{name}_frames")
+        # 同名の前回実行（debug_frames 残留や中断）の stale フレームが混入すると
+        # duration/fps/data 変更後も古い絵が使われるため、生成前に必ず空にする。
+        # ※ frames_dir は __cache__/webclip 配下の生成専用ディレクトリなので削除して安全
+        if os.path.isdir(frames_dir):
+            _shutil.rmtree(frames_dir, ignore_errors=True)
         os.makedirs(frames_dir, exist_ok=True)
         w, h = self._web_size
         fps = self._web_fps or project.fps
         dur = self.duration
-        N = int(dur * fps)
+        N = _web_frame_count(dur, fps)
         html_path = os.path.abspath(self._web_source)
         url = f"file:///{html_path.replace(os.sep, '/')}"
 

@@ -129,6 +129,8 @@ def _main(argv=None):
                          help="--gc で残す日数（既定: 7）")
     p_cache.add_argument("--clear", action="store_true", help="キャッシュを全削除")
     p_cache.add_argument("--dir", default=_CACHE_DIR, help="キャッシュディレクトリ")
+    p_cache.add_argument("--yes", action="store_true",
+                         help="--dir が __cache__ 配下でなくても削除を許可する（誤指定防止の確認）")
 
     p_new = sub.add_parser("new", help="動画プロジェクトの雛形を生成する")
     p_new.add_argument("path", help="生成先ディレクトリ")
@@ -168,11 +170,17 @@ def _main(argv=None):
             print(text_out)
         return 0
     if args.command == "cache":
-        if args.clear:
-            cache_clear(args.dir)
-        elif args.gc:
-            cache_gc(args.keep_days, args.dir)
-        elif args.stats:
+        try:
+            if args.clear:
+                cache_clear(args.dir, force=args.yes)
+                return 0
+            if args.gc:
+                cache_gc(args.keep_days, args.dir, force=args.yes)
+                return 0
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.stats:
             cache_stats(args.dir)
         else:
             cache_stats(args.dir)  # 既定は統計表示

@@ -936,6 +936,9 @@ img.time(4) <= scanline(spacing=6, darkness=lambda u: u)
 - **組込の名前およびサブモジュール名（`beat` / `tts` / `viz` / `morph` / `testkit` など）は予約名で使用禁止**（衝突するとその機能が壊れるため、登録時に PluginError）
 - プラグイン同士の再登録のみ `override=True` で許可。プラグインのコード指紋はキャッシュ署名に含まれる
 - 同梱サンプル: `plugins/example_scanline.py` / `example_neon.py` / `example_photo_frame.py`
+- **安全性の注意**: `import scriptvedit` するだけで **cwd の `plugins/*.py` が Python コードとして実行される**。
+  信頼できないディレクトリ（ダウンロードした他人のプロジェクト等）で import する前に `plugins/` の中身を確認するか、
+  環境変数 `SCRIPTVEDIT_NO_PLUGINS` を設定して自動読込を無効化すること（`load_plugins()` で明示的に読み込む運用も可）。
 
 ### ケイパビリティ・マニフェスト（describe）
 

@@ -1801,11 +1801,18 @@ class Project:
             except OSError:
                 pass
         cache_meta = {"duration": dur, "anchors": anchors, "sources": sources_meta}
-        # アトミック書き込み（webmと同様、中断による壊れたメタの残留を防ぐ）
-        tmp_json = f"{json_path}.tmp"
-        with open(tmp_json, "w", encoding="utf-8") as f:
-            json.dump(cache_meta, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_json, json_path)
+        # アトミック書き込み（webmと同様、中断による壊れたメタの残留を防ぐ）。
+        # 一時パスは pid + 乱数でユニーク化（並列レイヤー生成での衝突防止）
+        tmp_json = _unique_tmp_path(json_path)
+        try:
+            with open(tmp_json, "w", encoding="utf-8") as f:
+                json.dump(cache_meta, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_json, json_path)
+        finally:
+            try:
+                os.remove(tmp_json)  # 失敗時の残骸掃除（成功時は replace 済みで存在しない）
+            except OSError:
+                pass
         print(f"  アンカー保存: {json_path}")
 
     def _loop_trim_duration(self, obj, loop_effect):
@@ -2141,7 +2148,7 @@ class Project:
 from scriptvedit.audio import _probe_audio_length
 from scriptvedit.cache import _apply_time_effects_to_duration, _build_morph_frame_extract_cmd, _build_unified_ops, _checkpoint_cache_path, _compute_save_points, _file_fingerprint, _is_bakeable, _is_pending_cache_path, _layer_cache_paths, _morph_cache_path, _morph_input_frame_path, _particle_cache_path, _split_ops, _validate_morph_position, _web_cache_path
 from scriptvedit.expr import Expr, lt, max, min, step
-from scriptvedit.ffmpeg import _decoder_input_args, _ffmpeg_available_encoders, _run_ffmpeg, _run_ffmpeg_to_cache
+from scriptvedit.ffmpeg import _decoder_input_args, _ffmpeg_available_encoders, _run_ffmpeg, _run_ffmpeg_to_cache, _unique_tmp_path
 from scriptvedit.filters.audio import _build_audio_effect_filters, _build_audio_pre_filters
 from scriptvedit.filters.video import _build_effect_filters, _build_input_args, _build_move_exprs, _build_transform_filters, _build_video_overlay_parts, _build_video_pre_filters, _get_base_dimensions, _optimize_filter_chain
 from scriptvedit.objects import Object

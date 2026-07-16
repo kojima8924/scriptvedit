@@ -379,15 +379,23 @@ def beat_sync(audio_source, *, min_bpm=60, max_bpm=200):
         raise RuntimeError(f"beat_sync: ビート検出に失敗しました: {e}") from e
 
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    tmp_path = cache_path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False)
-    os.replace(tmp_path, cache_path)
+    # 一時パスは pid + 乱数でユニーク化（並列実行での衝突防止）→ os.replace で原子的に確定
+    tmp_path = _unique_tmp_path(cache_path)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False)
+        os.replace(tmp_path, cache_path)
+    finally:
+        try:
+            os.remove(tmp_path)  # 失敗時の残骸掃除（成功時は replace 済みで存在しない）
+        except OSError:
+            pass
     return result
 
 
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
 from scriptvedit.effects.basic import again
+from scriptvedit.ffmpeg import _unique_tmp_path
 from scriptvedit.effects.time import speed
 from scriptvedit.media import _finalize_generated_object, _source_signature
 from scriptvedit.objects import AudioEffect, Object

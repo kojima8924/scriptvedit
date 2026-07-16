@@ -492,8 +492,30 @@ def cache_stats(cache_dir=_CACHE_DIR):
     print(f"  {'合計':<16} {total_n:>8} {_fmt_size(total_sz):>12}")
 
 
-def cache_gc(keep_days, cache_dir=_CACHE_DIR):
+def _guard_cache_dir(cache_dir, force, op):
+    """cache --clear/--gc の削除対象が __cache__ らしいことを検証する。
+
+    `--dir` に任意パスを渡すと再帰削除になるため、パス要素に __cache__ を
+    含まないディレクトリは既定で拒否する（--yes / force=True で明示的に許可）。
+    """
+    abs_dir = os.path.abspath(cache_dir)
+    parts = os.path.normpath(abs_dir).replace("\\", "/").split("/")
+    if "__cache__" in parts:
+        return
+    if force:
+        warnings.warn(
+            f"cache {op}: __cache__ 配下ではないディレクトリを削除対象にしています: "
+            f"{abs_dir}", stacklevel=3)
+        return
+    raise ValueError(
+        f"cache {op}: 指定ディレクトリが __cache__ 配下ではありません: {abs_dir}\n"
+        "誤指定による大量削除を防ぐため中断しました。"
+        "本当に対象にする場合は --yes を付けてください。")
+
+
+def cache_gc(keep_days, cache_dir=_CACHE_DIR, *, force=False):
     """keep_days 日より古い（mtime基準）キャッシュファイルを削除する"""
+    _guard_cache_dir(cache_dir, force, "--gc")
     cutoff = _time.time() - float(keep_days) * 86400.0
     removed_n = 0
     removed_sz = 0
@@ -526,10 +548,12 @@ def _prune_empty_dirs(root):
             pass
 
 
-def cache_clear(cache_dir=_CACHE_DIR):
-    """__cache__ を丸ごと削除する"""
+def cache_clear(cache_dir=_CACHE_DIR, *, force=False):
+    """__cache__ を丸ごと削除する（__cache__ 配下以外は force 必須）"""
+    _guard_cache_dir(cache_dir, force, "--clear")
     if os.path.isdir(cache_dir):
-        _shutil.rmtree(cache_dir, ignore_errors=True)
+        # ignore_errors=False: ロック中ファイル等の削除失敗を黙殺しない
+        _shutil.rmtree(cache_dir)
         print(f"キャッシュ全削除: {os.path.abspath(cache_dir)}")
     else:
         print(f"キャッシュディレクトリはありません: {cache_dir}")

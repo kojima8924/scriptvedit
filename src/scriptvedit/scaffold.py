@@ -159,8 +159,25 @@ def build_my_glow(params, ctx):
 TEMPLATES = ("minimal", "explainer")
 
 
-def _write(path, content):
+def _write(path, content, backups=None):
+    """雛形ファイルを書き出す。既存ファイルは .bak へ退避してから上書きする。
+
+    force=True での再生成時にユーザーの編集済みファイルを黙って消さないための保護。
+    内容が同一なら何もしない。退避したパスは backups リストへ追記する。
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                old = f.read()
+        except (OSError, UnicodeDecodeError):
+            old = None
+        if old is not None and old.replace("\r\n", "\n") == content:
+            return  # 同一内容 → 触らない（.bak も作らない）
+        bak = path + ".bak"
+        os.replace(path, bak)  # 既存を退避（前回の .bak は上書き）
+        if backups is not None:
+            backups.append(bak)
     with open(path, "w", encoding="utf-8", newline="\r\n") as f:
         f.write(content)
 
@@ -204,14 +221,15 @@ def new_project(path, *, template="minimal", force=False, width=1280, height=720
             "\n")
         bg = "black"
 
+    backups = []
     _write(os.path.join(root, "main.py"),
            _MAIN_PY.format(name=name, width=width, height=height, fps=fps,
-                           bg=bg, layers=layers_src))
+                           bg=bg, layers=layers_src), backups)
     for fname, src in layer_files.items():
-        _write(os.path.join(root, "layers", fname), src)
-    _write(os.path.join(root, "README.md"), _README.format(name=name))
-    _write(os.path.join(root, ".gitignore"), _GITIGNORE)
-    _write(os.path.join(root, "plugins", "README.md"), _PLUGINS_README)
+        _write(os.path.join(root, "layers", fname), src, backups)
+    _write(os.path.join(root, "README.md"), _README.format(name=name), backups)
+    _write(os.path.join(root, ".gitignore"), _GITIGNORE, backups)
+    _write(os.path.join(root, "plugins", "README.md"), _PLUGINS_README, backups)
     for d in (os.path.join("assets", "images"), os.path.join("assets", "audio"),
               "output"):
         full = os.path.join(root, d)
@@ -221,6 +239,10 @@ def new_project(path, *, template="minimal", force=False, width=1280, height=720
             with open(gk, "w", encoding="utf-8") as f:
                 f.write("")
 
+    if backups and not quiet:
+        print("既存ファイルを .bak に退避してから上書きしました:")
+        for bak in backups:
+            print(f"  {bak}")
     if not quiet:
         print(f"プロジェクトを作成しました: {root} (template={template})")
         print("次にやること:")

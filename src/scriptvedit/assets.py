@@ -40,6 +40,7 @@ dry_run と本レンダでパスが食い違うとスナップショットが壊
 """
 import inspect as _inspect
 import os
+import re as _re
 import shutil as _shutil
 import warnings as _warnings
 
@@ -108,7 +109,45 @@ def library_dirs():
 
 
 def _rel_parts(relpath):
-    return [p for p in str(relpath).replace("\\", "/").split("/") if p not in ("", ".")]
+    """asset() の相対パス指定をパス要素リストへ分解する（assets/ 外への脱出を拒否）。
+
+    `..`・絶対パス・ドライブレター付きパス（C: 等）は assets/ の外を
+    参照できてしまうため、明確なエラーで拒否する（パストラバーサル対策）。
+    """
+    s = str(relpath)
+    if os.path.isabs(s) or _re.match(r"^[A-Za-z]:", s):
+        raise ValueError(
+            f"asset: 絶対パス・ドライブレター付きパスは指定できません: {relpath!r}\n"
+            "assets/ からの相対パスで指定してください（例: asset(\"images/bg.png\")）。")
+    parts = [p for p in s.replace("\\", "/").split("/") if p not in ("", ".")]
+    if ".." in parts:
+        raise ValueError(
+            f"asset: '..' を含むパスは指定できません: {relpath!r}\n"
+            "assets/ の外は参照できません。assets/ 配下に素材を置いてください。")
+    if not parts:
+        raise ValueError(
+            f"asset: 素材のパスが空です: {relpath!r}\n"
+            "assets/ からの相対パスで指定してください（例: asset(\"images/bg.png\")）。")
+    return parts
+
+
+def _ensure_under(base, path, relpath):
+    """path が base 配下に収まっていることを realpath で検証する（多重防御）。
+
+    _rel_parts() の拒否に加え、シンボリックリンク等で assets/ の外へ
+    抜けるケースも realpath 解決後の包含チェックで塞ぐ。
+    """
+    base_real = os.path.normcase(os.path.realpath(base))
+    path_real = os.path.normcase(os.path.realpath(path))
+    try:
+        common = os.path.commonpath([base_real, path_real])
+    except ValueError:
+        common = None  # ドライブが異なる等（比較不能 = 配下ではない）
+    if common != base_real:
+        raise ValueError(
+            f"asset: assets/ の外を参照しようとしました: {relpath!r}\n"
+            f"  解決先: {path_real}\n"
+            f"  許可される範囲: {base_real} 配下のみ")
 
 
 def imported_dir():
@@ -193,6 +232,9 @@ def asset(relpath, *, must_exist=True):
     base = assets_dir()
     direct = os.path.join(base, *parts)
     imported = os.path.join(base, IMPORTED_DIR, *parts)
+    # realpath 解決後も assets/ 配下（_imported/ 含む）に収まることを検証
+    _ensure_under(base, direct, relpath)
+    _ensure_under(os.path.join(base, IMPORTED_DIR), imported, relpath)
 
     if os.path.exists(direct):
         return direct

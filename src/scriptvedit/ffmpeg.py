@@ -14,9 +14,21 @@ import difflib as _difflib
 import shutil as _shutil
 import concurrent.futures as _futures
 import inspect as _inspect
+import uuid as _uuid
 
 
 _FILTER_SCRIPT_THRESHOLD = 4000
+
+
+def _unique_tmp_path(final_path):
+    """final_path と同ディレクトリ・同拡張子のユニークな一時パスを返す。
+
+    固定名（base.tmp.ext）だと同じキャッシュパスへ複数プロセス/ワーカが
+    同時到達したとき一時ファイルを上書きし合って壊れるため、
+    pid + 乱数で衝突しない名前にする（os.replace は同一ボリューム内で原子的）。
+    """
+    base, ext = os.path.splitext(final_path)
+    return f"{base}.tmp{os.getpid()}_{_uuid.uuid4().hex[:8]}{ext}"
 
 
 def _externalize_long_filters(cmd):
@@ -60,9 +72,9 @@ def _run_ffmpeg_to_cache(cmd, cache_path, timeout=600):
     タイムアウトやCtrl-Cで壊れた部分ファイルがキャッシュとして残り、
     以後 os.path.exists() 判定で恒久的に使われ続けるのを防ぐ。
     cmd 内の cache_path と一致する引数を一時パス（拡張子は維持）に差し替えて実行する。
+    一時パスは pid + 乱数でユニーク化し、並列生成での衝突を防ぐ。
     """
-    base, ext = os.path.splitext(cache_path)
-    tmp_path = f"{base}.tmp{ext}"
+    tmp_path = _unique_tmp_path(cache_path)
     replaced = sum(1 for arg in cmd if arg == cache_path)
     if replaced == 0:
         # 置換0件のまま実行すると非アトミック書き込み後にos.replaceが
@@ -73,7 +85,14 @@ def _run_ffmpeg_to_cache(cmd, cache_path, timeout=600):
     run_cmd = [tmp_path if arg == cache_path else arg for arg in cmd]
     try:
         _run_ffmpeg(run_cmd, timeout=timeout)
-        os.replace(tmp_path, cache_path)
+        try:
+            os.replace(tmp_path, cache_path)
+        except OSError:
+            # Windows では同じ cache_path へ複数ワーカが同時に replace すると
+            # 一時的な共有違反(PermissionError)になり得る。同じキャッシュ鍵は
+            # 同じ内容なので、他ワーカが先に確定していれば自分の分は破棄してよい。
+            if not os.path.exists(cache_path):
+                raise
         with _GEN_COUNTER_LOCK:  # 並列レイヤー生成からの同時更新をアトミック化
             _GEN_COUNTER[0] += 1  # render統計用: 生成した中間ファイル数
     finally:
