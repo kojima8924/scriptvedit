@@ -190,8 +190,13 @@ class Effect:
         kw = dict(policy=self.policy, quality=self.quality, **self.params)
         kw.update(overrides)
         new = Effect(self.name, **kw)
-        if hasattr(self, '_morph_target'):
-            new._morph_target = self._morph_target
+        # Effect ファクトリが付与した補助情報も保持する。
+        # morph/assemble の素材参照や path 式が落ちると、~ の
+        # 品質ヒントだけで通常処理と内容が変わってしまう。
+        core = {"name", "params", "policy", "quality"}
+        for key, value in self.__dict__.items():
+            if key not in core:
+                setattr(new, key, value)
         return new
 
     def __and__(self, other):

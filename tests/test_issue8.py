@@ -52,6 +52,20 @@ def test_tilde_is_quality_hint_for_audio_and_never_deletes_content():
     assert not video_clip.has_video
 
 
+def test_effect_copy_preserves_factory_metadata():
+    """~やpolicy変更で終端素材・パス式を失わない"""
+    source = sv.Object("source.png")
+    assemble = sv.assemble_from(source)
+    for copied in (~assemble, +assemble, -assemble):
+        assert copied._assemble_source is source
+
+    path = sv.move_along([(0, 0), (0.5, 0.25), (1, 1)])
+    for copied in (~path, +path, -path):
+        assert copied._path_xy == path._path_xy
+        facing = sv.look_at(copied)
+        assert facing.name == "rotate_to"
+
+
 def test_ignored_quality_hint_does_not_split_cache_keys(tmp_path):
     """出力が同じ未対応opはraw qualityが違っても全キャッシュ鍵を共有する"""
     source = tmp_path / "source.png"

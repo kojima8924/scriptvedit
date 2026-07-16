@@ -79,4 +79,3 @@ def test_assert_frame_and_assert_frames_normal_paths(monkeypatch):
     assert testkit.assert_frame("video.mp4", 1.0, expected) == pytest.approx(1.0)
     assert testkit.assert_frames(
         "video.mp4", [(0.5, expected), (1.0, expected)]) == pytest.approx([1.0, 1.0])
-
