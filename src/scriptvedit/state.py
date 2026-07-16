@@ -107,7 +107,7 @@ def _suggest_hint(name, candidates, prefix="\nもしかして: "):
 _CACHE_DIR = "__cache__"
 _CHECKPOINT_DIR = os.path.join(_CACHE_DIR, "checkpoints")
 _ARTIFACT_DIR = os.path.join(_CACHE_DIR, "artifacts")
-_ENGINE_VER = "7"
+_ENGINE_VER = "8"
 _BAKEABLE_EFFECTS = {"scale", "fade", "trim", "morph_to", "rotate_to", "wipe", "color_shift",
                      "chroma_key", "vignette", "pixelize", "glow", "lut", "glitch",
                      "perspective_warp", "lens", "ken_burns", "drop_shadow", "outline",

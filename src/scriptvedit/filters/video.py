@@ -653,46 +653,106 @@ def _build_move_exprs(obj, start, dur, pad_size=None):
 
 
 def _try_native_fade(alpha_expr, start, dur):
-    """alpha式をサンプリングし、ffmpegネイティブfadeフィルタで近似を試みる。
-    成功時はフィルタ文字列のリスト、失敗時はNoneを返す。
-    ネイティブfadeはgeq比で10倍以上高速（Cの内部ループ）。"""
+    """alpha式が区分線形ランプと一致するときだけnative fadeへ変換する。
+
+    native fadeはgeq比で10倍以上高速だが、矩形窓のような不連続な式を
+    ランプへ近似すると透明度の漏れが生じる。全サンプルと隣接差分を候補曲線
+    へ照合し、一致を証明できない式は正確なgeq経路へフォールバックする。
+    """
     N = 100
+    value_tol = 1e-3
+    jump_tol = value_tol * 2.1
     samples = []
     try:
         for i in range(N + 1):
-            samples.append(alpha_expr.eval_at(i / N))
-    except Exception:
+            value = float(alpha_expr.eval_at(i / N))
+            if not _math.isfinite(value):
+                return None
+            # geq経路と同じclip後の値を比較する。
+            samples.append(_builtins.min(1.0, _builtins.max(0.0, value)))
+    except (TypeError, ValueError, OverflowError):
         return None
 
-    # 中間領域が1.0近い標準的なfadeパターンかチェック
-    mid = samples[N // 2]
-    if mid < 0.95:
-        return None  # 中間で不透明でない複雑パターン
+    # 現行native最適化の対象は、中央で完全に不透明になる入出力ランプ。
+    if abs(samples[N // 2] - 1.0) > value_tol:
+        return None
 
-    # fade-in区間を検出: alpha >= 0.99 の最初のサンプル位置
+    has_fade_in = abs(samples[0]) <= value_tol
+    has_fade_out = abs(samples[-1]) <= value_tol
+    if not has_fade_in and abs(samples[0] - 1.0) > value_tol:
+        return None
+    if not has_fade_out and abs(samples[-1] - 1.0) > value_tol:
+        return None
+
+    def _median(values):
+        ordered = sorted(values)
+        count = len(ordered)
+        middle = count // 2
+        if count % 2:
+            return ordered[middle]
+        return (ordered[middle - 1] + ordered[middle]) / 2
+
     fade_in_end_u = 0.0
-    for i in range(N + 1):
-        if samples[i] >= 0.99:
-            fade_in_end_u = i / N
-            break
+    if has_fade_in:
+        # 線形なら alpha=u/a なので、各中間点から同じ終端aが得られる。
+        candidates = [
+            (i / N) / samples[i]
+            for i in range(1, N // 2)
+            if value_tol < samples[i] < 1.0 - value_tol
+        ]
+        # 0→1の一発ジャンプは中間点を持たないためnative化しない。
+        if len(candidates) < 2:
+            return None
+        fade_in_end_u = round(_median(candidates), 12)
 
-    # fade-out区間を検出: alpha >= 0.99 の最後のサンプル位置
     fade_out_start_u = 1.0
-    for i in range(N, -1, -1):
-        if samples[i] >= 0.99:
-            fade_out_start_u = i / N
-            break
+    if has_fade_out:
+        # 線形なら alpha=(1-u)/(1-b) なので、各中間点から開始bを得る。
+        candidates = [
+            1.0 - (1.0 - i / N) / samples[i]
+            for i in range(N // 2 + 1, N)
+            if value_tol < samples[i] < 1.0 - value_tol
+        ]
+        if len(candidates) < 2:
+            return None
+        fade_out_start_u = round(_median(candidates), 12)
 
-    # 値が途中で大きく変動しないか確認
-    for i in range(int(fade_in_end_u * N), int(fade_out_start_u * N) + 1):
-        if i <= N and samples[i] < 0.95:
-            return None  # 中間領域で不透明度が下がる複雑パターン
+    if not (0.0 <= fade_in_end_u <= fade_out_start_u <= 1.0):
+        return None
+
+    expected = []
+    for i in range(N + 1):
+        u = i / N
+        fade_in_value = 1.0
+        if has_fade_in:
+            if fade_in_end_u <= 0:
+                return None
+            fade_in_value = _builtins.min(1.0, u / fade_in_end_u)
+        fade_out_value = 1.0
+        if has_fade_out:
+            fade_out_width = 1.0 - fade_out_start_u
+            if fade_out_width <= 0:
+                return None
+            fade_out_value = _builtins.min(1.0, (1.0 - u) / fade_out_width)
+        expected.append(fade_in_value * fade_out_value)
+
+    if any(abs(actual - ideal) > value_tol
+           for actual, ideal in zip(samples, expected)):
+        return None
+
+    # 点ごとの近似だけでなく、隣接サンプル間の跳びも候補ランプと一致させる。
+    # これによりサンプル境界上のステップ関数も明示的に拒否する。
+    for i in range(1, N + 1):
+        actual_jump = samples[i] - samples[i - 1]
+        expected_jump = expected[i] - expected[i - 1]
+        if abs(actual_jump - expected_jump) > jump_tol:
+            return None
 
     result = []
-    if fade_in_end_u > 0.005:
+    if has_fade_in:
         fade_in_dur = fade_in_end_u * dur
         result.append(f"fade=t=in:st={start}:d={fade_in_dur}:alpha=1")
-    if fade_out_start_u < 0.995:
+    if has_fade_out:
         fade_out_dur = (1.0 - fade_out_start_u) * dur
         fade_out_st = start + fade_out_start_u * dur
         result.append(f"fade=t=out:st={fade_out_st}:d={fade_out_dur}:alpha=1")

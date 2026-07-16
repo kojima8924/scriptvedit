@@ -14,7 +14,7 @@
   "-f",
   "ffmetadata",
   "-i",
-  "__cache__/artifacts/chapters/94ec253d7fb87b34.txt",
+  "__cache__/artifacts/chapters/d731cf3e38e8f295.txt",
   "-filter_complex",
   "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,6)'[v1]",
   "-map",

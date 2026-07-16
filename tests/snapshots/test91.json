@@ -7,7 +7,7 @@
     "-i",
     "color=c=black:s=1280x720:d=10.0:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/4d334359/8f916e0f89bd7eff.mkv",
+    "__cache__/artifacts/checkpoint/4d334359/3d171753f421c1ab.mkv",
     "-loop",
     "1",
     "-r",
@@ -34,7 +34,7 @@
     "test91.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/4d334359/8f916e0f89bd7eff.mkv": [
+    "__cache__/artifacts/checkpoint/4d334359/3d171753f421c1ab.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -53,7 +53,7 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/4d334359/8f916e0f89bd7eff.mkv"
+      "__cache__/artifacts/checkpoint/4d334359/3d171753f421c1ab.mkv"
     ]
   }
 }

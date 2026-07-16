@@ -10,8 +10,11 @@
   7. scriptvedit new --force の既存ファイル .bak 退避
 """
 import os
+import shutil
+import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,8 +25,71 @@ from scriptvedit.assets import asset  # noqa: E402
 from scriptvedit.cache import cache_clear, cache_gc  # noqa: E402
 from scriptvedit.cli import _main  # noqa: E402
 from scriptvedit.ffmpeg import _run_ffmpeg_to_cache, _unique_tmp_path  # noqa: E402
+from scriptvedit.filters.video import (  # noqa: E402
+    _build_effect_filters, _try_native_fade,
+)
 from scriptvedit.objects import _web_frame_count  # noqa: E402
 from scriptvedit.scaffold import new_project  # noqa: E402
+
+
+# --- issue #9: native fade の線形判定 -------------------------------------
+
+def test_native_fade_rejects_step_window():
+    """矩形窓はランプへ近似せず、正確なgeq経路へフォールバックする"""
+    from scriptvedit import Var, and_, gt, lt
+
+    u = Var("u")
+    alpha = and_(gt(u, 0.25), lt(u, 0.75))
+    assert _try_native_fade(alpha, 0, 4) is None
+
+
+def test_native_fade_keeps_linear_triangle():
+    """真の区分線形ランプは従来どおりnative fadeを使う"""
+    from scriptvedit import fade
+
+    effect = fade(lambda u: 1 - abs(2 * u - 1))
+    assert _try_native_fade(effect.params["alpha"], 0, 4) == [
+        "fade=t=in:st=0:d=2.0:alpha=1",
+        "fade=t=out:st=2.0:d=2.0:alpha=1",
+    ]
+
+
+def test_step_window_fade_real_render_has_no_alpha_leak(tmp_path):
+    """実レンダ後の抽出フレームで矩形窓外のalphaが0になる"""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg が無い環境")
+
+    from scriptvedit import Var, and_, fade, gt, lt
+
+    u = Var("u")
+    effect = fade(lambda _u: and_(gt(u, 0.25), lt(u, 0.75)))
+    obj = SimpleNamespace(effects=[effect])
+    filters, _ = _build_effect_filters(obj, 0, 4)
+    assert any(part.startswith("geq=") for part in filters)
+    assert not any(part.startswith("fade=t=") for part in filters)
+
+    rendered = tmp_path / "step-window.mkv"
+    render_cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-f", "lavfi", "-i", "color=c=white:s=4x4:r=100:d=4",
+        "-vf", ",".join(filters),
+        "-c:v", "ffv1", "-pix_fmt", "yuva444p", str(rendered),
+    ]
+    subprocess.run(render_cmd, check=True, capture_output=True, timeout=30)
+
+    def _alpha_at(u_value):
+        extract_cmd = [
+            "ffmpeg", "-v", "error", "-i", str(rendered),
+            "-ss", str(u_value * 4), "-frames:v", "1",
+            "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1",
+        ]
+        result = subprocess.run(
+            extract_cmd, check=True, capture_output=True, timeout=30)
+        assert len(result.stdout) == 4 * 4 * 4
+        return result.stdout[3]
+
+    assert [_alpha_at(u) for u in (0.10, 0.25, 0.75, 0.90)] == [0] * 4
+    assert [_alpha_at(u) for u in (0.26, 0.50, 0.74)] == [255] * 3
 
 
 # --- 1. asset() のパストラバーサル拒否 -----------------------------------

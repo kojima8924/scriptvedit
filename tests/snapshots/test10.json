@@ -7,9 +7,9 @@
     "-i",
     "color=c=purple:s=1280x720:d=5:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/8fcd4e39/94e98d80cfe279e3.mkv",
+    "__cache__/artifacts/checkpoint/8fcd4e39/d424af564b84ead5.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/1bbaba61/f4e8e438b3b34e11.mkv",
+    "__cache__/artifacts/checkpoint/1bbaba61/d0207fb4cb197d38.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,5)'[v1];[v1][2:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,5)'[v2]",
     "-map",
@@ -24,7 +24,7 @@
     "test10.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/8fcd4e39/94e98d80cfe279e3.mkv": [
+    "__cache__/artifacts/checkpoint/8fcd4e39/d424af564b84ead5.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -43,9 +43,9 @@
       "yuva444p",
       "-t",
       "5",
-      "__cache__/artifacts/checkpoint/8fcd4e39/94e98d80cfe279e3.mkv"
+      "__cache__/artifacts/checkpoint/8fcd4e39/d424af564b84ead5.mkv"
     ],
-    "__cache__/artifacts/checkpoint/1bbaba61/6865524b823de751.png": [
+    "__cache__/artifacts/checkpoint/1bbaba61/11149a2b3a55febd.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -56,9 +56,9 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/1bbaba61/6865524b823de751.png"
+      "__cache__/artifacts/checkpoint/1bbaba61/11149a2b3a55febd.png"
     ],
-    "__cache__/artifacts/checkpoint/1bbaba61/f4e8e438b3b34e11.mkv": [
+    "__cache__/artifacts/checkpoint/1bbaba61/d0207fb4cb197d38.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -66,7 +66,7 @@
       "-r",
       "30",
       "-i",
-      "__cache__/artifacts/checkpoint/1bbaba61/6865524b823de751.png",
+      "__cache__/artifacts/checkpoint/1bbaba61/11149a2b3a55febd.png",
       "-vf",
       "scale=w='trunc(iw*((0.8+(0.19999999999999996*clip((t-0)/5/,0/,1))))/2)*2':h='trunc(ih*((0.8+(0.19999999999999996*clip((t-0)/5/,0/,1))))/2)*2':eval=frame,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/5/,0/,1)/,0/,1)'",
       "-c:v",
@@ -77,7 +77,7 @@
       "yuva444p",
       "-t",
       "5",
-      "__cache__/artifacts/checkpoint/1bbaba61/f4e8e438b3b34e11.mkv"
+      "__cache__/artifacts/checkpoint/1bbaba61/d0207fb4cb197d38.mkv"
     ]
   }
 }
