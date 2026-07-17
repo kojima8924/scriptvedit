@@ -16,17 +16,17 @@ dependencies = []
 
 [project.optional-dependencies]
 # morph_to / explode_to / assemble_from（モーフィング・パーティクル）
-morph = ["numpy", "scipy", "opencv-python", "Pillow"]
+morph = ["numpy", "scipy", "opencv-python", "Pillow", "tqdm"]
 # web Object / slide / テンプレート / formula（HTML レンダリング。KaTeX は同梱）
 web = ["playwright"]
 # ビート検出（beat_sync）
-beat = ["numpy"]
+beat = ["numpy", "scipy"]
 # TTS（voice / narrate）の edge バックエンド。
 # VOICEVOX バックエンドは追加依存なし（別プロセスのエンジンを HTTP で呼ぶ）、
 # sapi バックエンド（Windows 標準音声）も追加依存なし。
 tts = ["edge-tts"]
-# 進捗表示・検証ツール
-tools = ["tqdm", "numpy", "opencv-python"]
+# 進捗表示・検証ツール（testkit はフレーム比較に Pillow を使う）
+tools = ["tqdm", "numpy", "opencv-python", "Pillow"]
 all = ["numpy", "scipy", "opencv-python", "Pillow", "playwright", "tqdm", "edge-tts"]
 
 [project.scripts]
