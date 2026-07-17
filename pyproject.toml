@@ -28,6 +28,8 @@ tts = ["edge-tts"]
 # 進捗表示・検証ツール（testkit はフレーム比較に Pillow を使う）
 tools = ["tqdm", "numpy", "opencv-python", "Pillow"]
 all = ["numpy", "scipy", "opencv-python", "Pillow", "playwright", "tqdm", "edge-tts"]
+# 開発用（テスト・カバレッジ・ビルド）
+dev = ["pytest", "pytest-cov", "build"]
 
 [project.scripts]
 scriptvedit = "scriptvedit.cli:_main"

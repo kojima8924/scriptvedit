@@ -82,11 +82,11 @@ def test_extra_covers_module_imports(module, extra):
 
 
 def test_all_extra_is_superset():
-    """[all] は他の全 extra の和集合を含む"""
+    """[all] はランタイム系 extra の和集合を含む（[dev] は開発用なので対象外）"""
     extras = _load_extras()
     union = set()
     for name, deps in extras.items():
-        if name != "all":
+        if name not in ("all", "dev"):
             union |= deps
     missing = union - extras.get("all", set())
     assert not missing, f"[all] に不足: {sorted(missing)}"
