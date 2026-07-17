@@ -156,6 +156,77 @@ def test_audio_only_project_real_render(tmp_path):
     assert kinds == ["audio", "video"], f"stream構成が不正: {kinds}"
 
 
+# --- issue #13 P2-7: レイヤーキャッシュのfail-closedとparam追跡 ------------
+
+def _make_p27_project(tmp_path, cache_mode):
+    """param()を使う小レイヤーのプロジェクトを組み立てる"""
+    from scriptvedit import Project
+
+    png = tmp_path / "dot27.png"
+    if not png.exists():
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+             "-i", "color=c=red:s=8x8:d=1", "-frames:v", "1", str(png)],
+            check=True, capture_output=True, timeout=30)
+    layer = tmp_path / "param_layer.py"
+    layer.write_text(
+        "from scriptvedit import *\n"
+        "_p = Project._current\n"
+        "_msg = _p.param('msg', 'a')\n"   # 出力尺に影響しないparam
+        f"o = Object(r\"{png}\")\n"
+        "o.time(1)\n",
+        encoding="utf-8")
+    p = Project()
+    p.configure(width=160, height=90, fps=30)
+    p.layer(str(layer), cache=cache_mode)
+    return p, layer
+
+
+def test_layer_cache_fail_closed_and_param_tracking(tmp_path, monkeypatch):
+    """メタ欠損/破損はstale扱い、paramの解決値変更でキャッシュを使わない"""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg が無い環境")
+    from scriptvedit.cache import _layer_cache_paths
+
+    monkeypatch.delenv("SCRIPTVEDIT_PARAM_msg", raising=False)
+    p1, layer = _make_p27_project(tmp_path, "make")
+    p1.render(str(tmp_path / "m.mp4"), timeout=120)
+    cache_video, cache_json = _layer_cache_paths(str(layer), p1)
+    assert os.path.exists(cache_video) and os.path.exists(cache_json)
+
+    def _auto_uses_cache():
+        p, _ = _make_p27_project(tmp_path, "auto")
+        result = p.render(str(tmp_path / "a.mp4"), dry_run=True)
+        cmd = result["main"] if isinstance(result, dict) else result
+        return cache_video.replace("\\", "/") in \
+            " ".join(cmd).replace("\\", "/")
+
+    try:
+        # 同一条件 → 使う
+        assert _auto_uses_cache(), "同一条件でキャッシュが使われない"
+
+        # param の解決値が変わる → 使わない
+        monkeypatch.setenv("SCRIPTVEDIT_PARAM_msg", "b")
+        assert not _auto_uses_cache(), "param変更後もキャッシュを使っている"
+        monkeypatch.delenv("SCRIPTVEDIT_PARAM_msg")
+        assert _auto_uses_cache()
+
+        # メタ破損 → 使わない（fail-closed）
+        with open(cache_json, "w", encoding="utf-8") as f:
+            f.write("{broken json")
+        assert not _auto_uses_cache(), "破損メタなのにキャッシュを使っている"
+
+        # メタ欠損 → 使わない（成果物と完了メタの整合を必須化）
+        os.remove(cache_json)
+        assert not _auto_uses_cache(), "メタ欠損なのにキャッシュを使っている"
+    finally:
+        for path in (cache_video, cache_json):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 # --- issue #13 P2-10: キャッシュ用アンカー計算と正規リゾルバの一致 ---------
 
 def test_layer_data_anchor_matches_resolver_with_show(tmp_path):

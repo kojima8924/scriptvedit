@@ -38,6 +38,7 @@ class Project:
         self._current_layer_file = None  # 現在実行中のレイヤーファイル
         self._probe_cache = {}  # (path, size, mtime_ns) → {"duration": float, ...}
         self._layer_sources = {}  # layer filename → [参照ソースパス]（キャッシュ鮮度検証用）
+        self._layer_params = {}  # layer filename → {param名: 解決値}（キャッシュ鮮度検証用）
         self._layer_audio_sources = {}  # layer filename → [音声ソース]（再生時の脱落警告用）
         self._layer_unknown_audio_sources = {}  # ffprobe失敗で音声有無が不明な動画
         self._extra_layer_deps = {}  # layer filename → [追加依存パス]（morph_toターゲット等）
@@ -186,20 +187,33 @@ class Project:
             raw = next((v for k, v in self._param_overrides.items()
                         if k.lower() == name.lower()), None)
             if raw is None:
-                return default
+                return self._record_layer_param(name, default)
         if isinstance(default, bool):
-            return raw.strip().lower() in ("1", "true", "yes", "on")
-        if isinstance(default, int):
+            value = raw.strip().lower() in ("1", "true", "yes", "on")
+        elif isinstance(default, int):
             try:
-                return int(raw)
+                value = int(raw)
             except ValueError:
-                return default
-        if isinstance(default, float):
+                value = default
+        elif isinstance(default, float):
             try:
-                return float(raw)
+                value = float(raw)
             except ValueError:
-                return default
-        return raw
+                value = default
+        else:
+            value = raw
+        return self._record_layer_param(name, value)
+
+    def _record_layer_param(self, name, value):
+        """レイヤー実行中に解決された param をキャッシュ鮮度検証用に記録する。
+
+        レイヤーキャッシュのメタへ保存し、--param/環境変数の値が変わったのに
+        旧キャッシュを使い続ける取りこぼしを防ぐ（issue #13 P2-7）。
+        """
+        layer_file = self._current_layer_file
+        if layer_file:
+            self._layer_params.setdefault(layer_file, {})[name] = value
+        return value
 
     # --- チャプターマーカー ---
 
@@ -456,6 +470,7 @@ class Project:
         self._layer_meta_cache = {}
         self._layer_audio_sources = {}
         self._layer_unknown_audio_sources = {}
+        self._layer_params = {}
 
     def _probe_media(self, path):
         """ffprobeでメディア情報を取得（キャッシュあり）"""
@@ -1050,30 +1065,36 @@ class Project:
                     )
 
     def _layer_cache_is_fresh(self, spec):
-        """anchors.jsonに記録された素材FFPと現在のファイル状態を比較して鮮度を判定
+        """anchors.jsonに記録された依存（素材FFP・解決済みparam）と現状を比較して鮮度判定
 
-        旧形式（sourcesキーなし）のメタは後方互換のため常に新鮮とみなす。
+        メタの欠損・破損・未知形式は fail-closed（=陳腐扱い）。fail-open にすると
+        書きかけ・欠損メタの成果物が「常に新鮮」と誤判定され、依存変更を
+        取りこぼす（issue #13 P2-7）。後方互換の旧形式救済はしない（方針どおり）。
         """
         _, json_path = _layer_cache_paths(spec["filename"], self)
         if not os.path.exists(json_path):
-            return True  # メタなし（後方互換）
+            return False  # 成果物と完了メタの整合を必須化（メタ欠損=不完全）
         try:
             with open(json_path, encoding="utf-8") as f:
                 meta = json.load(f)
         except (OSError, json.JSONDecodeError):
-            return True
+            return False  # 破損メタ
+        if not isinstance(meta, dict) or "sources" not in meta:
+            return False  # 未知形式・sources無し
         # パース済みメタを保持し、_load_cached_layerでの再読込をスキップする
         self._layer_meta_cache[json_path] = meta
-        sources = meta.get("sources")
-        if not sources:
-            return True  # 旧形式（後方互換）
-        for path, ffp in sources.items():
+        for path, ffp in (meta["sources"] or {}).items():
             try:
                 cur = _file_fingerprint(path)
             except OSError:
                 return False  # 素材が消えた
             if cur != ffp:
                 return False  # 素材の内容が変わった（旧形式のlist値もここで不一致→再生成）
+        # 解決済み param の比較（plan passが常にライブ実行するため、
+        # 現在値は self._layer_params に揃っている）
+        if meta.get("params", None) != self._layer_params.get(
+                spec["filename"], {}):
+            return False
         return True
 
     def _should_use_cache(self, spec):
@@ -1963,10 +1984,23 @@ class Project:
                 sources_meta[str(src).replace("\\", "/")] = _file_fingerprint(src)
             except OSError:
                 pass
+        # 登録済みプラグインのソースも依存に含める（レイヤーはプラグイン Effect を
+        # 参照しうる。レイヤー単位の使用追跡はしない粗い粒度だが、プラグイン変更で
+        # レイヤーキャッシュを確実に無効化する安全側の設計。issue #13 P2-7）
+        for plug in _EFFECT_PLUGINS.values():
+            src_file = getattr(plug, "source_file", None)
+            if not src_file:
+                continue
+            try:
+                sources_meta[str(src_file).replace("\\", "/")] = \
+                    _file_fingerprint(src_file)
+            except OSError:
+                pass
         cache_meta = {
             "duration": dur,
             "anchors": anchors,
             "sources": sources_meta,
+            "params": self._layer_params.get(spec["filename"], {}),
             "audio_sources": self._layer_audio_sources.get(spec["filename"], []),
             "unknown_audio_sources": self._layer_unknown_audio_sources.get(
                 spec["filename"], []),
@@ -2335,7 +2369,7 @@ from scriptvedit.filters.audio import _build_audio_effect_filters, _build_audio_
 from scriptvedit.filters.video import _build_effect_filters, _build_input_args, _build_move_exprs, _build_transform_filters, _build_video_overlay_parts, _build_video_pre_filters, _get_base_dimensions, _optimize_filter_chain
 from scriptvedit.objects import Object, _web_frames_dir
 from scriptvedit.assets import resolve_layer_path
-from scriptvedit.plugins import _autoload_plugins
+from scriptvedit.plugins import _EFFECT_PLUGINS, _autoload_plugins
 from scriptvedit.state import _ACTIVE_QUALITY, _ARTIFACT_DIR, _CACHE_DIR, _CONFIGURE_KEYS, _ENCODER_MAP, _ENGINE_VER, _GEN_COUNTER, _PRESETS, _TERMINAL_FRAME_EFFECTS, _TIME_LIVE_EFFECTS, _detect_media_type, _suggest_hint
 from scriptvedit.timeline import Pause, Scene, _AnchorMarker, _ScenePad
 from scriptvedit.validate import _require_number, _validate_ffmpeg_color
