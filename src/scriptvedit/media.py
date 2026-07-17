@@ -242,6 +242,7 @@ def video_sequence(*objs, transition="fade", t_dur=0.5):
     _require_number("video_sequence", "t_dur", t_dur, 0.01, None)
     proj = Project._current
     sources = []
+    consumed = []  # 全検証を通過してからまとめて消費する（途中失敗で Project を壊さない）
     for o in objs:
         if isinstance(o, Object):
             if o.media_type != "video":
@@ -253,7 +254,7 @@ def video_sequence(*objs, transition="fade", t_dur=0.5):
                     f"先に compute() で素材化してから渡してください。")
             sources.append(o.source)
             if proj is not None and o in proj.objects:
-                proj.objects.remove(o)  # 合成に消費（タイムラインから除外）
+                consumed.append(o)
         elif isinstance(o, str):
             if not os.path.exists(o):
                 raise FileNotFoundError(f"video_sequence: 動画が見つかりません: {o}")
@@ -306,6 +307,10 @@ def video_sequence(*objs, transition="fade", t_dur=0.5):
                 raise ValueError(
                     f"video_sequence: 音声実長({ln:.3f}s)が t_dur({t_dur}s)以下です: {s}\n"
                     f"t_dur を短くするか、より長いクリップを指定してください。")
+
+    # 全入力の検証が済んだのでここで初めてタイムラインから除外する（原子的な消費）
+    for o in consumed:
+        proj.objects.remove(o)
 
     w = proj.width if proj else 1280
     h = proj.height if proj else 720

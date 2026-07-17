@@ -61,14 +61,20 @@ def audio_sequence(*objs, crossfade=1.0):
     _require_number("audio_sequence", "crossfade", crossfade, 0.01, None)
     proj = Project._current
     sources = []
+    consumed = []  # 全検証を通過してからまとめて消費する（途中失敗で Project を壊さない）
     for o in objs:
         if isinstance(o, Object):
             if o.media_type != "audio":
                 raise ValueError(
                     f"audio_sequence: 音声Objectのみ連結できます: {o.source}")
+            if o.transforms or o.effects or o.audio_effects:
+                raise ValueError(
+                    f"audio_sequence: '{o.source}' に Effect/AudioEffect が適用されています。\n"
+                    f"連結時は素のObjectを渡し、効果は連結後の生成Objectに付けてください"
+                    f"（例: seq <= again(0.5)）。")
             sources.append(o.source)
             if proj is not None and o in proj.objects:
-                proj.objects.remove(o)  # 合成に消費（タイムラインから除外）
+                consumed.append(o)
         elif isinstance(o, str):
             _validate_audio_source("audio_sequence", o)
             sources.append(o)
@@ -84,6 +90,10 @@ def audio_sequence(*objs, crossfade=1.0):
                 f"audio_sequence: 素材長({ln:.3f}s)が crossfade({crossfade}s)未満です: {s}\n"
                 f"crossfade を短くするか、より長い素材を指定してください。")
     total = sum(lengths) - crossfade * (n - 1)
+
+    # 全入力の検証が済んだのでここで初めてタイムラインから除外する（原子的な消費）
+    for o in consumed:
+        proj.objects.remove(o)
 
     sigs = ["audio_sequence"]
     sigs.extend(_source_signature(s) for s in sources)
