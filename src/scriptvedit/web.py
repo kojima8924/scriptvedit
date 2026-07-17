@@ -98,9 +98,102 @@ def bubble(text, duration=2.5, *, anchor=None, pos=None, box=None,
     return Object(tpl, **kw)
 
 
+# --- diagram() の入力検証（SVG属性注入対策: issue #13）---
+
+# 色として許可する形式: CSS色名(英字のみ) / #hex(3,4,6,8桁) / rgb()/rgba()/hsl()/hsla()
+# url(...) や式・イベントハンドラを含む文字列は通さない。
+_DIAGRAM_COLOR_RE = re.compile(
+    r"^(?:[A-Za-z]+"
+    r"|#(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})"
+    r"|(?:rgb|rgba|hsl|hsla)\(\s*[0-9.,%\s/]+\s*\))$"
+)
+
+# 数値属性（数値または {"from": 数値, "to": 数値} のアニメ指定を許可）
+_DIAGRAM_NUM_KEYS = {"x", "y", "r", "w", "h", "rx", "x1", "y1", "x2", "y2",
+                     "strokeWidth", "fontSize", "dim", "opacity"}
+# 色属性
+_DIAGRAM_COLOR_KEYS = {"fill", "stroke"}
+# text の align 列挙値
+_DIAGRAM_ALIGNS = {"start", "left", "middle", "end", "right"}
+# 図形typeごとの許可キー（"type" 自体は別扱い）
+_DIAGRAM_ALLOWED_KEYS = {
+    "circle": {"x", "y", "r", "fill", "stroke", "strokeWidth", "opacity"},
+    "rect": {"x", "y", "w", "h", "rx", "fill", "stroke", "strokeWidth",
+             "opacity"},
+    "line": {"x1", "y1", "x2", "y2", "stroke", "strokeWidth", "opacity"},
+    "arrow": {"x1", "y1", "x2", "y2", "stroke", "strokeWidth", "opacity"},
+    "text": {"x", "y", "text", "align", "fill", "fontSize", "stroke",
+             "strokeWidth", "opacity"},
+    "spotlight": {"x", "y", "r", "dim", "opacity"},
+}
+
+
+def _validate_diagram_number(where, key, value):
+    """数値または {"from": 数値, "to": 数値} のみ許可"""
+    def _is_num(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+    if _is_num(value):
+        return
+    if (isinstance(value, dict) and set(value.keys()) == {"from", "to"}
+            and _is_num(value["from"]) and _is_num(value["to"])):
+        return
+    raise ValueError(
+        f"diagram: {where} の {key} は数値または"
+        f" {{'from': 数値, 'to': 数値}} で指定してください: {value!r}")
+
+
+def _validate_diagram_objects(objects):
+    """diagram のオブジェクト定義をwhitelist検証する。
+
+    fill 等のユーザー指定値がテンプレート(SVG)側へそのまま渡るため、
+    色・数値・列挙値を型/形式で検証し、想定外の属性は拒否する。
+    """
+    if not isinstance(objects, (list, tuple)):
+        raise TypeError(
+            f"diagram: objects はリストで指定してください: {type(objects).__name__}")
+    for idx, obj in enumerate(objects):
+        if not isinstance(obj, dict):
+            raise TypeError(
+                f"diagram: objects[{idx}] は辞書で指定してください"
+                f"（circle()/rect()等のビルダーを使う）: {obj!r}")
+        t = obj.get("type")
+        if t not in _DIAGRAM_ALLOWED_KEYS:
+            raise ValueError(
+                f"diagram: objects[{idx}] の type が不正です: {t!r}"
+                f"（許可: {', '.join(sorted(_DIAGRAM_ALLOWED_KEYS))}）")
+        allowed = _DIAGRAM_ALLOWED_KEYS[t]
+        where = f"objects[{idx}]({t})"
+        for key, value in obj.items():
+            if key == "type":
+                continue
+            if key not in allowed:
+                raise ValueError(
+                    f"diagram: {where} に不明な属性 {key!r}"
+                    f"（許可: {', '.join(sorted(allowed))}）")
+            if key in _DIAGRAM_NUM_KEYS:
+                _validate_diagram_number(where, key, value)
+            elif key in _DIAGRAM_COLOR_KEYS:
+                if not isinstance(value, str) or not _DIAGRAM_COLOR_RE.match(value):
+                    raise ValueError(
+                        f"diagram: {where} の {key} は色"
+                        f"（CSS色名 / #hex / rgb() / hsl()）で"
+                        f"指定してください: {value!r}")
+            elif key == "text":
+                if not isinstance(value, str):
+                    raise TypeError(
+                        f"diagram: {where} の text は文字列で"
+                        f"指定してください: {value!r}")
+            elif key == "align":
+                if value not in _DIAGRAM_ALIGNS:
+                    raise ValueError(
+                        f"diagram: {where} の align が不正です: {value!r}"
+                        f"（許可: {', '.join(sorted(_DIAGRAM_ALIGNS))}）")
+
+
 def diagram(objects, duration=3.0, *, style=None, size=None,
             name=None, debug_frames=False, deps=None):
     """SVG図解テンプレートObjectを生成"""
+    _validate_diagram_objects(objects)
     size = _resolve_size(size)
     tpl = _template_path("diagram_svg.html")
     data = {"objects": objects, "style": style or {}}

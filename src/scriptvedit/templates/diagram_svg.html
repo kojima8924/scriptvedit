@@ -7,6 +7,8 @@ svg { position: absolute; top: 0; left: 0; }
 <body>
 <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
 <script>
+var SVG_NS = "http://www.w3.org/2000/svg";
+
 function lerpVal(spec, u) {
   if (spec === null || spec === undefined) return undefined;
   if (typeof spec === "object" && "from" in spec && "to" in spec) {
@@ -15,9 +17,21 @@ function lerpVal(spec, u) {
   return spec;
 }
 
+// SVG属性注入対策（issue #13）: innerHTML への文字列連結は禁止。
+// 属性名はコード側で固定し、値は setAttribute 経由でのみ設定する。
+// undefined の値はスキップする（旧実装の「属性を出力しない」と同じ挙動）。
+function makeEl(tag, attrs) {
+  var el = document.createElementNS(SVG_NS, tag);
+  for (var k in attrs) {
+    if (Object.prototype.hasOwnProperty.call(attrs, k) && attrs[k] !== undefined) {
+      el.setAttribute(k, attrs[k]);
+    }
+  }
+  return el;
+}
+
 function renderFrame(state) {
   var d = state.data || {};
-  var s = d.style || {};
   var W = state.width;
   var H = state.height;
   var u = state.u;
@@ -27,88 +41,99 @@ function renderFrame(state) {
   svg.setAttribute("height", H);
   svg.setAttribute("viewBox", "0 0 " + W + " " + H);
 
+  // 毎フレーム DOM を作り直す（旧 innerHTML 全置換と同じ挙動）
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
   // defs（矢印マーカー等）
-  var defsHtml = '<defs>';
-  defsHtml += '<marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">';
-  defsHtml += '<polygon points="0 0, 10 3.5, 0 7" fill="context-stroke" />';
-  defsHtml += '</marker>';
-  defsHtml += '</defs>';
+  var defs = makeEl("defs", {});
+  var marker = makeEl("marker", {
+    "id": "arrowhead", "markerWidth": 10, "markerHeight": 7,
+    "refX": 10, "refY": 3.5, "orient": "auto"
+  });
+  marker.appendChild(makeEl("polygon", {
+    "points": "0 0, 10 3.5, 0 7", "fill": "context-stroke"
+  }));
+  defs.appendChild(marker);
+  svg.appendChild(defs);
 
   var objects = d.objects || [];
-  var html = defsHtml;
 
   for (var i = 0; i < objects.length; i++) {
     var obj = objects[i];
     var type = obj.type;
     var op = lerpVal(obj.opacity, u);
-    var opStr = (op !== undefined) ? ' opacity="' + op + '"' : '';
 
     if (type === "circle") {
-      var cx = lerpVal(obj.x, u) * W;
-      var cy = lerpVal(obj.y, u) * H;
-      var r  = lerpVal(obj.r, u) * Math.min(W, H);
-      html += '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'"';
-      html += ' fill="'+(obj.fill||"none")+'"';
-      html += ' stroke="'+(obj.stroke||"none")+'"';
-      html += ' stroke-width="'+(obj.strokeWidth||2)+'"';
-      html += opStr + ' />';
+      svg.appendChild(makeEl("circle", {
+        "cx": lerpVal(obj.x, u) * W,
+        "cy": lerpVal(obj.y, u) * H,
+        "r": lerpVal(obj.r, u) * Math.min(W, H),
+        "fill": obj.fill || "none",
+        "stroke": obj.stroke || "none",
+        "stroke-width": obj.strokeWidth || 2,
+        "opacity": op
+      }));
 
     } else if (type === "rect") {
-      var rx = lerpVal(obj.x, u) * W;
-      var ry = lerpVal(obj.y, u) * H;
-      var rw = lerpVal(obj.w, u) * W;
-      var rh = lerpVal(obj.h, u) * H;
-      var rrx = obj.rx ? (lerpVal(obj.rx, u) * Math.min(W, H)) : 0;
-      html += '<rect x="'+rx+'" y="'+ry+'" width="'+rw+'" height="'+rh+'"';
-      html += ' rx="'+rrx+'"';
-      html += ' fill="'+(obj.fill||"none")+'"';
-      html += ' stroke="'+(obj.stroke||"none")+'"';
-      html += ' stroke-width="'+(obj.strokeWidth||2)+'"';
-      html += opStr + ' />';
+      svg.appendChild(makeEl("rect", {
+        "x": lerpVal(obj.x, u) * W,
+        "y": lerpVal(obj.y, u) * H,
+        "width": lerpVal(obj.w, u) * W,
+        "height": lerpVal(obj.h, u) * H,
+        "rx": obj.rx ? (lerpVal(obj.rx, u) * Math.min(W, H)) : 0,
+        "fill": obj.fill || "none",
+        "stroke": obj.stroke || "none",
+        "stroke-width": obj.strokeWidth || 2,
+        "opacity": op
+      }));
 
     } else if (type === "line") {
-      var lx1 = lerpVal(obj.x1, u) * W;
-      var ly1 = lerpVal(obj.y1, u) * H;
-      var lx2 = lerpVal(obj.x2, u) * W;
-      var ly2 = lerpVal(obj.y2, u) * H;
-      html += '<line x1="'+lx1+'" y1="'+ly1+'" x2="'+lx2+'" y2="'+ly2+'"';
-      html += ' stroke="'+(obj.stroke||"#fff")+'"';
-      html += ' stroke-width="'+(obj.strokeWidth||2)+'"';
-      html += opStr + ' />';
+      svg.appendChild(makeEl("line", {
+        "x1": lerpVal(obj.x1, u) * W,
+        "y1": lerpVal(obj.y1, u) * H,
+        "x2": lerpVal(obj.x2, u) * W,
+        "y2": lerpVal(obj.y2, u) * H,
+        "stroke": obj.stroke || "#fff",
+        "stroke-width": obj.strokeWidth || 2,
+        "opacity": op
+      }));
 
     } else if (type === "arrow") {
-      var ax1 = lerpVal(obj.x1, u) * W;
-      var ay1 = lerpVal(obj.y1, u) * H;
-      var ax2 = lerpVal(obj.x2, u) * W;
-      var ay2 = lerpVal(obj.y2, u) * H;
-      html += '<line x1="'+ax1+'" y1="'+ay1+'" x2="'+ax2+'" y2="'+ay2+'"';
-      html += ' stroke="'+(obj.stroke||"#fff")+'"';
-      html += ' stroke-width="'+(obj.strokeWidth||2)+'"';
-      html += ' marker-end="url(#arrowhead)"';
-      html += opStr + ' />';
+      svg.appendChild(makeEl("line", {
+        "x1": lerpVal(obj.x1, u) * W,
+        "y1": lerpVal(obj.y1, u) * H,
+        "x2": lerpVal(obj.x2, u) * W,
+        "y2": lerpVal(obj.y2, u) * H,
+        "stroke": obj.stroke || "#fff",
+        "stroke-width": obj.strokeWidth || 2,
+        "marker-end": "url(#arrowhead)",
+        "opacity": op
+      }));
 
     } else if (type === "text") {
-      var tx = lerpVal(obj.x, u) * W;
-      var ty = lerpVal(obj.y, u) * H;
       var align = obj.align || "middle";
       var anchor = "middle";
       if (align === "start" || align === "left") anchor = "start";
       if (align === "end" || align === "right") anchor = "end";
-      var fs = obj.fontSize || 36;
-      html += '<text x="'+tx+'" y="'+ty+'"';
-      html += ' fill="'+(obj.fill||"#fff")+'"';
-      html += ' font-size="'+fs+'"';
-      html += ' font-family="Noto Sans JP, Yu Gothic, Meiryo, sans-serif"';
-      html += ' text-anchor="'+anchor+'"';
-      html += ' dominant-baseline="middle"';
+      var attrs = {
+        "x": lerpVal(obj.x, u) * W,
+        "y": lerpVal(obj.y, u) * H,
+        "fill": obj.fill || "#fff",
+        "font-size": obj.fontSize || 36,
+        "font-family": "Noto Sans JP, Yu Gothic, Meiryo, sans-serif",
+        "text-anchor": anchor,
+        "dominant-baseline": "middle",
+        "opacity": op
+      };
       if (obj.stroke) {
-        html += ' stroke="'+obj.stroke+'"';
-        html += ' stroke-width="'+(obj.strokeWidth||1)+'"';
-        html += ' paint-order="stroke"';
+        attrs["stroke"] = obj.stroke;
+        attrs["stroke-width"] = obj.strokeWidth || 1;
+        attrs["paint-order"] = "stroke";
       }
-      html += opStr + '>';
-      html += (obj.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      html += '</text>';
+      var textEl = makeEl("text", attrs);
+      // textContent なのでマークアップとして解釈されない
+      textEl.textContent = obj.text || "";
+      svg.appendChild(textEl);
 
     } else if (type === "spotlight") {
       var sx = lerpVal(obj.x, u) * W;
@@ -116,18 +141,22 @@ function renderFrame(state) {
       var sr = lerpVal(obj.r, u) * Math.min(W, H);
       var dim = obj.dim !== undefined ? obj.dim : 0.6;
       // 全画面暗幕 + 円形くり抜き
-      html += '<mask id="spot-mask-'+i+'">';
-      html += '<rect x="0" y="0" width="'+W+'" height="'+H+'" fill="white" />';
-      html += '<circle cx="'+sx+'" cy="'+sy+'" r="'+sr+'" fill="black" />';
-      html += '</mask>';
-      html += '<rect x="0" y="0" width="'+W+'" height="'+H+'"';
-      html += ' fill="rgba(0,0,0,'+dim+')"';
-      html += ' mask="url(#spot-mask-'+i+')"';
-      html += opStr + ' />';
+      var mask = makeEl("mask", {"id": "spot-mask-" + i});
+      mask.appendChild(makeEl("rect", {
+        "x": 0, "y": 0, "width": W, "height": H, "fill": "white"
+      }));
+      mask.appendChild(makeEl("circle", {
+        "cx": sx, "cy": sy, "r": sr, "fill": "black"
+      }));
+      svg.appendChild(mask);
+      svg.appendChild(makeEl("rect", {
+        "x": 0, "y": 0, "width": W, "height": H,
+        "fill": "rgba(0,0,0," + Number(dim) + ")",
+        "mask": "url(#spot-mask-" + i + ")",
+        "opacity": op
+      }));
     }
   }
-
-  svg.innerHTML = html;
 }
 </script>
 </body></html>
