@@ -35,8 +35,10 @@
 dry_run と本レンダでパスが食い違うとスナップショットが壊れる（一貫性が最優先）。
 キャッシュ鍵は**内容ハッシュ**なので、コピーでパスが変わっても再レンダは起きない。
 
-コピー結果は `assets/_imported/` に残るため、プロジェクトは共有ライブラリ無しでも
-自己完結してレンダできる（配布・別マシンへの clone が安全）。
+コピー結果は `assets/_imported/` に残るため、同一 checkout は以後
+共有ライブラリ無しでもレンダできる。ただし `_imported/` は通常 gitignore 対象
+なので、fresh clone や別マシンでは SCRIPTVEDIT_ASSETS の設定か素材の
+別途持ち込みが必要（CLAUDE.md の asset() 節と同じ注意）。
 """
 import inspect as _inspect
 import os
