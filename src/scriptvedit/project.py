@@ -1849,20 +1849,25 @@ class Project:
             if not isinstance(obj, Object) or obj.media_type != "web":
                 continue
             webm_path = _web_cache_path(obj, self)
-            frames_dir = _web_frames_dir(obj._web_name)
 
             if not os.path.exists(webm_path):
                 print(f"Webクリップ生成: {obj.source}")
+                # 実生成の作業ディレクトリは pid+uuid でユニーク化する。
+                # 決定的な固定名だと同名 web Object の並列レンダが相互に
+                # フレームを削除・混入する（issue #13 P2-15）
+                frames_dir = _web_frames_dir(obj._web_name, unique=True)
                 try:
-                    obj._render_web_frames(self)
-                    cmd = obj._build_web_cmd(self, webm_path)
+                    obj._render_web_frames(self, frames_dir)
+                    cmd = obj._build_web_cmd(self, webm_path, frames_dir)
                     os.makedirs(os.path.dirname(webm_path), exist_ok=True)
                     print(f"  ffmpeg {' '.join(cmd[1:])}")
                     _run_ffmpeg_to_cache(cmd, webm_path, timeout=600)
                     print(f"  完了: {webm_path}")
                 finally:
                     # フレーム削除（失敗時も中間フレームを残さない）
-                    if not obj._web_debug_frames and os.path.exists(frames_dir):
+                    if obj._web_debug_frames:
+                        print(f"  デバッグフレーム保持: {frames_dir}")
+                    elif os.path.exists(frames_dir):
                         import shutil
                         shutil.rmtree(frames_dir, ignore_errors=True)
 

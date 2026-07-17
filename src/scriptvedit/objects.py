@@ -249,14 +249,24 @@ def _validate_web_name(name):
     return name
 
 
-def _web_frames_dir(name):
+def _web_frames_dir(name, *, unique=False):
     """webフレーム作業ディレクトリを返す（__cache__/webclip 配下を保証）。
 
     削除(rmtree)対象になるため、realpath 解決後もキャッシュルート内に
     収まることを最終確認する（symlink 等で外へ出る経路の防御）。
+
+    unique=True は pid+uuid 付きのディレクトリを返す。実生成では同名 web
+    Object の並列レンダが相互にフレームを削除・混入しないようこちらを使う
+    （issue #13 P2-15）。既定の決定的パスは dry_run のコマンド組み立て用
+    （スナップショットの安定性のため）。
     """
     cache_dir = os.path.join(_CACHE_DIR, "webclip")
-    frames_dir = os.path.join(cache_dir, f"{_validate_web_name(name)}_frames")
+    suffix = ""
+    if unique:
+        import uuid as _uuid
+        suffix = f"_{os.getpid()}_{_uuid.uuid4().hex[:8]}"
+    frames_dir = os.path.join(
+        cache_dir, f"{_validate_web_name(name)}_frames{suffix}")
     real_root = os.path.realpath(cache_dir)
     real = os.path.realpath(frames_dir)
     try:
@@ -599,10 +609,11 @@ class Object:
                 Project._current = parent
             parent._pending_compute_cmds[cache_path] = sub_cmd
         else:
-            # 実生成: 一時パスへレンダし成功時のみ確定（アトミック書き込み）
+            # 実生成: 一時パスへレンダし成功時のみ確定（アトミック書き込み）。
+            # 一時パスは pid+uuid でユニーク化（固定 .tmp だと同一鍵の並列生成で
+            # 相互に書きかけを壊す。issue #13 P2-15）
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            base, ext = os.path.splitext(cache_path)
-            tmp_path = f"{base}.tmp{ext}"
+            tmp_path = _unique_tmp_path(cache_path)
             print(f"サブプロジェクト生成: {cache_path}")
             try:
                 sub_project.render(tmp_path, alpha=True)
@@ -759,11 +770,16 @@ class Object:
             return base_dur
         return _builtins.max(durs)
 
-    def _build_web_cmd(self, project, webm_path=None):
-        """webクリップ用ffmpegコマンド"""
+    def _build_web_cmd(self, project, webm_path=None, frames_dir=None):
+        """webクリップ用ffmpegコマンド
+
+        frames_dir 省略時は決定的パス（dry_run のコマンド組み立て用）。
+        実生成では _ensure_web_objects がユニーク化したパスを渡す。
+        """
         if webm_path is None:
             webm_path = _web_cache_path(self, project)
-        frames_dir = _web_frames_dir(self._web_name)
+        if frames_dir is None:
+            frames_dir = _web_frames_dir(self._web_name)
         frames_pattern = os.path.join(frames_dir, "frame_%05d.png")
         fps = self._web_fps or project.fps
         dur = self.duration
@@ -779,13 +795,15 @@ class Object:
             webm_path,
         ]
 
-    def _render_web_frames(self, project):
+    def _render_web_frames(self, project, frames_dir=None):
         """Playwrightで HTML を連番PNGにキャプチャ"""
         from playwright.sync_api import sync_playwright
-        frames_dir = _web_frames_dir(self._web_name)
-        # 同名の前回実行（debug_frames 残留や中断）の stale フレームが混入すると
+        if frames_dir is None:
+            frames_dir = _web_frames_dir(self._web_name)
+        # 前回実行（debug_frames 残留や中断）の stale フレームが混入すると
         # duration/fps/data 変更後も古い絵が使われるため、生成前に必ず空にする。
-        # ※ _web_frames_dir が __cache__/webclip 配下であることを保証済みなので削除して安全
+        # （ユニーク化された frames_dir では通常空だが、決定的パス経由の
+        #   呼び出しにも備える。__cache__/webclip 配下であることは保証済み）
         if os.path.isdir(frames_dir):
             _shutil.rmtree(frames_dir, ignore_errors=True)
         os.makedirs(frames_dir, exist_ok=True)
@@ -997,7 +1015,7 @@ def group(*objects):
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
 from scriptvedit.cache import _build_unified_ops, _file_fingerprint, _op_prefix_fingerprint, _ops_effective_quality, _web_cache_path
 from scriptvedit.expr import clip, min
-from scriptvedit.ffmpeg import _decoder_input_args, _run_ffmpeg_to_cache
+from scriptvedit.ffmpeg import _decoder_input_args, _run_ffmpeg_to_cache, _unique_tmp_path
 from scriptvedit.filters.video import _build_effect_filters, _build_transform_filters, _build_video_pre_filters, _get_base_dimensions
 from scriptvedit.media import _source_signature
 from scriptvedit.project import Project
