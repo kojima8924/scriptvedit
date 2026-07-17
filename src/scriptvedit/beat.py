@@ -28,10 +28,11 @@ import argparse
 import json
 import subprocess
 import sys
+import warnings
 
 import numpy as np
 from scipy.ndimage import uniform_filter1d
-from scipy.signal import find_peaks
+from scipy.signal import fftconvolve, find_peaks
 
 __all__ = [
     "detect_beats",
@@ -48,6 +49,10 @@ _N_FFT = 2048
 _CHUNK_FRAMES = 4096
 # ffmpeg デコードの上限（他の ffmpeg 実行経路と同じ）
 _DECODE_TIMEOUT = 600
+# ビート解析の上限尺[秒]。長尺入力を全量デコードすると PCM 保持だけで
+# メモリを圧迫し(1時間音声で約317MB)、後段の解析も肥大化する。
+# BPM 推定に全曲は不要なので、超える場合は先頭のみを解析する(issue #13 P2-16)。
+_MAX_ANALYSIS_SEC = 900
 
 
 # ---------------------------------------------------------------------------
@@ -57,15 +62,22 @@ _DECODE_TIMEOUT = 600
 def _load_mono(audio_path, sr=_DEFAULT_SR):
     """ffmpeg で任意の音声/動画ファイルを mono PCM(f32le) にデコードして読み込む。
 
+    長尺入力のメモリ枯渇対策(issue #13 P2-16)として、デコード段階で
+    `-t` により先頭 `_MAX_ANALYSIS_SEC`+1 秒までに制限する。上限を超えていた
+    場合は先頭 `_MAX_ANALYSIS_SEC` 秒へ切り詰め、警告を出す(+1 秒の余分は
+    「ちょうど上限尺の入力」と「上限超過の入力」を区別するための判定マージン)。
+
     Args:
         audio_path: 入力ファイルパス(音声・動画どちらでも可)
         sr: サンプリングレート
     Returns:
         np.ndarray (float32, mono)
     """
+    max_sec = float(_MAX_ANALYSIS_SEC)
     cmd = [
         "ffmpeg", "-v", "error",
         "-i", str(audio_path),
+        "-t", f"{max_sec + 1.0:.6f}",
         "-f", "f32le", "-ac", "1", "-ar", str(int(sr)),
         "-",
     ]
@@ -84,6 +96,13 @@ def _load_mono(audio_path, sr=_DEFAULT_SR):
     y = np.frombuffer(proc.stdout, dtype=np.float32)
     if y.size == 0:
         raise RuntimeError(f"音声データが空です: {audio_path}")
+    limit = int(max_sec * sr)
+    if y.size > limit:
+        warnings.warn(
+            f"音声が解析上限 {max_sec / 60:.1f} 分を超えるため、"
+            f"先頭 {max_sec / 60:.1f} 分のみでビート解析します: {audio_path}",
+            RuntimeWarning, stacklevel=2)
+        y = y[:limit]
     return y
 
 
@@ -173,7 +192,11 @@ def _tempo_candidates(env, frame_dt, min_bpm, max_bpm, max_cands=6):
     """
     x = env - env.mean()
     n = len(x)
-    acf = np.correlate(x, x, mode="full")[n - 1:]
+    # 自己相関は O(n^2) の np.correlate(mode="full") だと長尺で実質停止する
+    # (onset 15.5万点で約240億積和)ため、FFT ベース(O(n log n))で計算する。
+    # fftconvolve(x, x[::-1]) の後半 n 点は np.correlate の full 出力の
+    # lag>=0 部分と(浮動小数点誤差を除き)同一(issue #13 P2-16)。
+    acf = fftconvolve(x, x[::-1], mode="full")[n - 1:]
     if acf[0] <= 0:
         raise RuntimeError("onset 包絡が無音のためテンポ推定できません")
     acf = acf / acf[0]
