@@ -36,7 +36,7 @@ class Project:
         self._layer_specs = []  # [{"filename": str, "priority": int, "cache": str}]
         self._mode = "render"  # "plan" or "render"
         self._current_layer_file = None  # 現在実行中のレイヤーファイル
-        self._probe_cache = {}  # path → {"duration": float, "has_audio": bool}
+        self._probe_cache = {}  # (path, size, mtime_ns) → {"duration": float, ...}
         self._layer_sources = {}  # layer filename → [参照ソースパス]（キャッシュ鮮度検証用）
         self._layer_audio_sources = {}  # layer filename → [音声ソース]（再生時の脱落警告用）
         self._layer_unknown_audio_sources = {}  # ffprobe失敗で音声有無が不明な動画
@@ -438,8 +438,17 @@ class Project:
 
     def _probe_media(self, path):
         """ffprobeでメディア情報を取得（キャッシュあり）"""
-        if path in self._probe_cache:
-            return self._probe_cache[path]
+        # メモ化キーに stat 署名（サイズ+mtime）を含める。パスのみをキーにすると
+        # 同一パスへ素材を差し替えたとき旧情報を返し続ける（issue #13 P2-9）。
+        # プロセス内メモ化のみでディスクへは永続化しない（CLAUDE.md の
+        # ffp.json 撤廃と同じ理由で、stat ベースの永続キャッシュは禁止）。
+        try:
+            st = os.stat(path)
+            cache_key = (path, st.st_size, st.st_mtime_ns)
+        except OSError:
+            cache_key = (path, None, None)
+        if cache_key in self._probe_cache:
+            return self._probe_cache[cache_key]
         if _is_pending_cache_path(path):
             # dry_run中の未生成キャッシュ予定パス。probeせず警告なしでNoneを返す
             # （キャッシュはしない: 実レンダで生成された後は通常probeに進む）
@@ -487,19 +496,19 @@ class Project:
                     "sample_rate": sample_rate,
                     "video_duration": video_duration,
                     "audio_duration": audio_duration}
-            self._probe_cache[path] = info
+            self._probe_cache[cache_key] = info
             return info
         except FileNotFoundError:
             # 失敗もrender内ではキャッシュ（_reset_runtime_stateでNoneのみ破棄され、
             # renderをまたげば再試行される）
             warnings.warn(
                 f"ffprobeが見つかりません ({path})。PATHを確認してください。")
-            self._probe_cache[path] = None
+            self._probe_cache[cache_key] = None
             return None
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError,
                 json.JSONDecodeError, ValueError) as e:
             warnings.warn(f"メディア情報の取得に失敗 ({path}): {e}")
-            self._probe_cache[path] = None
+            self._probe_cache[cache_key] = None
             return None
 
     def layer(self, filename, priority=0, cache="off"):

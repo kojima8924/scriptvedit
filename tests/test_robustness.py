@@ -156,6 +156,36 @@ def test_audio_only_project_real_render(tmp_path):
     assert kinds == ["audio", "video"], f"stream構成が不正: {kinds}"
 
 
+# --- issue #13 P2-9: ffprobeメモ化の素材差し替え検知 ----------------------
+
+def test_probe_cache_detects_replaced_file(tmp_path):
+    """同一パスへ素材を差し替えたら probe 結果も更新される"""
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg/ffprobe が無い環境")
+    from scriptvedit import Project
+
+    wav = tmp_path / "swap.wav"
+
+    def _make(duration):
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+             "-i", f"sine=frequency=440:duration={duration}", str(wav)],
+            check=True, capture_output=True, timeout=30)
+
+    p = Project()
+    _make(0.1)
+    info1 = p._probe_media(str(wav))
+    assert info1 and abs(info1["duration"] - 0.1) < 0.05, info1
+
+    _make(0.4)  # 同一パスへ差し替え（サイズ・mtimeが変わる）
+    info2 = p._probe_media(str(wav))
+    assert info2 and abs(info2["duration"] - 0.4) < 0.05, \
+        f"差し替え後も旧情報を返している: {info2}"
+
+    # 同一内容の再問い合わせはメモ化が効く（同じdictを返す）
+    assert p._probe_media(str(wav)) is info2
+
+
 # --- issue #13 P1-4: レイヤーキャッシュ鍵の出力duration -------------------
 
 def test_layer_cache_key_includes_duration():
