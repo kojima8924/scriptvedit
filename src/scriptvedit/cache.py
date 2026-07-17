@@ -454,6 +454,10 @@ def _layer_cache_paths(filename, project=None):
         sigs.append(f"h={project.height}")
         sigs.append(f"fps={project.fps}")
         sigs.append(f"bg={project.background_color}")
+        # 出力尺も鍵に含める（キャッシュは -t dur で尺を焼き込むため、
+        # 総尺変更後に旧キャッシュを再利用すると短尺切れ/古い尺が戻る。issue #13 P1-4）
+        # render経路ではplan pass直後に総尺が確定済み（_render_impl参照）
+        sigs.append(f"dur={project.duration}")
         key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
         layer_dir = os.path.join(_ARTIFACT_DIR, "layer", basename)
         # 拡張子は .webm 固定。レイヤーキャッシュは libvpx-vp9 + yuva420p で、

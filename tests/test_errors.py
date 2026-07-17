@@ -170,18 +170,32 @@ def check_cache_invalid():
 
 
 def check_cache_use_no_file():
-    """cache='use' でファイル不在 → FileNotFoundError"""
-    p = Project()
-    p.configure(width=320, height=240, fps=1, background_color="black")
-    p.layer("nonexistent_layer.py", cache="use")
+    """cache='use' でキャッシュ未生成 → FileNotFoundError（案内付き）
+
+    キャッシュ鍵が解決済み総尺を含むため、検証はplan pass後に行われる。
+    レイヤーファイル自体が無い場合はplanが先にファイル不在エラーを出す。
+    """
+    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_cache_use_layer.py")
     try:
-        p.render("_tmp.mp4", dry_run=True)
-        return False, "例外が発生しませんでした"
-    except FileNotFoundError as e:
-        msg = str(e)
-        if "キャッシュファイルが見つかりません" in msg:
-            return True, msg.split('\n')[0]
-        return False, f"メッセージが不適切: {msg}"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(
+                'from scriptvedit import *\n'
+                'o = Object(asset("images/onigiri_tenmusu.png"))\n'
+                'o.time(1)\n')
+        p = Project()
+        p.configure(width=320, height=240, fps=1, background_color="black")
+        p.layer(temp_path, cache="use")
+        try:
+            p.render("_tmp.mp4", dry_run=True)
+            return False, "例外が発生しませんでした"
+        except FileNotFoundError as e:
+            msg = str(e)
+            if "キャッシュファイルが見つかりません" in msg:
+                return True, msg.split('\n')[0]
+            return False, f"メッセージが不適切: {msg}"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def check_image_length():

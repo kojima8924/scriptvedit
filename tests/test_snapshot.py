@@ -251,10 +251,14 @@ def setup_test14():
 def setup_test15():
     """cache='use' テスト: ダミーキャッシュからの読み込み"""
     from scriptvedit import _layer_cache_paths
-    # まずProjectを作って正しいキャッシュパスを計算
-    p = Project()
-    p.configure(width=1280, height=720, fps=30, background_color="darkblue")
-    dummy_webm, dummy_json = _layer_cache_paths(L("test14_maku.py"), p)
+    # キャッシュ鍵は解決済み総尺を含むため、まず同構成のプロジェクトを
+    # dry_runして総尺を解決してからキャッシュパスを計算する
+    probe = Project()
+    probe.configure(width=1280, height=720, fps=30, background_color="darkblue")
+    probe.layer(L("test14_maku.py"), priority=0)
+    probe.layer(L("test14_oni.py"), priority=1)
+    probe.render("test15_probe.mp4", dry_run=True)
+    dummy_webm, dummy_json = _layer_cache_paths(L("test14_maku.py"), probe)
     os.makedirs(os.path.dirname(dummy_webm), exist_ok=True)
     # ダミーwebmファイル（空でよい、dry_runなので実行されない）
     with open(dummy_webm, "wb") as f:

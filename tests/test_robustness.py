@@ -156,6 +156,88 @@ def test_audio_only_project_real_render(tmp_path):
     assert kinds == ["audio", "video"], f"stream構成が不正: {kinds}"
 
 
+# --- issue #13 P1-4: レイヤーキャッシュ鍵の出力duration -------------------
+
+def test_layer_cache_key_includes_duration():
+    """総尺が違えばレイヤーキャッシュのパスも変わる（-t焼き込みのため）"""
+    from scriptvedit import Project
+    from scriptvedit.cache import _layer_cache_paths
+
+    p3 = Project()
+    p3.configure(duration=3)
+    p30 = Project()
+    p30.configure(duration=30)
+    path3, _ = _layer_cache_paths(__file__, p3)
+    path30, _ = _layer_cache_paths(__file__, p30)
+    assert path3 != path30, "総尺を変えてもキャッシュパスが同一"
+
+
+def test_layer_cache_duration_change_regenerates(tmp_path):
+    """cache='make'後に総尺を変えると'auto'はキャッシュを再生成する"""
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg/ffprobe が無い環境")
+    from scriptvedit import Project
+    from scriptvedit.cache import _layer_cache_paths
+
+    png = tmp_path / "red.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+         "-i", "color=c=red:s=40x40:d=1", "-frames:v", "1", str(png)],
+        check=True, capture_output=True, timeout=30)
+    layer = tmp_path / "dur_layer.py"
+    layer.write_text(
+        "from scriptvedit import *\n"
+        f"o = Object(r\"{png}\")\n"
+        "o.time(1) <= move(x=0.5, y=0.5, anchor=\"center\")\n",
+        encoding="utf-8")
+
+    def _project(duration, cache_mode):
+        p = Project()
+        p.configure(width=160, height=90, fps=30, duration=duration)
+        p.layer(str(layer), cache=cache_mode)
+        return p
+
+    made = []
+    try:
+        p1 = _project(1, "make")
+        p1.render(str(tmp_path / "d1.mp4"), timeout=120)
+        cache1, _ = _layer_cache_paths(str(layer), p1)
+        made.append(cache1)
+        assert os.path.exists(cache1)
+        # キャッシュには総尺(1秒)が焼き込まれている
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", cache1],
+            check=True, capture_output=True, text=True, timeout=30)
+        assert abs(float(probe.stdout.strip()) - 1.0) < 0.2, probe.stdout
+
+        # 同一総尺の 'auto' は既存キャッシュを使う（dry_runコマンドに現れる）
+        cmd_same = _project(1, "auto").render(
+            str(tmp_path / "d1b.mp4"), dry_run=True)
+        flat_same = " ".join(cmd_same["main"] if isinstance(cmd_same, dict)
+                             else cmd_same)
+        assert cache1.replace("\\", "/") in flat_same.replace("\\", "/"), \
+            "同一総尺でキャッシュが使われていない"
+
+        # 総尺を2秒へ変更 → 鍵が変わり、旧キャッシュ(1秒焼き込み)は使われない
+        p2 = _project(2, "auto")
+        cache2, _ = _layer_cache_paths(str(layer), p2)
+        assert cache2 != cache1, "総尺変更後もキャッシュパスが同一"
+        cmd_changed = p2.render(str(tmp_path / "d2.mp4"), dry_run=True)
+        flat = " ".join(cmd_changed["main"] if isinstance(cmd_changed, dict)
+                        else cmd_changed)
+        assert cache1.replace("\\", "/") not in flat.replace("\\", "/"), \
+            "総尺変更後も旧キャッシュを入力に使っている"
+    finally:
+        for path in made:
+            base = os.path.splitext(path)[0]
+            for target in (path, base + ".anchors.json"):
+                try:
+                    os.remove(target)
+                except OSError:
+                    pass
+
+
 # --- issue #13 P1-3: レイヤーキャッシュ再利用時のalpha保持 -----------------
 
 def test_layer_cache_paths_use_webm_extension():

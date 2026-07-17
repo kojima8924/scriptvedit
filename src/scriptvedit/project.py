@@ -702,10 +702,15 @@ class Project:
             self._render_window = (s, e)
         else:
             self._render_window = None
-        # cache="use" の事前検証
-        self._validate_cache_specs()
         # Plan pass: アンカー解決（cache模擬、objects破棄）
         self._plan_resolve()
+        # 総尺はplan pass（常にライブ実行）の結果から確定する。
+        # レイヤーキャッシュ鍵が総尺を含むため、キャッシュ判定・検証より
+        # 前に確定していなければならない（issue #13 P1-4）
+        if self.duration is None:
+            self.duration = self._calc_total_duration()
+        # cache="use" の事前検証（鍵に総尺を含むため総尺確定後に行う）
+        self._validate_cache_specs()
         # Render pass: 本実行（anchors確定済み）
         self.objects = []
         self._layers = []
@@ -716,8 +721,6 @@ class Project:
             else:
                 self._exec_layer(spec["filename"], spec["priority"])
         self._resolve_anchors()
-        if self.duration is None:
-            self.duration = self._calc_total_duration()
 
         if dry_run:
             web_cmds = self._collect_web_cmds()
@@ -828,8 +831,11 @@ class Project:
         _ACTIVE_QUALITY[0] = ""
         self._pending_compute_cmds = {}
         self._render_window = None
-        self._validate_cache_specs()
         self._plan_resolve()
+        # render()と同じく、キャッシュ鍵が総尺を含むため先に総尺を確定する
+        if self.duration is None:
+            self.duration = self._calc_total_duration()
+        self._validate_cache_specs()
         self.objects = []
         self._layers = []
         self._mode = "render"
@@ -839,8 +845,6 @@ class Project:
             else:
                 self._exec_layer(spec["filename"], spec["priority"])
         self._resolve_anchors()
-        if self.duration is None:
-            self.duration = self._calc_total_duration()
         # render() と同じく数式PNG/Webクリップを先に実体化する
         # （formula の PNG が無いと ffmpeg が "No such file or directory" で落ちる）
         self._ensure_formula_objects()

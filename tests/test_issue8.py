@@ -365,6 +365,7 @@ def test_cached_layer_replay_warns_when_audio_will_be_lost(tmp_path, monkeypatch
         assert json.load(f)["audio_sources"] == ["voice.wav"]
 
     replay = sv.Project()
+    replay.duration = 1  # キャッシュ鍵が総尺を含むため、persisted と揃える
     replay.layer(str(persisted_layer), cache="use")
     with pytest.warns(UserWarning, match="音声が脱落"):
         replay._load_cached_layer(replay._layer_specs[0])
