@@ -42,6 +42,10 @@ speaker（話者）の指定:
 出力は常に wav（edge は mp3 を返すため ffmpeg で wav へ変換する）。
 生成結果は backend+text+speaker+speed+pitch の sha256 を鍵に __cache__/tts/ へ
 キャッシュされ、2回目以降は合成せずに即座にパスを返す（アトミック書き込み）。
+voicevox はさらに「正規化した接続先 endpoint + エンジンの /version」を鍵に含める
+（同じ cache_dir で接続先やエンジンを切り替えたとき、別エンジンの旧音声を
+返さないようにするため。/version の取得は合成前の接続確認を兼ね、
+プロセス内でメモ化されるためナレーション行ごとには問い合わせない）。
 """
 
 import argparse
@@ -117,14 +121,21 @@ def _resolve_backend(backend, *, host=_DEFAULT_HOST, port=_DEFAULT_PORT):
     return backend
 
 
-def _cache_path(backend, text, speaker, speed, pitch, cache_dir):
+def _cache_path(backend, text, speaker, speed, pitch, cache_dir, engine=None):
     """キャッシュファイルのパスを決定する（backend+text+speaker+speed+pitch の sha256）
 
     backend を鍵に含めるのは、同じテキスト・話者でもバックエンドが違えば
     まったく別の音声になるため（キャッシュ衝突で意図しない声が使われるのを防ぐ）。
+
+    engine はエンジン識別署名（voicevox のみ。_voicevox_engine_sig の戻り値）。
+    同じ cache_dir で host/port やエンジン本体を切り替えても、別エンジンの
+    旧音声がヒットしないよう鍵に混ぜる。None のバックエンド（edge/sapi）では
+    鍵に含めない（既存キャッシュを無駄に無効化しないため）。
     """
     sig = (f"backend={backend}||{text}||speaker={speaker!r}"
            f"||speed={float(speed):g}||pitch={float(pitch):g}")
+    if engine is not None:
+        sig += f"||engine={engine}"
     key = hashlib.sha256(sig.encode("utf-8")).hexdigest()[:16]
     return os.path.join(cache_dir, f"{key}.wav")
 
@@ -172,14 +183,19 @@ def tts(text, *, backend=None, speaker=None, speed=1.0, pitch=0.0,
 
     # キャッシュ鍵に使う speaker は「解決後の値」にする。
     # （speaker=None と speaker=1 が voicevox では同じ音声なので同じ鍵にしたい）
+    engine = None
     if backend == "voicevox":
         resolved = _voicevox_speaker(speaker)
+        # 接続先とエンジンバージョンを鍵に含める（/version 取得は接続確認を兼ねる。
+        # 未起動なら合成前にここで既存どおりの ConnectionError になる）
+        engine = _voicevox_engine_sig(host, port)
     elif backend == "edge":
         resolved = _edge_voice(speaker)
     else:
         resolved = _sapi_voice(speaker)
 
-    cache_path = _cache_path(backend, text, resolved, speed, pitch, cache_dir)
+    cache_path = _cache_path(backend, text, resolved, speed, pitch, cache_dir,
+                             engine=engine)
     if os.path.exists(cache_path):
         return cache_path
     os.makedirs(cache_dir, exist_ok=True)
@@ -253,6 +269,37 @@ def _voicevox_running(host, port, timeout=1.0):
             return True
     except Exception:
         return False
+
+
+# エンジン識別署名のプロセス内メモ（endpoint → 署名文字列）。
+# ナレーション行ごとに /version を問い合わせないためのメモ化で、ディスクには
+# 永続化しない（CLAUDE.md のキャッシュ設計: 環境依存情報のディスク永続化は罠になる）。
+_VOICEVOX_ENGINE_SIG_MEMO = {}
+
+
+def _voicevox_endpoint(host, port):
+    """接続先を正規化した endpoint 文字列にする（大文字小文字・型の揺れを吸収）"""
+    return f"{str(host).strip().lower()}:{int(port)}"
+
+
+def _voicevox_engine_sig(host, port):
+    """VOICEVOX エンジンの識別署名「endpoint|バージョン」を返す（プロセス内メモ化）
+
+    キャッシュ鍵に混ぜることで、同じ cache_dir のまま接続先(host/port)や
+    エンジン本体（バージョン違い）を切り替えても旧エンジンの音声がヒットしない。
+    /version の取得は合成前の接続確認を兼ねる。未起動・接続不可の場合は
+    _request が既存の ConnectionError（_not_running_error）を投げる。
+    """
+    endpoint = _voicevox_endpoint(host, port)
+    sig = _VOICEVOX_ENGINE_SIG_MEMO.get(endpoint)
+    if sig is None:
+        raw = _request(f"{_base_url(host, port)}/version", host=host, port=port,
+                       timeout=_CONNECT_TIMEOUT)
+        # /version は JSON 文字列（例: "0.14.0"）を返すため引用符を剥がす
+        version = raw.decode("utf-8", errors="replace").strip().strip('"')
+        sig = f"{endpoint}|{version}"
+        _VOICEVOX_ENGINE_SIG_MEMO[endpoint] = sig
+    return sig
 
 
 def _voicevox_speaker(speaker):
