@@ -92,6 +92,70 @@ def test_step_window_fade_real_render_has_no_alpha_leak(tmp_path):
     assert [_alpha_at(u) for u in (0.26, 0.50, 0.74)] == [255] * 3
 
 
+# --- issue #13 P1-2: 音声のみプロジェクトの -map [0:v] --------------------
+
+def _write_audio_only_layer(tmp_path, wav_path):
+    layer = tmp_path / "audio_only_layer.py"
+    layer.write_text(
+        "from scriptvedit import *\n"
+        f"o = Object(r\"{wav_path}\")\n"
+        "o.time(1) <= again(0.5)\n",
+        encoding="utf-8")
+    return layer
+
+
+def test_audio_only_project_maps_raw_video_input(tmp_path):
+    """音声Object+音声フィルタのみでも -map がグラフラベル扱いにならない"""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg が無い環境")
+    from scriptvedit import Project
+
+    wav = tmp_path / "tone.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+         "-i", "sine=frequency=440:duration=1", str(wav)],
+        check=True, capture_output=True, timeout=30)
+
+    layer = _write_audio_only_layer(tmp_path, wav)
+    p = Project()
+    p.configure(width=320, height=180, fps=30)
+    p.layer(str(layer))
+    result = p.render(str(tmp_path / "out.mp4"), dry_run=True)
+    cmd = result["main"] if isinstance(result, dict) else result
+    assert "-filter_complex" in cmd, "音声フィルタでfilter_complexが作られる前提"
+    map_targets = [cmd[i + 1] for i, a in enumerate(cmd[:-1]) if a == "-map"]
+    assert "0:v" in map_targets, f"-map の対象が不正: {map_targets}"
+    assert "[0:v]" not in map_targets, "生入力参照をグラフ出力ラベルとして-mapしている"
+
+
+def test_audio_only_project_real_render(tmp_path):
+    """音声のみプロジェクトの実レンダが成功し、映像+音声の両streamを持つ"""
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg/ffprobe が無い環境")
+    from scriptvedit import Project
+
+    wav = tmp_path / "tone.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+         "-i", "sine=frequency=440:duration=1", str(wav)],
+        check=True, capture_output=True, timeout=30)
+
+    layer = _write_audio_only_layer(tmp_path, wav)
+    out = tmp_path / "out.mp4"
+    p = Project()
+    p.configure(width=320, height=180, fps=30)
+    p.layer(str(layer))
+    p.render(str(out), timeout=120)
+
+    assert out.exists() and out.stat().st_size > 0
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+         "-of", "csv=p=0", str(out)],
+        check=True, capture_output=True, text=True, timeout=30)
+    kinds = sorted(probe.stdout.split())
+    assert kinds == ["audio", "video"], f"stream構成が不正: {kinds}"
+
+
 # --- 1. asset() のパストラバーサル拒否 -----------------------------------
 
 @pytest.fixture

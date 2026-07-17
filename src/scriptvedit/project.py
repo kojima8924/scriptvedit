@@ -2204,6 +2204,15 @@ class Project:
         use_audio = bool(audio_out) and fmt["has_audio"]
         if filter_parts:
             cmd.extend(["-filter_complex", ";".join(filter_parts)])
+            # 映像Objectが無い（音声のみ＋音声フィルタ）場合、video_mapは
+            # 生入力参照（[0:v]）のまま。filter_complex併用時の -map に
+            # ブラケット付きで渡すとグラフ出力ラベル扱いになり
+            # "Output with label '0:v' does not exist" で落ちるため、
+            # 音声側と同様にストリーム指定（0:v）へ外す
+            vm_inner = video_map[1:-1]
+            if video_map.startswith("[") and vm_inner.endswith(":v") \
+                    and vm_inner[:-2].isdigit():
+                video_map = vm_inner
             cmd.extend(["-map", video_map])
             if use_audio:
                 cmd.extend(["-map", audio_out])

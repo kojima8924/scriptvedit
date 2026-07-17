@@ -12,7 +12,7 @@
   "-filter_complex",
   "[1:a]atrim=duration=2,asetpts=PTS-STARTPTS[a0];[2:a]aloop=loop=-1:size=1435716,atrim=duration=5,asetpts=PTS-STARTPTS,volume=volume='0.7':eval=frame,adelay=2000:all=1[a1];[a0]asplit[dmix1][dside1];[a1][dside1]sidechaincompress=threshold=0.03:ratio=6:attack=20:release=250[duck1];[dmix1][duck1]amix=inputs=2:normalize=0[aout]",
   "-map",
-  "[0:v]",
+  "0:v",
   "-map",
   "[aout]",
   "-c:v",
