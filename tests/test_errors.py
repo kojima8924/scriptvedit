@@ -1,6 +1,20 @@
 # エラーケーステスト: 各種エラー条件の自動検証
 import sys, os, tempfile, shutil, json, re, subprocess
+import uuid as _uuid
 import pytest
+
+# tests ディレクトリ内一時ファイルのプロセス単位ユニーク化トークン。
+# 固定名 _tmp_*.py だと同一 checkout での同時 pytest 実行が相互に
+# 書きかけ・削除で壊し合う（issue #13 P2-20）。同一プロセス内の check は
+# 逐次実行なので、プロセスごとに決定的なら十分。
+_TMP_TOKEN = f"{os.getpid()}_{_uuid.uuid4().hex[:6]}"
+
+
+def _tmp_file(name):
+    """tests ディレクトリ内の一時ファイルパス（プロセス単位でユニーク）"""
+    base, ext = os.path.splitext(name)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        f"{base}_{_TMP_TOKEN}{ext}")
 import scriptvedit as sv
 from scriptvedit import (
     asset,
@@ -78,7 +92,7 @@ def check_undefined_anchor():
         'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_err_undef.py")
+    temp_path = _tmp_file("_tmp_err_undef.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -111,8 +125,8 @@ def check_same_anchor_different_files():
         'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp1 = os.path.join(os.path.dirname(__file__), "_tmp_err_dup1.py")
-    temp2 = os.path.join(os.path.dirname(__file__), "_tmp_err_dup2.py")
+    temp1 = _tmp_file("_tmp_err_dup1.py")
+    temp2 = _tmp_file("_tmp_err_dup2.py")
     try:
         with open(temp1, "w", encoding="utf-8") as f:
             f.write(layer1_code)
@@ -175,7 +189,7 @@ def check_cache_use_no_file():
     キャッシュ鍵が解決済み総尺を含むため、検証はplan pass後に行われる。
     レイヤーファイル自体が無い場合はplanが先にファイル不在エラーを出す。
     """
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_cache_use_layer.py")
+    temp_path = _tmp_file("_tmp_cache_use_layer.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(
@@ -487,7 +501,7 @@ def check_chain_force():
 def check_ffp_change_detection():
     """ファイル変更でfingerprintが変わることを確認"""
     import time
-    tmp = os.path.join(tempfile.gettempdir(), "_test_ffp_change.png")
+    tmp = os.path.join(tempfile.gettempdir(), f"_test_ffp_change_{_TMP_TOKEN}.png")
     try:
         with open(tmp, "wb") as f:
             f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -514,7 +528,7 @@ def check_ffp_change_detection():
 def check_checkpoint_signature_uses_ffp():
     """checkpoint signatureにFFPが含まれることを確認"""
     import time
-    tmp = os.path.join(tempfile.gettempdir(), "_test_cp_sig.png")
+    tmp = os.path.join(tempfile.gettempdir(), f"_test_cp_sig_{_TMP_TOKEN}.png")
     try:
         with open(tmp, "wb") as f:
             f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -552,7 +566,7 @@ def check_video_no_time_checkpoint_has_duration():
         'obj = Object(asset("video/fox_noaudio.mp4"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_vid_notime.py")
+    temp_path = _tmp_file("_tmp_vid_notime.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -593,7 +607,7 @@ def check_video_with_time_uses_specified_duration():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2.5) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_vid_time.py")
+    temp_path = _tmp_file("_tmp_vid_time.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -641,7 +655,7 @@ def check_morph_to_not_last():
         'img1.time(3) <= morph_to(img2)\n'
         'img1 <= scale(0.5)\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_morph_order.py")
+    temp_path = _tmp_file("_tmp_morph_order.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -693,7 +707,7 @@ def check_rotate_to_preserves_move():
         'img.time(2) <= rotate_to(from_deg=0, to_deg=90)\n'
         'img <= move(x=0.3, y=0.7, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_rotate_move.py")
+    temp_path = _tmp_file("_tmp_rotate_move.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -722,7 +736,7 @@ def check_morph_to_hint_message():
         'img1.time(3) <= morph_to(img2)\n'
         'img1 <= scale(0.5)\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_morph_hint.py")
+    temp_path = _tmp_file("_tmp_morph_hint.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -838,7 +852,7 @@ def _make_image_checkpoint_project(transforms_code, effects_code=""):
         f'obj <= {transforms_code}\n'
         f'obj.time(1) <= move(x=0.5, y=0.5, anchor="center"){" & " + effects_code if effects_code else ""}\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_filter_test.py")
+    temp_path = _tmp_file("_tmp_filter_test.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -883,7 +897,7 @@ def check_wipe_filter_in_checkpoint():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= wipe("left") & move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_wipe_test.py")
+    temp_path = _tmp_file("_tmp_wipe_test.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -931,7 +945,7 @@ def check_zoom_filter_in_checkpoint():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= zoom(lambda u: lerp(1, 2, u)) & move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_zoom_test.py")
+    temp_path = _tmp_file("_tmp_zoom_test.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -956,7 +970,7 @@ def check_color_shift_filter_in_checkpoint():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= color_shift(hue=90) & move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_cshift_test.py")
+    temp_path = _tmp_file("_tmp_cshift_test.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -978,7 +992,7 @@ def check_rotate_to_filter_in_checkpoint():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= rotate_to(from_deg=0, to_deg=90) & move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_rotto_test.py")
+    temp_path = _tmp_file("_tmp_rotto_test.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1000,7 +1014,7 @@ def check_move_survives_bakeable_checkpoint():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= wipe("left") & move(from_x=0.2, from_y=0.5, to_x=0.8, to_y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_move_surv.py")
+    temp_path = _tmp_file("_tmp_move_surv.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1028,7 +1042,7 @@ def check_shake_is_live():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= shake(amplitude=0.05, frequency=8) & move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_shake_live.py")
+    temp_path = _tmp_file("_tmp_shake_live.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1091,7 +1105,7 @@ def check_until_offset_positive():
         'obj2 = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj2.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_offset_pos.py")
+    temp_path = _tmp_file("_tmp_offset_pos.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1121,14 +1135,14 @@ def check_until_offset_negative():
         'anchor("B")\n'
         'pause.time(1)\n'
     )
-    temp_path1 = os.path.join(os.path.dirname(__file__), "_tmp_offset_neg1.py")
+    temp_path1 = _tmp_file("_tmp_offset_neg1.py")
     layer_code2 = (
         'from scriptvedit import *\n'
         'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj.until("B", offset=-0.5)\n'
         'obj.time(3) <= move(x=0.3, y=0.3, anchor="center")\n'
     )
-    temp_path2 = os.path.join(os.path.dirname(__file__), "_tmp_offset_neg2.py")
+    temp_path2 = _tmp_file("_tmp_offset_neg2.py")
     try:
         with open(temp_path1, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1163,7 +1177,7 @@ def check_until_offset_zero_default():
         'obj2 = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj2.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_offset_zero.py")
+    temp_path = _tmp_file("_tmp_offset_zero.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1190,7 +1204,7 @@ def check_time_name_anchors():
         'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj.time(1.5, name="s1") <= move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_name_anchor.py")
+    temp_path = _tmp_file("_tmp_name_anchor.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1225,8 +1239,8 @@ def check_time_name_duplicate():
         'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp1 = os.path.join(os.path.dirname(__file__), "_tmp_name_dup1.py")
-    temp2 = os.path.join(os.path.dirname(__file__), "_tmp_name_dup2.py")
+    temp1 = _tmp_file("_tmp_name_dup1.py")
+    temp2 = _tmp_file("_tmp_name_dup2.py")
     try:
         with open(temp1, "w", encoding="utf-8") as f:
             f.write(layer_code1)
@@ -1266,8 +1280,8 @@ def check_time_name_with_until():
         'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj.time(1) <= move(x=0.3, y=0.3, anchor="center")\n'
     )
-    temp1 = os.path.join(os.path.dirname(__file__), "_tmp_name_until1.py")
-    temp2 = os.path.join(os.path.dirname(__file__), "_tmp_name_until2.py")
+    temp1 = _tmp_file("_tmp_name_until1.py")
+    temp2 = _tmp_file("_tmp_name_until2.py")
     try:
         with open(temp1, "w", encoding="utf-8") as f:
             f.write(layer_code1)
@@ -1302,7 +1316,7 @@ def check_show_no_advance():
         'b = Object(asset("images/onigiri_tenmusu.png"))\n'
         'b.time(1) <= move(x=0.7, y=0.7, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_show_noadvance.py")
+    temp_path = _tmp_file("_tmp_show_noadvance.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1332,7 +1346,7 @@ def check_show_until_with_anchor():
         'overlay = Object(asset("images/onigiri_tenmusu.png"))\n'
         'overlay.show_until("main.end") <= move(x=0.3, y=0.3, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_show_until.py")
+    temp_path = _tmp_file("_tmp_show_until.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1362,7 +1376,7 @@ def check_show_priority_override():
         'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
         'obj.show(3, priority=10) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_show_priority.py")
+    temp_path = _tmp_file("_tmp_show_priority.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1499,7 +1513,7 @@ def check_lut_missing_file():
 
 def check_lut_bad_ext():
     """lut 未対応拡張子 → ValueError"""
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_lut.txt")
+    temp_path = _tmp_file("_tmp_lut.txt")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write("dummy")
@@ -1695,7 +1709,7 @@ def check_glow_filter_in_checkpoint():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= glow(radius=8, intensity=0.8) & move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_glow_test.py")
+    temp_path = _tmp_file("_tmp_glow_test.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1720,7 +1734,7 @@ def check_drop_shadow_filter_in_checkpoint():
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= drop_shadow(dx=8, dy=8, blur=6) & move(x=0.5, y=0.5, anchor="center")\n'
     )
-    temp_path = os.path.join(os.path.dirname(__file__), "_tmp_dshadow_test.py")
+    temp_path = _tmp_file("_tmp_dshadow_test.py")
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -1870,7 +1884,7 @@ def check_subtitles_missing_file():
 def check_subtitles_bad_ext():
     """subtitles: 非対応拡張子 → ValueError"""
     _mk_project()
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_subs.txt")
+    tmp = _tmp_file("_tmp_subs.txt")
     with open(tmp, "w", encoding="utf-8") as f:
         f.write("x")
     try:
@@ -1903,7 +1917,7 @@ def check_duck_under_other_not_in_project():
         "bgm = Object(asset(\"audio/Impact-38.mp3\"))\n"
         "bgm.time(3) <= duck_under(narr)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_duck.py")
+    tmp = _tmp_file("_tmp_duck.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -2003,7 +2017,7 @@ def check_text_drawtext_in_cmd():
         "t = text(\"日本語: 100% 'x'\")\n"
         "t.time(2) <= fade(lambda u: u)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_text.py")
+    tmp = _tmp_file("_tmp_text.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -2022,7 +2036,7 @@ def check_text_drawtext_in_cmd():
 def _text_dry_run_cmd(layer_body):
     """テキスト系レイヤーを dry_run してメインコマンド文字列を返すヘルパー"""
     layer_code = "from scriptvedit import *\n" + layer_body
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_text_deco.py")
+    tmp = _tmp_file("_tmp_text_deco.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -2081,7 +2095,7 @@ def check_loudnorm_in_cmd():
         "bgm = Object(asset(\"audio/Impact-38.mp3\"))\n"
         "bgm.time(3)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_ln.py")
+    tmp = _tmp_file("_tmp_ln.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer_code)
@@ -2104,7 +2118,7 @@ def check_explode_to_not_last():
         "o.time(2) <= explode_to()\n"
         "o <= scale(1.2)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_expl.py")
+    tmp = _tmp_file("_tmp_expl.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2127,7 +2141,7 @@ def check_explode_to_needs_duration():
         "o <= explode_to()\n"
         "o <= move(x=0.5, y=0.5)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_expl2.py")
+    tmp = _tmp_file("_tmp_expl2.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2160,7 +2174,7 @@ def check_two_terminal_effects():
         "o.time(2) <= morph_to(tgt)\n"
         "o <= explode_to()\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_two.py")
+    tmp = _tmp_file("_tmp_two.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2219,7 +2233,7 @@ def check_render_window_bad_range():
         "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
         "o.time(3) <= move(x=0.5, y=0.5)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_win.py")
+    tmp = _tmp_file("_tmp_win.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2280,7 +2294,7 @@ def check_marker_in_cmd():
         "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
         "o.time(4) <= move(x=0.5, y=0.5)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_mrk.py")
+    tmp = _tmp_file("_tmp_mrk.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2304,7 +2318,7 @@ def check_explode_produces_particle_cache():
         "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
         "o.time(2) <= explode_to()\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_pc.py")
+    tmp = _tmp_file("_tmp_pc.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2398,7 +2412,7 @@ def check_gif_output_format():
         "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
         "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_gif.py")
+    tmp = _tmp_file("_tmp_gif.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2421,7 +2435,7 @@ def check_alpha_webm_format():
         "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
         "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_webm.py")
+    tmp = _tmp_file("_tmp_webm.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2478,7 +2492,7 @@ def check_inspect_report_text():
         "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
         "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_insp.py")
+    tmp = _tmp_file("_tmp_insp.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2501,7 +2515,7 @@ def check_alpha_on_mp4_rejected():
         "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
         "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_alpha_mp4.py")
+    tmp = _tmp_file("_tmp_alpha_mp4.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2563,7 +2577,7 @@ def check_counter_reaches_target():
         "c = counter(0, 100, format='%d', x=0.5, y=0.5, size=48)\n"
         "c.time(4)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_counter_reach.py")
+    tmp = _tmp_file("_tmp_counter_reach.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2587,7 +2601,7 @@ def check_typewriter_halfopen_enable():
         "tw = typewriter('あいう', cps=5, x=0.1, y=0.5, size=48)\n"
         "tw.time(2)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_tw_boundary.py")
+    tmp = _tmp_file("_tmp_tw_boundary.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2612,7 +2626,7 @@ def check_ken_burns_overshoot_clamp():
         "img = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
         "img.time(3) <= ken_burns((0,0,800,450),(100,60,400,225), easing=ease_out_back)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_kb_overshoot.py")
+    tmp = _tmp_file("_tmp_kb_overshoot.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -2665,7 +2679,7 @@ def check_reverse_too_long():
         "obj = Object(asset(\"video/guitar_noaudio.mp4\"))\n"
         "obj.time(5) <= speed(0.1) & reverse() & move(x=0.5, y=0.5)\n"
     )
-    tmp = os.path.join(os.path.dirname(__file__), "_tmp_rev_long.py")
+    tmp = _tmp_file("_tmp_rev_long.py")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(layer)
@@ -3303,7 +3317,7 @@ def check_export_metadata_json():
     p = _mk_project()
     p.marker(0, "イントロ")
     p.marker(3.0, "本編")
-    out = os.path.join(os.path.dirname(__file__), "_tmp_meta.json")
+    out = _tmp_file("_tmp_meta.json")
     try:
         import json as _json
         p.export_metadata(out, title="テスト動画", description="説明文",
@@ -3323,7 +3337,7 @@ def check_export_metadata_title_from_param():
     p = _mk_project()
     argv_bak = sys.argv[:]
     sys.argv = [argv_bak[0], "--param", "title=パラメータ由来タイトル"]
-    out = os.path.join(os.path.dirname(__file__), "_tmp_meta2.json")
+    out = _tmp_file("_tmp_meta2.json")
     try:
         import json as _json
         p.export_metadata(out)
@@ -3341,7 +3355,7 @@ def check_export_metadata_txt_format():
     """p.export_metadata(): .txt拡張子ではプレーンテキスト形式で出力される"""
     p = _mk_project()
     p.marker(0, "イントロ")
-    out = os.path.join(os.path.dirname(__file__), "_tmp_meta.txt")
+    out = _tmp_file("_tmp_meta.txt")
     try:
         p.export_metadata(out, title="タイトル", tags=["a", "b"])
         with open(out, encoding="utf-8") as f:
@@ -3388,13 +3402,13 @@ def check_freeze_frame_at_beyond_length_no_overcount():
 def check_speed_auto_atrim_after_atempo():
     """S1: speed の自動atrimはatempoの後段（音声尺がfactor²短縮されない）"""
     import re
-    layer = os.path.join(os.path.dirname(__file__), "_tmp_s1_layer.py")
+    layer = _tmp_file("_tmp_s1_layer.py")
     with open(layer, "w", encoding="utf-8") as f:
         f.write("from scriptvedit import *\n"
                 "a = Object(asset(\"video/fox_noaudio.mp4\"))\n"
                 "a.time(2.0) <= speed(2.0) & move(x=0.5, y=0.5)\n")
     p = _mk_project()
-    p.layer("_tmp_s1_layer.py")
+    p.layer(layer)
     try:
         cmd = p.render("_tmp_s1.mp4", dry_run=True)
         flat = str(cmd)
@@ -3472,7 +3486,7 @@ def check_export_metadata_json_intro_chapter():
     p = _mk_project()
     p.marker(2.0, "本編")     # 先頭マーカーが0:00より後
     p.marker(4.5, "まとめ")
-    out = os.path.join(os.path.dirname(__file__), "_tmp_meta_intro.json")
+    out = _tmp_file("_tmp_meta_intro.json")
     try:
         p.export_metadata(out, title="T")
         with open(out, encoding="utf-8") as f:
