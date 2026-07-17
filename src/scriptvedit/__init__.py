@@ -83,6 +83,8 @@ __all__ = [
     "describe", "describe_markdown", "MANIFEST_VERSION",
     # 素材・パス解決（cwd 非依存）
     "asset", "assets_dir", "here",
+    # ファイル監視（READMEの例が star import 前提のため公開する）
+    "watch",
 ]
 
 

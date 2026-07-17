@@ -156,6 +156,28 @@ def test_audio_only_project_real_render(tmp_path):
     assert kinds == ["audio", "video"], f"stream構成が不正: {kinds}"
 
 
+# --- issue #13 P2-19: 公開API・OS互換 -------------------------------------
+
+def test_watch_is_public_export():
+    """READMEの例がstar import前提のため、watch は __all__ に含まれる"""
+    import scriptvedit
+    assert "watch" in scriptvedit.__all__
+    assert callable(scriptvedit.watch)
+
+
+def test_library_dirs_accepts_both_separators(monkeypatch, tmp_path):
+    """SCRIPTVEDIT_ASSETS は os.pathsep 区切り（`;` は互換で常に通る）"""
+    from scriptvedit.assets import library_dirs
+
+    a = str(tmp_path / "a")
+    b = str(tmp_path / "b")
+    monkeypatch.setenv("SCRIPTVEDIT_ASSETS", f"{a};{b}")
+    assert library_dirs() == [os.path.abspath(a), os.path.abspath(b)]
+
+    monkeypatch.setenv("SCRIPTVEDIT_ASSETS", f"{a}{os.pathsep}{b}")
+    assert library_dirs() == [os.path.abspath(a), os.path.abspath(b)]
+
+
 # --- issue #13 P2-9: ffprobeメモ化の素材差し替え検知 ----------------------
 
 def test_probe_cache_detects_replaced_file(tmp_path):

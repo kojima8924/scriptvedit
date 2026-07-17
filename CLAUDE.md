@@ -222,7 +222,7 @@ overlay の中央配置は `(W-pad_size[0])/2` で計算される
 - **素材参照は `asset()` / `here()` を使う**（`src/scriptvedit/assets.py`）。cwd 依存にしない。
   - `asset("images/bg.jpg")` の解決順は
     `<project>/assets/` → `<project>/assets/_imported/` →
-    **共有素材ライブラリ**（環境変数 `SCRIPTVEDIT_ASSETS`。`;` 区切りで複数可）。
+    **共有素材ライブラリ**（環境変数 `SCRIPTVEDIT_ASSETS`。`os.pathsep` 区切りで複数可。Windows `;` / POSIX `:`）。
     共有ライブラリで見つかった素材は `assets/_imported/<relpath>` へ**コピーしてから**
     そのコピー先のパスを返す。同一 checkout は以後そのコピーだけで動くが、
     `_imported/` は通常 gitignore 対象なので fresh clone には共有ライブラリ設定か

@@ -94,14 +94,23 @@ def assets_dir():
         "プロジェクト直下に assets/ を作ってください"
         "（`scriptvedit new <path>` で雛形を生成できます）。\n"
         f"※ 環境変数 {_ENV_VAR} は assets/ の上書きではなく、"
-        "共有素材ライブラリの探索パス（; 区切り）です。")
+        "共有素材ライブラリの探索パス（os.pathsep 区切り。Windowsは `;`）です。")
 
 
 def library_dirs():
-    """共有素材ライブラリの探索パス一覧（環境変数 SCRIPTVEDIT_ASSETS、`;` 区切り）"""
+    """共有素材ライブラリの探索パス一覧（環境変数 SCRIPTVEDIT_ASSETS）。
+
+    区切りは OS 標準の os.pathsep（Windows は `;`、POSIX は `:`）。
+    Windows では従来どおり `;` のまま。POSIX でも `;` を含む値は
+    後方互換のため区切りとして扱う（PATH と同じ流儀に合わせる。issue #13 P2-19）。
+    """
     env = os.environ.get(_ENV_VAR) or ""
+    seps = {os.pathsep, ";"}
+    parts = [env]
+    for sep in seps:
+        parts = [piece for part in parts for piece in part.split(sep)]
     dirs = []
-    for part in env.split(";"):
+    for part in parts:
         part = part.strip().strip('"')
         if part:
             dirs.append(os.path.abspath(part))
