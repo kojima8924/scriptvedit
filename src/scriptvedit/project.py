@@ -1778,9 +1778,7 @@ class Project:
             if not isinstance(obj, Object) or obj.media_type != "web":
                 continue
             webm_path = _web_cache_path(obj, self)
-            name = obj._web_name
-            cache_dir = os.path.join(_CACHE_DIR, "webclip")
-            frames_dir = os.path.join(cache_dir, f"{name}_frames")
+            frames_dir = _web_frames_dir(obj._web_name)
 
             if not os.path.exists(webm_path):
                 print(f"Webクリップ生成: {obj.source}")
@@ -2288,7 +2286,7 @@ from scriptvedit.expr import Expr, lt, max, min, step
 from scriptvedit.ffmpeg import _decoder_input_args, _ffmpeg_available_encoders, _run_ffmpeg, _run_ffmpeg_to_cache, _unique_tmp_path
 from scriptvedit.filters.audio import _build_audio_effect_filters, _build_audio_pre_filters
 from scriptvedit.filters.video import _build_effect_filters, _build_input_args, _build_move_exprs, _build_transform_filters, _build_video_overlay_parts, _build_video_pre_filters, _get_base_dimensions, _optimize_filter_chain
-from scriptvedit.objects import Object
+from scriptvedit.objects import Object, _web_frames_dir
 from scriptvedit.assets import resolve_layer_path
 from scriptvedit.plugins import _autoload_plugins
 from scriptvedit.state import _ACTIVE_QUALITY, _ARTIFACT_DIR, _CACHE_DIR, _CONFIGURE_KEYS, _ENCODER_MAP, _ENGINE_VER, _GEN_COUNTER, _PRESETS, _TERMINAL_FRAME_EFFECTS, _TIME_LIVE_EFFECTS, _detect_media_type, _suggest_hint

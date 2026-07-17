@@ -311,6 +311,35 @@ def check_web_no_duration():
         return False, f"メッセージが不適切: {msg}"
 
 
+def check_web_name_traversal():
+    """webのnameにパス区切り・相対参照 → ValueError（cache外rmtree防止）"""
+    p = Project()
+    # name="" は falsy のため basename へフォールバックする（既存仕様・安全）
+    bad_names = ["../../valuable", "a/b", "a\\b", "..", "C:evil", "  "]
+    for bad in bad_names:
+        try:
+            Object("test.html", duration=2.0, size=(640, 360), name=bad)
+            return False, f"例外が発生しませんでした: name={bad!r}"
+        except ValueError:
+            continue
+        except Exception as e:
+            return False, f"想定外の例外({bad!r}): {type(e).__name__}: {e}"
+    return True, f"{len(bad_names)}件の不正nameを全て拒否"
+
+
+def check_web_frames_dir_guard():
+    """_web_frames_dirはキャッシュルート外へ解決されるnameを拒否する"""
+    from scriptvedit.objects import _web_frames_dir
+    try:
+        _web_frames_dir("../escape")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        ok_dir = _web_frames_dir("scene1")
+        if "webclip" not in ok_dir.replace("\\", "/"):
+            return False, f"正常nameの解決先が不正: {ok_dir}"
+        return True, str(e)
+
+
 def check_subtitle_no_project():
     """subtitle() でProject未設定 + size省略 → RuntimeError"""
     old = Project._current
@@ -4605,6 +4634,8 @@ ALL_TESTS = [
     ("非webにkwargs", check_web_kwargs_on_non_web),
     ("web不明kwarg", check_web_unknown_kwarg),
     ("web duration未指定", check_web_no_duration),
+    ("web nameパストラバーサル", check_web_name_traversal),
+    ("web frames_dir包含ガード", check_web_frames_dir_guard),
     ("subtitle Project未設定", check_subtitle_no_project),
     ("diagram Project未設定", check_diagram_no_project),
     ("subtitle size明示", check_subtitle_with_explicit_size),

@@ -229,6 +229,45 @@ _WEB_KWARGS = {"duration", "size", "fps", "data", "name", "debug_frames", "deps"
 _SLIDE_PAGE_KEY = "__svt_slide_page__"
 
 
+def _validate_web_name(name):
+    """web Object の name を単一のディレクトリ名成分に制限する。
+
+    name はキャッシュディレクトリ（__cache__/webclip/<name>_frames と
+    __cache__/artifacts/web/<name>/）のパス成分になり、生成前に rmtree される。
+    パス区切り・ドライブ・相対参照を許すとキャッシュ外の既存ディレクトリを
+    削除・上書きできてしまうため、構築時に拒否する。
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"web Object の name は空でない文字列が必要です: {name!r}")
+    bad = set('/\\:\0') | {os.sep}
+    if os.altsep:
+        bad.add(os.altsep)
+    if any(ch in name for ch in bad) or name in (".", "..") \
+            or os.path.basename(name) != name:
+        raise ValueError(
+            f"web Object の name にパス区切り・ドライブ・相対参照は使えません: {name!r}")
+    return name
+
+
+def _web_frames_dir(name):
+    """webフレーム作業ディレクトリを返す（__cache__/webclip 配下を保証）。
+
+    削除(rmtree)対象になるため、realpath 解決後もキャッシュルート内に
+    収まることを最終確認する（symlink 等で外へ出る経路の防御）。
+    """
+    cache_dir = os.path.join(_CACHE_DIR, "webclip")
+    frames_dir = os.path.join(cache_dir, f"{_validate_web_name(name)}_frames")
+    real_root = os.path.realpath(cache_dir)
+    real = os.path.realpath(frames_dir)
+    try:
+        contained = os.path.commonpath([real_root, real]) == real_root
+    except ValueError:
+        contained = False
+    if not contained or real == real_root:
+        raise ValueError(f"web Object の name が不正です: {name!r}")
+    return frames_dir
+
+
 def _web_frame_count(duration, fps):
     """Web Objectのキャプチャフレーム数を返す（短尺でも最低1フレームを保証）。
 
@@ -291,7 +330,9 @@ class Object:
             self._web_size = kwargs["size"]
             self._web_fps = kwargs.get("fps")
             self._web_data = kwargs.get("data", {})
-            self._web_name = kwargs.get("name") or os.path.splitext(os.path.basename(source))[0]
+            self._web_name = _validate_web_name(
+                kwargs.get("name")
+                or os.path.splitext(os.path.basename(source))[0])
             self._web_debug_frames = kwargs.get("debug_frames", False)
             self._web_deps = kwargs.get("deps", [])
         elif kwargs:
@@ -692,11 +733,9 @@ class Object:
 
     def _build_web_cmd(self, project, webm_path=None):
         """webクリップ用ffmpegコマンド"""
-        cache_dir = os.path.join(_CACHE_DIR, "webclip")
-        name = self._web_name
         if webm_path is None:
             webm_path = _web_cache_path(self, project)
-        frames_dir = os.path.join(cache_dir, f"{name}_frames")
+        frames_dir = _web_frames_dir(self._web_name)
         frames_pattern = os.path.join(frames_dir, "frame_%05d.png")
         fps = self._web_fps or project.fps
         dur = self.duration
@@ -715,12 +754,10 @@ class Object:
     def _render_web_frames(self, project):
         """Playwrightで HTML を連番PNGにキャプチャ"""
         from playwright.sync_api import sync_playwright
-        name = self._web_name
-        cache_dir = os.path.join(_CACHE_DIR, "webclip")
-        frames_dir = os.path.join(cache_dir, f"{name}_frames")
+        frames_dir = _web_frames_dir(self._web_name)
         # 同名の前回実行（debug_frames 残留や中断）の stale フレームが混入すると
         # duration/fps/data 変更後も古い絵が使われるため、生成前に必ず空にする。
-        # ※ frames_dir は __cache__/webclip 配下の生成専用ディレクトリなので削除して安全
+        # ※ _web_frames_dir が __cache__/webclip 配下であることを保証済みなので削除して安全
         if os.path.isdir(frames_dir):
             _shutil.rmtree(frames_dir, ignore_errors=True)
         os.makedirs(frames_dir, exist_ok=True)
