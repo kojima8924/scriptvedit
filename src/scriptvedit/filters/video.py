@@ -283,14 +283,20 @@ def _build_effect_filters(obj, start, dur, base_dims=None, label_prefix="fx"):
             # pad: scaleの出力を最大サイズの固定フレームに収め、overlay位置を安定化
             if base_dims and base_dims[0] is not None:
                 bw, bh = base_dims
-                # 定数スケールはサンプリング不要（101点評価の短絡）
+                # 定数スケールはサンプリング不要（固定点評価の短絡）
                 if isinstance(scale_expr, Const):
                     max_s = scale_expr.value
                 else:
-                    # 101点サンプリングで最大スケールを推定（中間ピークの取りこぼしを低減）
+                    # 固定格子サンプリングで最大スケールを推定。
+                    # 振動系関数（sin等）を含む式は i/100 の格子とエイリアスして
+                    # 点間ピークを取りこぼす（例: 1+0.5*sin(100*PI*u) は全標本1、
+                    # 実際は1.5 → pad不足でEINVAL）ため、密な素数格子で評価する
+                    # （issue #13 P2-13）
+                    n_grid = 4999 if _expr_has_oscillatory(scale_expr) else 100
                     try:
                         max_s = _builtins.max(
-                            scale_expr.eval_at(i / 100) for i in range(101))
+                            scale_expr.eval_at(i / n_grid)
+                            for i in range(n_grid + 1))
                     except Exception as exc:
                         raise ValueError(
                             f"scale式を数値評価できないため、padサイズを決定できません: {exc}\n"
@@ -651,6 +657,42 @@ def _build_move_exprs(obj, start, dur, pad_size=None):
     return x_result, y_result
 
 
+# 固定格子サンプリングが格子間ピークを取りこぼしうる振動系関数。
+# 例: 1 + 0.5*sin(100*PI*u) は i/100 の全標本で 1 だが点間で 1.5 になる。
+_OSCILLATORY_FUNCS = {"sin", "cos", "tan", "mod", "random"}
+
+
+def _expr_has_oscillatory(expr):
+    """式に振動系ノード（sin/cos/tan/mod/random）が含まれるかを判定する。
+
+    含まれる場合、固定格子のサンプリングは標本周期とエイリアスして
+    最大値の過小評価（pad不足→FFmpeg EINVAL）や native fade への誤変換を
+    起こしうるため、呼び出し側は密なサンプリング・保守的な扱いへ切り替える
+    （issue #13 P2-13）。
+    """
+    stack = [expr]
+    seen = set()
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if not isinstance(node, Expr):
+            continue
+        # _FuncCall は name + args を持つ（Var の name は変数名なので args で区別）
+        name = getattr(node, "name", None)
+        args = getattr(node, "args", None)
+        if args is not None and name in _OSCILLATORY_FUNCS:
+            return True
+        for attr in ("left", "right", "operand"):
+            child = getattr(node, attr, None)
+            if child is not None:
+                stack.append(child)
+        if args:
+            stack.extend(args)
+    return False
+
+
 def _try_native_fade(alpha_expr, start, dur):
     """alpha式が区分線形ランプと一致するときだけnative fadeへ変換する。
 
@@ -658,6 +700,11 @@ def _try_native_fade(alpha_expr, start, dur):
     ランプへ近似すると透明度の漏れが生じる。全サンプルと隣接差分を候補曲線
     へ照合し、一致を証明できない式は正確なgeq経路へフォールバックする。
     """
+    # 振動系関数を含む式は標本周期とエイリアスして「全標本が線形ランプに一致」
+    # しうる（例: ランプ + sin(200*PI*u) の微小振動）。native化は諦めて
+    # 正確なgeq経路へ（issue #13 P2-13）
+    if _expr_has_oscillatory(alpha_expr):
+        return None
     N = 100
     value_tol = 1e-3
     jump_tol = value_tol * 2.1

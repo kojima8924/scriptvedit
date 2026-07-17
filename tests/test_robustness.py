@@ -156,6 +156,41 @@ def test_audio_only_project_real_render(tmp_path):
     assert kinds == ["audio", "video"], f"stream構成が不正: {kinds}"
 
 
+# --- issue #13 P2-13: 固定格子サンプリングのエイリアシング -----------------
+
+def test_scale_pad_covers_intersample_peak():
+    """i/100格子とエイリアスする振動scale式でもpadが実ピークを覆う"""
+    from scriptvedit import PI, sin
+    from scriptvedit.filters.video import _expr_has_oscillatory
+    from scriptvedit.effects.basic import scale
+
+    # 全ての i/100 標本で値1、点間ピークは1.5
+    e = scale(lambda u: 1 + 0.5 * sin(100 * PI * u))
+    scale_expr = e.params["value"]
+    assert _expr_has_oscillatory(scale_expr)
+    # 従来の101点では max=1.0 に見える（バグの前提を固定）
+    coarse = max(scale_expr.eval_at(i / 100) for i in range(101))
+    assert abs(coarse - 1.0) < 1e-6
+    # 密格子では実ピークを検出する
+    dense = max(scale_expr.eval_at(i / 4999) for i in range(5000))
+    assert dense > 1.45
+
+
+def test_oscillatory_fade_never_native():
+    """ランプ+微小振動のalpha式はnative fadeへ誤変換しない"""
+    from scriptvedit import PI, sin
+    from scriptvedit.filters.video import _try_native_fade
+    from scriptvedit.effects.basic import fade
+
+    # 各 i/100 標本ではちょうど線形ランプに一致するが、点間では振動する
+    e = fade(lambda u: u + 0.2 * sin(200 * PI * u))
+    assert _try_native_fade(e.params["alpha"], 0, 4) is None
+
+    # 素の区分線形ランプ（振動なし）は引き続きnative化される
+    e2 = fade(lambda u: 1 - abs(2 * u - 1))
+    assert _try_native_fade(e2.params["alpha"], 0, 4) is not None
+
+
 # --- issue #13 P2-19: 公開API・OS互換 -------------------------------------
 
 def test_watch_is_public_export():
