@@ -22,7 +22,7 @@ from scriptvedit import (
     mask, mask_wipe, opacity, blend_mode, rounded, pip,
     blur_background_fill, progress_bar,
     speed, reverse, freeze_frame, video_sequence,
-    _atempo_chain_rates, trim,
+    _atempo_chain_rates, trim, adelete,
     narrate, Narration, karaoke, beat_sync, slide,
     formula, formula_lines,
     _build_video_pre_filters, _build_effect_filters, _ARTIFACT_DIR,
@@ -3375,6 +3375,9 @@ def check_freeze_frame_at_beyond_length_no_overcount():
     _mk_project()
     obj = Object(asset("video/fox_noaudio.mp4"))
     # trim(2) で実尺2s、freeze at=5(>=2) → 静止区間は成立しないので尺は2sのまま
+    # ※この素材は名前に反して音声streamを持つ。issue #13 P2-11 で length() が
+    #   「有効streamの最大」になったため、映像側の計算を検証するには音声を除外する
+    obj <= adelete()
     obj <= trim(2) & freeze_frame(at=5.0, duration=1.0)
     ln = obj.length()
     if abs(ln - 2.0) < 0.01:
