@@ -3987,29 +3987,44 @@ def check_formula_katex_vendored():
 
 
 def check_formula_katex_fingerprint_includes_fonts():
-    """formula: KaTeXフォント(woff2)もキャッシュ鍵に入る（字形崩れPNGの焼き付き防止）"""
-    from scriptvedit.formula import _katex_fingerprint, _KATEX_DIR
+    """formula: KaTeXフォント(woff2)もキャッシュ鍵に入る（字形崩れPNGの焼き付き防止）
+
+    git管理下のvendorフォントを直接書き換えると、同時pytest実行や中断で
+    tracked ファイルに変更が残留する事故になる（issue #13 P2-20）。
+    vendor全体を一時ディレクトリへコピーし、モジュール属性を差し替えて検証する。
+    """
+    import shutil
+    # 属性参照だと公開関数 formula に隠されるため、モジュールを直接 import
+    from importlib import import_module
+    formula_mod = import_module("scriptvedit.formula")
     from scriptvedit.cache import _FFP_MEMO
-    fonts_dir = os.path.join(_KATEX_DIR, "fonts")
-    fonts = sorted(f for f in os.listdir(fonts_dir) if f.endswith(".woff2"))
-    if not fonts:
-        return False, "KaTeXフォントがありません"
-    target = os.path.join(fonts_dir, fonts[0])
-    before = _katex_fingerprint()
-    with open(target, "rb") as f:
-        orig = f.read()
+
+    orig_dir = formula_mod._KATEX_DIR
+    tmp_root = tempfile.mkdtemp(prefix="svkatex_")
     try:
-        with open(target, "wb") as f:
-            f.write(orig + b"\x00")  # フォントを壊す（内容を変える）
-        _FFP_MEMO.clear()  # 同一プロセス内メモ化を無効化
-        after = _katex_fingerprint()
+        katex_copy = os.path.join(tmp_root, "katex")
+        shutil.copytree(orig_dir, katex_copy)
+        fonts_dir = os.path.join(katex_copy, "fonts")
+        fonts = sorted(f for f in os.listdir(fonts_dir) if f.endswith(".woff2"))
+        if not fonts:
+            return False, "KaTeXフォントがありません"
+        target = os.path.join(fonts_dir, fonts[0])
+        formula_mod._KATEX_DIR = katex_copy
+        try:
+            _FFP_MEMO.clear()
+            before = formula_mod._katex_fingerprint()
+            with open(target, "ab") as f:
+                f.write(b"\x00")  # コピーしたフォントを壊す（内容を変える）
+            _FFP_MEMO.clear()  # 同一プロセス内メモ化を無効化
+            after = formula_mod._katex_fingerprint()
+        finally:
+            formula_mod._KATEX_DIR = orig_dir
+            _FFP_MEMO.clear()
+        if before == after:
+            return False, "フォントを変更しても指紋が変わりません（鍵にフォントが入っていない）"
+        return True, f"フォント{len(fonts)}件が鍵に反映（{fonts[0]} 変更で指紋変化）"
     finally:
-        with open(target, "wb") as f:
-            f.write(orig)
-        _FFP_MEMO.clear()
-    if before == after:
-        return False, "フォントを変更しても指紋が変わりません（鍵にフォントが入っていない）"
-    return True, f"フォント{len(fonts)}件が鍵に反映（{fonts[0]} 変更で指紋変化）"
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 # --- 素材ディレクトリ解決（assets） ---
@@ -4455,9 +4470,11 @@ def check_describe_cli_md_and_filters():
 
 def check_describe_cli_output_file():
     """CLI: -o でファイル出力"""
-    out = os.path.join(tempfile.gettempdir(), "_sv_manifest_test.json")
-    if os.path.exists(out):
-        os.remove(out)
+    # 固定名だと同時pytest実行で相互に消し合うため pid+uuid でユニーク化
+    import uuid as _uuid
+    out = os.path.join(
+        tempfile.gettempdir(),
+        f"_sv_manifest_test_{os.getpid()}_{_uuid.uuid4().hex[:8]}.json")
     try:
         r = _run_cli("describe", "-o", out)
         if r.returncode != 0:

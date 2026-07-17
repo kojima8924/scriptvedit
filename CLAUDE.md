@@ -53,7 +53,7 @@ Effect / Transform / AudioEffect の `respects_fast_hint` は、その op が `~
 
 ```bash
 pip install -e .[all]      # コアは標準ライブラリのみ。extras: morph/web/beat/tools
-pytest tests/              # 432件（約30秒）
+pytest tests/              # 535件（約40秒）
 python tests/render_all.py # 実レンダリング（重い。出力は tests/output/）
 ```
 
@@ -103,7 +103,9 @@ pytest tests/
 **`copy` フィルタ**を挟んでバッファを分離するのが唯一の回避策。
 
 - `filters/video.py` の `_build_effect_filters` … pad サイズを scale 式の
-  101点サンプリング（`max(scale_expr.eval_at(i/100) for i in range(101))`）で決定し、
+  固定格子サンプリングで決定する（通常101点。振動系関数 sin/cos/tan/mod/random を
+  含む式は格子とエイリアスして点間ピークを取りこぼすため、`_expr_has_oscillatory`
+  判定で4999点の密格子に切り替える）。
   `pad=max_w:max_h:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame` → **`copy`**。
 - 同じバリアが `ken_burns` 分岐にも必要。
 

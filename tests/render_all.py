@@ -408,6 +408,44 @@ ALL_RENDERS = [
 ]
 
 
+def _generic_render(name, layer_files):
+    """レイヤーファイル群からの汎用実レンダ（縮小サイズのスモーク）。
+
+    test39〜87 は snapshot テストにしか登録されておらず、実 FFmpeg 経路を
+    一度も踏んでいなかった（issue #13 P2-20）。専用セットアップの無いテストを
+    レイヤー列挙で自動登録し、フィルタ生成〜実レンダの成立だけを確認する。
+    （スナップショット側の特殊構成: 尺・背景色・normalize等は再現しない。
+    　web/tts 依存のレイヤーは環境が無ければ FAIL としてカウントされる）
+    """
+    load_plugins(PLUGINS_DIR)
+    p = Project()
+    p.configure(width=640, height=360, fps=15, background_color="black")
+    for i, lf in enumerate(layer_files):
+        p.layer(lf, priority=i)
+    p.render(out(f"{name}.mp4"))
+
+
+def _register_generic_renders():
+    """専用 render_testNN の無いテスト番号を layers/ から自動登録する"""
+    import functools
+    import glob
+    import re as _re
+    existing = {n for n, _ in ALL_RENDERS}
+    by_test = {}
+    for path in sorted(glob.glob(os.path.join(LAYERS_DIR, "test*_*.py"))):
+        m = _re.match(r"(test\d+)_", os.path.basename(path))
+        if m:
+            by_test.setdefault(m.group(1), []).append(path)
+    for name in sorted(by_test):
+        if name not in existing:
+            ALL_RENDERS.append(
+                (name, functools.partial(_generic_render, name, by_test[name])))
+    ALL_RENDERS.sort(key=lambda t: t[0])
+
+
+_register_generic_renders()
+
+
 if __name__ == "__main__":
     # 引数で特定テストだけ実行可能: python render_all.py test19 test20 test21
     targets = sys.argv[1:] if len(sys.argv) > 1 else None
