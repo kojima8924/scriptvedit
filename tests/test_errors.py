@@ -900,6 +900,29 @@ def check_wipe_filter_in_checkpoint():
             os.unlink(temp_path)
 
 
+def check_wipe_invalid_direction():
+    """wipe の未知方向は構築時 ValueError（旧実装は無言no-opだった）"""
+    try:
+        wipe("diagonal")
+        return False, "例外が発生しませんでした"
+    except ValueError as e:
+        msg = str(e)
+        if "direction" in msg and "diagonal" in msg:
+            return True, msg
+        return False, f"メッセージが不適切: {msg}"
+
+
+def check_wipe_top_bottom_aliases():
+    """wipe('top'/'bottom') は up/down の別名として動く（READMEの旧語彙）"""
+    e_top = wipe("top")
+    e_bottom = wipe("bottom")
+    if e_top.params["direction"] != "up":
+        return False, f"top → {e_top.params['direction']!r}"
+    if e_bottom.params["direction"] != "down":
+        return False, f"bottom → {e_bottom.params['direction']!r}"
+    return True, "top→up, bottom→down"
+
+
 def check_zoom_filter_in_checkpoint():
     """zoom(scale) Effectがcheckpointのfiltergraphに出ること"""
     layer_code = (
@@ -4682,6 +4705,8 @@ ALL_TESTS = [
     ("blur filter in checkpoint", check_blur_filter_in_checkpoint),
     ("eq filter in checkpoint", check_eq_filter_in_checkpoint),
     ("wipe filter in checkpoint", check_wipe_filter_in_checkpoint),
+    ("wipe 未知方向", check_wipe_invalid_direction),
+    ("wipe top/bottom別名", check_wipe_top_bottom_aliases),
     ("zoom filter in checkpoint", check_zoom_filter_in_checkpoint),
     ("color_shift filter in checkpoint", check_color_shift_filter_in_checkpoint),
     ("rotate_to filter in checkpoint", check_rotate_to_filter_in_checkpoint),

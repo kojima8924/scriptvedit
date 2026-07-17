@@ -175,7 +175,7 @@ move(x=50%P, y=75%P)  # x=0.5, y=0.75
   - `fade(lambda u: u)` ... 透明 → 不透明にアニメーション
   - `zoom(to_value=2)` ... ズーム（scale のエイリアス、from/to指定可）
   - `rotate_to(from_deg, to_deg)` ... 回転アニメーション（bakeable）
-  - `wipe(direction)` ... ワイプ表示（"left"/"right"/"top"/"bottom"）
+  - `wipe(direction)` ... ワイプ表示（"left"/"right"/"up"/"down"。"top"/"bottom" は up/down の別名）
   - `color_shift(hue, saturation, brightness)` ... 色相/彩度/明度シフト
   - `shake(amplitude, frequency)` ... 振動（live、overlay座標変調）
   - `trim(duration)` ... 先頭からduration秒にカット（時間影響あり）

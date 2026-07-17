@@ -128,7 +128,13 @@ def rotate_to(deg=None, rad=None, *, from_deg=None, from_rad=None,
 
 
 def wipe(direction="left", progress=None):
-    """ワイプEffect。direction: left/right/up/down"""
+    """ワイプEffect。direction: left/right/up/down（top/bottomも別名として可）"""
+    aliases = {"top": "up", "bottom": "down"}
+    direction = aliases.get(direction, direction)
+    if direction not in ("left", "right", "up", "down"):
+        raise ValueError(
+            f"wipe: direction は left/right/up/down"
+            f"（または top/bottom）のいずれかです: {direction!r}")
     if progress is None:
         progress = _resolve_param(lambda u: u)
     else:
