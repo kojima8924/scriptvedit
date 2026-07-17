@@ -1,0 +1,62 @@
+# CI: テスト(Windows/Linux × Python 3.10/3.13) + wheel ビルド + extras 単独インストール検証
+# issue #13 P3-21。gitignore対象の大容量素材・edge-tts・VOICEVOX が無い環境では
+# 依存テストが pytest.skip される前提(issue #12 で整備済み)。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: FFmpeg を導入
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - name: 依存をインストール
+        run: python -m pip install -e .[all,dev]
+      - name: テスト実行(カバレッジ付き)
+        run: python -m pytest tests/ -q --cov=scriptvedit --cov-report=term
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: wheel をビルド
+        run: |
+          python -m pip install build
+          python -m build
+      - name: wheel のインストールと import スモーク
+        run: |
+          python -m pip install dist/*.whl
+          python -c "import scriptvedit; print('import OK:', scriptvedit.MANIFEST_VERSION)"
+          python -m scriptvedit describe --name fade > /dev/null
+      - name: 各 extra の単独クリーンインストール検証
+        # extra を1つだけ入れて対応モジュールが import できること(issue #13 P1-5 の回帰防止)
+        run: |
+          set -e
+          WHEEL=$(ls dist/*.whl)
+          declare -A MODS=( [morph]=scriptvedit.morph [beat]=scriptvedit.beat [tools]=scriptvedit.testkit [web]=scriptvedit.web [tts]=scriptvedit.tts )
+          for ex in morph beat tools web tts; do
+            python -m venv "/tmp/venv_$ex"
+            "/tmp/venv_$ex/bin/pip" install --quiet "${WHEEL}[$ex]"
+            "/tmp/venv_$ex/bin/python" -c "import importlib; importlib.import_module('${MODS[$ex]}'); print('$ex OK')"
+          done
+      - name: 成果物をアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
