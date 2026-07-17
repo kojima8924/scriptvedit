@@ -1202,7 +1202,11 @@ class Project:
                 if current_time < target_time:
                     current_time = target_time
                 continue
-            if item.duration is not None:
+            # 正規リゾルバ(_resolve_anchors)と同じ非進行判定を適用する。
+            # show()/show_until() は _advance=False で時刻を進めないため、
+            # ここで無条件に加算するとキャッシュ用メタのアンカーだけずれて
+            # cache有無で後続レイヤーの開始時刻が変わる（issue #13 P2-10）
+            if item.duration is not None and getattr(item, "_advance", True):
                 current_time += item.duration
         return objects, anchors
 

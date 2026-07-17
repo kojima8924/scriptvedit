@@ -156,6 +156,42 @@ def test_audio_only_project_real_render(tmp_path):
     assert kinds == ["audio", "video"], f"stream構成が不正: {kinds}"
 
 
+# --- issue #13 P2-10: キャッシュ用アンカー計算と正規リゾルバの一致 ---------
+
+def test_layer_data_anchor_matches_resolver_with_show(tmp_path):
+    """show()（非進行）の後のanchorが、正規リゾルバとキャッシュ用メタで一致する"""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg が無い環境")
+    from scriptvedit import Project
+
+    png = tmp_path / "dot.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+         "-i", "color=c=red:s=8x8:d=1", "-frames:v", "1", str(png)],
+        check=True, capture_output=True, timeout=30)
+    layer = tmp_path / "show_anchor_layer.py"
+    layer.write_text(
+        "from scriptvedit import *\n"
+        f"o = Object(r\"{png}\")\n"
+        "o.show(5)\n"          # 非進行（時刻を進めない）
+        "anchor('A')\n"
+        f"o2 = Object(r\"{png}\")\n"
+        "o2.time(1)\n",        # 総尺が0にならないよう通常オブジェクトも置く
+        encoding="utf-8")
+
+    p = Project()
+    p.configure(width=160, height=90, fps=30)
+    p.layer(str(layer))
+    p.render(str(tmp_path / "out.mp4"), dry_run=True)
+
+    canonical = p._anchors.get("A")
+    _, meta_anchors = p._get_layer_data(0)
+    assert canonical == 0, f"正規リゾルバのA={canonical}（show()は非進行のはず）"
+    assert meta_anchors.get("A") == canonical, (
+        f"キャッシュ用メタのanchorが正規リゾルバとずれている: "
+        f"meta={meta_anchors.get('A')}, canonical={canonical}")
+
+
 # --- issue #13 P2-13: 固定格子サンプリングのエイリアシング -----------------
 
 def test_scale_pad_covers_intersample_peak():
