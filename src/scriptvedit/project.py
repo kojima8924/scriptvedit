@@ -930,7 +930,12 @@ class Project:
         if interval is not None:
             _require_number("storyboard", "interval", interval, 0.001, None)
 
-        tmp_dir = os.path.join(_ARTIFACT_DIR, "storyboard", "_frames")
+        # 作業ディレクトリは pid+uuid でユニーク化する。固定名 "_frames" だと
+        # 複数プロジェクト/並列実行で相互にフレームを削除・混入する（issue #13 P2-15）
+        import uuid as _uuid
+        tmp_dir = os.path.join(
+            _ARTIFACT_DIR, "storyboard",
+            f"_frames_{os.getpid()}_{_uuid.uuid4().hex[:8]}")
         os.makedirs(tmp_dir, exist_ok=True)
         try:
             # プラン解決・レイヤーexec・checkpoint確保は一度だけ実施し、
@@ -979,9 +984,16 @@ class Project:
             d = os.path.dirname(out_path)
             if d:
                 os.makedirs(d, exist_ok=True)
-            tmp_out = out_path + ".tmp.png"
-            canvas.save(tmp_out)
-            os.replace(tmp_out, out_path)
+            # 一時ファイルも pid+uuid でユニーク化（同時実行の相互上書き防止）
+            tmp_out = _unique_tmp_path(out_path)
+            try:
+                canvas.save(tmp_out)
+                os.replace(tmp_out, out_path)
+            finally:
+                try:
+                    os.remove(tmp_out)  # 失敗時の残骸掃除（成功時は存在しない）
+                except OSError:
+                    pass
         finally:
             _shutil.rmtree(tmp_dir, ignore_errors=True)
         return out_path
