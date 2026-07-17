@@ -114,6 +114,9 @@ def _require_number(func_name, param_name, value, lo=None, hi=None):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(
             f"{func_name}: {param_name} は数値で指定してください: {value!r}")
+    if not _math.isfinite(value):
+        raise ValueError(
+            f"{func_name}: {param_name} に NaN/Infinity は使えません: {value!r}")
     if (lo is not None and value < lo) or (hi is not None and value > hi):
         rng = f"{lo if lo is not None else ''}〜{hi if hi is not None else ''}"
         raise ValueError(

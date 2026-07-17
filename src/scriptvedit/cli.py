@@ -67,8 +67,14 @@ def watch(script_path, *, out=None, interval=0.5, max_cycles=None):
     max_cycles を指定するとその回数だけポーリングして戻る（テスト用）。
     """
     script_path = os.path.abspath(script_path)
-    if not os.path.exists(script_path):
+    if not os.path.isfile(script_path):
         raise FileNotFoundError(f"watch: スクリプトが見つかりません: {script_path}")
+    if (isinstance(interval, bool) or not isinstance(interval, (int, float))
+            or not _math.isfinite(interval) or interval <= 0):
+        raise ValueError(f"watch: interval は正の有限数（秒）で指定してください: {interval!r}")
+    if max_cycles is not None and (isinstance(max_cycles, bool)
+                                   or not isinstance(max_cycles, int) or max_cycles < 1):
+        raise ValueError(f"watch: max_cycles は1以上の整数で指定してください: {max_cycles!r}")
 
     def _run():
         cmd = [sys.executable, script_path]
@@ -170,6 +176,10 @@ def _main(argv=None):
             print(text_out)
         return 0
     if args.command == "cache":
+        if (not _math.isfinite(args.keep_days)) or args.keep_days < 0:
+            print(f"cache: --keep-days は0以上の有限数で指定してください: {args.keep_days}",
+                  file=sys.stderr)
+            return 2
         try:
             if args.clear:
                 cache_clear(args.dir, force=args.yes)
@@ -194,8 +204,12 @@ def _main(argv=None):
             return 2
         return 0
     if args.command == "watch":
-        watch(args.script, out=args.out, interval=args.interval,
-              max_cycles=args.max_cycles)
+        try:
+            watch(args.script, out=args.out, interval=args.interval,
+                  max_cycles=args.max_cycles)
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         return 0
     parser.print_help()
     return 1

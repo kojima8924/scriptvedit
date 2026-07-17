@@ -67,6 +67,27 @@ class Project:
         if "background_color" in kwargs:
             kwargs["background_color"] = _validate_ffmpeg_color(
                 "configure", kwargs["background_color"])
+        # width/height: 正の整数（0や負はFFmpegの s=0x720 等で失敗するため構築時に弾く）
+        for key in ("width", "height"):
+            if key in kwargs:
+                v = kwargs[key]
+                if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+                    raise ValueError(
+                        f"configure: {key} は正の整数で指定してください: {v!r}")
+        # fps: 正の有限数（NaN/Infinityはフィルタ式やタイムベースを壊す）
+        if "fps" in kwargs:
+            v = kwargs["fps"]
+            if (isinstance(v, bool) or not isinstance(v, (int, float))
+                    or not _math.isfinite(v) or v <= 0):
+                raise ValueError(
+                    f"configure: fps は正の有限数で指定してください: {v!r}")
+        # duration: None（自動）または正の有限数
+        if "duration" in kwargs and kwargs["duration"] is not None:
+            v = kwargs["duration"]
+            if (isinstance(v, bool) or not isinstance(v, (int, float))
+                    or not _math.isfinite(v) or v <= 0):
+                raise ValueError(
+                    f"configure: duration は正の有限数で指定してください: {v!r}")
         # preset: width/height/fps をまとめて設定（個別指定で上書き可能なので先に適用）
         if "preset" in kwargs:
             name = kwargs.pop("preset")

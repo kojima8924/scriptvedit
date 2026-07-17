@@ -193,6 +193,11 @@ def new_project(path, *, template="minimal", force=False, width=1280, height=720
         raise ValueError(
             f"scriptvedit new: 未知のテンプレート {template!r}"
             f"（使えるのは {', '.join(TEMPLATES)}）")
+    # width/height/fps: 正の整数（0や負で生成した main.py はレンダ時に FFmpeg が失敗する）
+    for key, v in (("width", width), ("height", height), ("fps", fps)):
+        if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+            raise ValueError(
+                f"scriptvedit new: --{key} は正の整数で指定してください: {v!r}")
     root = os.path.abspath(path)
     if os.path.exists(root) and not os.path.isdir(root):
         raise ValueError(f"scriptvedit new: ディレクトリではありません: {root}")
