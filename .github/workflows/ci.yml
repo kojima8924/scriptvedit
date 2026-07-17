@@ -25,11 +25,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: FFmpeg を導入
+      - name: FFmpeg を導入 (Windows)
+        if: runner.os == 'Windows'
         uses: FedericoCarboni/setup-ffmpeg@v3
-      - name: 日本語フォントを導入 (Linux)
+      - name: FFmpeg と日本語フォントを導入 (Linux)
+        # setup-ffmpeg の Linux 静的ビルドは drawtext(freetype) を含まず
+        # "Filter not found" になるため、apt のフル機能ビルドを使う
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk
       - name: 依存をインストール
         run: python -m pip install -e .[all,dev]
       - name: テスト実行(カバレッジ付き)

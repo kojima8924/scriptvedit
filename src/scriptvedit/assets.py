@@ -126,7 +126,11 @@ def _rel_parts(relpath):
     参照できてしまうため、明確なエラーで拒否する（パストラバーサル対策）。
     """
     s = str(relpath)
-    if os.path.isabs(s) or _re.match(r"^[A-Za-z]:", s):
+    # `/`・`\` 始まり(ルート付きだがドライブ無し)は明示的に拒否する。
+    # Python 3.13 の Windows では ntpath.isabs("/etc/passwd") が False に
+    # 変わったため、isabs だけに頼るとすり抜ける(CI の 3.13 で実測)
+    if os.path.isabs(s) or s.startswith(("/", "\\")) \
+            or _re.match(r"^[A-Za-z]:", s):
         raise ValueError(
             f"asset: 絶対パス・ドライブレター付きパスは指定できません: {relpath!r}\n"
             "assets/ からの相対パスで指定してください（例: asset(\"images/bg.png\")）。")
