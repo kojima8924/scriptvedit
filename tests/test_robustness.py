@@ -156,6 +156,79 @@ def test_audio_only_project_real_render(tmp_path):
     assert kinds == ["audio", "video"], f"stream構成が不正: {kinds}"
 
 
+# --- issue #13 P1-3: レイヤーキャッシュ再利用時のalpha保持 -----------------
+
+def test_layer_cache_paths_use_webm_extension():
+    """レイヤーキャッシュはVP9+alphaのため.webm（デコーダ強制が効く拡張子）"""
+    from scriptvedit import Project
+    from scriptvedit.cache import _layer_cache_paths
+
+    p = Project()
+    video_path, json_path = _layer_cache_paths(__file__, p)
+    assert video_path.endswith(".webm"), video_path
+    assert json_path.endswith(".anchors.json"), json_path
+
+
+def test_layer_cache_make_use_preserves_alpha(tmp_path):
+    """cache='make'→'use' の往復で透過が保持され、背景色が透けて見える"""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg が無い環境")
+    from scriptvedit import Project
+    from scriptvedit.cache import _layer_cache_paths
+
+    # 中央に置く小さな赤画像（周囲はキャンバスの透過部分になる）
+    png = tmp_path / "red.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+         "-i", "color=c=red:s=40x40:d=1", "-frames:v", "1", str(png)],
+        check=True, capture_output=True, timeout=30)
+
+    layer = tmp_path / "cached_layer.py"
+    layer.write_text(
+        "from scriptvedit import *\n"
+        f"o = Object(r\"{png}\")\n"
+        "o.time(1) <= move(x=0.5, y=0.5, anchor=\"center\")\n",
+        encoding="utf-8")
+
+    def _render(cache_mode, out_name):
+        p = Project()
+        p.configure(width=160, height=90, fps=30, background_color="blue")
+        p.layer(str(layer), cache=cache_mode)
+        out = tmp_path / out_name
+        p.render(str(out), timeout=120)
+        return p, out
+
+    p1, _ = _render("make", "out_make.mp4")
+    cache_video, _ = _layer_cache_paths(str(layer), p1)
+    assert os.path.exists(cache_video), "レイヤーキャッシュが生成されていない"
+    try:
+        _, out2 = _render("use", "out_use.mp4")
+
+        # 左上隅（透過部分）のピクセル: alphaが保持されていれば背景の青、
+        # alphaが落ちるとキャッシュの黒ベタが背景を覆う
+        result = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(out2),
+             "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+            check=True, capture_output=True, timeout=30)
+        r, g, b = result.stdout[0], result.stdout[1], result.stdout[2]
+        assert b > 128 and r < 100, \
+            f"透過部分に背景色(青)が見えない: RGB=({r},{g},{b})"
+        # 中央ピクセルは赤画像
+        w, h = 160, 90
+        center = ((h // 2) * w + w // 2) * 3
+        cr, cb = result.stdout[center], result.stdout[center + 2]
+        assert cr > 128 and cb < 100, \
+            f"中央に赤画像が見えない: R={cr}, B={cb}"
+    finally:
+        # グローバル__cache__を汚さない（このテスト専用鍵だが掃除しておく）
+        for path in (cache_video,
+                     _layer_cache_paths(str(layer), p1)[1]):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 # --- 1. asset() のパストラバーサル拒否 -----------------------------------
 
 @pytest.fixture

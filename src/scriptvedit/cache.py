@@ -456,10 +456,14 @@ def _layer_cache_paths(filename, project=None):
         sigs.append(f"bg={project.background_color}")
         key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
         layer_dir = os.path.join(_ARTIFACT_DIR, "layer", basename)
-        return (os.path.join(layer_dir, f"{key}.mkv"),
+        # 拡張子は .webm 固定。レイヤーキャッシュは libvpx-vp9 + yuva420p で、
+        # 再利用時のデコーダ選択（_decoder_input_args）が .webm 拡張子で
+        # libvpx-vp9 を強制する。.mkv だとネイティブVP9デコーダ（alpha非対応）
+        # が選ばれ、透過が黒背景化して下層レイヤーを覆う（issue #13 P1-3）。
+        return (os.path.join(layer_dir, f"{key}.webm"),
                 os.path.join(layer_dir, f"{key}.anchors.json"))
     # フォールバック（後方互換）
-    return (os.path.join(_CACHE_DIR, f"{basename}.mkv"),
+    return (os.path.join(_CACHE_DIR, f"{basename}.webm"),
             os.path.join(_CACHE_DIR, f"{basename}.anchors.json"))
 
 

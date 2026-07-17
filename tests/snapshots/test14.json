@@ -28,7 +28,7 @@
     "test14.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/layer/test14_maku/14812d873d7c3cab.mkv": [
+    "__cache__/artifacts/layer/test14_maku/14812d873d7c3cab.webm": [
       "ffmpeg",
       "-y",
       "-f",
@@ -57,7 +57,7 @@
       "0",
       "-t",
       "6.0",
-      "__cache__/artifacts/layer/test14_maku/14812d873d7c3cab.mkv"
+      "__cache__/artifacts/layer/test14_maku/14812d873d7c3cab.webm"
     ],
     "__cache__/artifacts/checkpoint/8fcd4e39/0445601768d3639c.png": [
       "ffmpeg",
