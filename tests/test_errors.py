@@ -2930,6 +2930,10 @@ def check_narrate_without_voicevox():
         return True, "narrate実行成功（VOICEVOX起動中）"
     except (ImportError, ConnectionError, TimeoutError, RuntimeError) as e:
         return True, f"想定内エラー: {type(e).__name__}"
+    except FileNotFoundError as e:
+        if "フォント" in str(e):
+            raise  # フォント不在はランナー側で skip される（最小環境）
+        return False, f"予期しない例外: {type(e).__name__}: {e}"
     except Exception as e:
         return False, f"予期しない例外: {type(e).__name__}: {e}"
 
@@ -4970,8 +4974,16 @@ def test_error_case(name, check):
     """各エラーケースを pytest 経由で検証する（失敗時はメッセージを表示）
 
     check が pytest.skip() を投げた場合はそのまま skip になる（依存不在を隠さない）。
+    日本語フォントが1つも無い最小環境では text 系 check が FileNotFoundError に
+    なるため、これも正直に skip する（CLAUDE.md の方針。CI の Linux では
+    fonts-noto-cjk を導入して実際に走らせる）。
     """
-    ok, msg = check()
+    try:
+        ok, msg = check()
+    except FileNotFoundError as e:
+        if "フォント" in str(e):
+            pytest.skip(f"日本語フォントが無い環境: {str(e).splitlines()[0]}")
+        raise
     assert ok, f"{name}: {msg}"
 
 

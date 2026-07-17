@@ -1,4 +1,4 @@
-# scriptvedit
+# ScriptVEdit
 
 Pythonスクリプトで動画を構成するDSL。ffmpegによるレンダリング。
 
@@ -1218,6 +1218,10 @@ python scripts/tools_baseline.py verify baseline_snapshots.json
   - VOICEVOX エンジン（`backend="voicevox"`。オフライン・キャラボイス。別途起動が必要）
   - edge-tts（`backend="edge"`。`pip install edge-tts` または `pip install scriptvedit[tts]`。導入が楽だがオンライン必須）
   - Windows 標準音声（`backend="sapi"`。追加導入不要・オフライン。Windows 専用）
+
+## ライセンス
+
+[MIT License](LICENSE)
 
 ## ロードマップ
 

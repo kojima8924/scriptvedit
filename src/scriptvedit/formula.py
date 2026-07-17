@@ -64,10 +64,16 @@ def _katex_fingerprint():
                 f"formula() は {_KATEX_DIR} に katex.min.css / katex.min.js / fonts/ が"
                 f"配置されている必要があります。")
     parts = [f"tpl:{_file_fingerprint(_template_path(_FORMULA_TEMPLATE))}"]
-    # vendor(katex) ディレクトリ全体をハッシュ（相対パス順で決定的に）
+    # vendor(katex) のうち**レンダ結果に影響するファイルだけ**をハッシュ
+    # （相対パス順で決定的に）。README 等のドキュメントを含めると、
+    # 改行属性の履歴差（旧チェックアウトのCRLF vs fresh cloneのLF）だけで
+    # 鍵が割れ、プラットフォーム間でスナップショットが食い違う（issue #13 CI）
+    render_exts = (".css", ".js", ".woff2", ".woff", ".ttf", ".html")
     for root, dirs, files in os.walk(_KATEX_DIR):
         dirs.sort()
         for name in sorted(files):
+            if not name.lower().endswith(render_exts):
+                continue
             path = os.path.join(root, name)
             rel = os.path.relpath(path, _KATEX_DIR).replace("\\", "/")
             parts.append(f"{rel}:{_file_fingerprint(path)}")

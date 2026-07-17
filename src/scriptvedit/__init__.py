@@ -8,6 +8,18 @@
 import os
 import sys
 
+# 進捗表示は日本語のため、コンソールが日本語を符号化できないロケール
+# （英語版Windowsのcp1252等）では print が UnicodeEncodeError で
+# レンダ自体が落ちる。エンコーディングは変えず、符号化不能文字だけ
+# 置換して継続する（cp932/UTF-8環境には影響しない）。issue #13 CI で実測。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        enc = (getattr(_stream, "encoding", None) or "").lower().replace("-", "")
+        if enc and enc != "utf8":
+            _stream.reconfigure(errors="replace")
+    except Exception:
+        pass  # リダイレクト先やIDE組込コンソール等、reconfigure非対応は無視
+
 __all__ = [
     # コアクラス
     "Project", "Object", "Transform", "TransformChain", "Effect", "EffectChain",
