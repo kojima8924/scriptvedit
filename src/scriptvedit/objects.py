@@ -498,6 +498,43 @@ class Object:
         """`a >> b`: b を a の終了直後に開始する（`a >> pause.time(0.5) >> b` 可）"""
         return _link_after(self, other)
 
+    def __mul__(self, count):
+        """`obj * 3`: 3回連続再生（映像はloopフィルタ、音声はaloop）。
+
+        表示尺は「現時点の実効尺 × 回数」になる。繰り返す区間の尺は
+        この時点で確定させて効果に焼き込む（後から time() で上書きしても
+        繰り返し境界は変わらない）。
+        """
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise TypeError(
+                f"* の右辺は繰り返し回数（2以上の整数）です: {count!r}"
+                f"（音量なら again(), 速度なら speed() を使ってください）")
+        if count < 1:
+            raise ValueError(f"* の繰り返し回数は1以上が必要です: {count}")
+        if count == 1:
+            return self
+        if self.media_type in ("image", "text"):
+            raise TypeError(
+                f"{self.media_type} には素材尺がないため * は使えません。"
+                f"time(seconds) で表示尺を指定してください。")
+        segment = self.length()  # 繰り返す区間の実尺（この時点で確定）
+        if self._has_video is not False and not self._video_deleted:
+            self._append_effect(
+                Effect("repeat", count=count, segment=segment))
+        if self._has_audio is not False and not self._audio_deleted:
+            self.audio_effects.append(
+                AudioEffect("arepeat", count=count, segment=segment))
+        self.duration = segment * count
+        self._duration_auto = False
+        return self
+
+    __rmul__ = __mul__
+
+    def __neg__(self):
+        """`-obj`: 逆再生（reverse() の糖衣。音声は反転されない）"""
+        self._append_effect(Effect("reverse"))
+        return self
+
     def _append_effect(self, e):
         """Effect追加の共通経路（delete処理・時間系の検証・speedの音声追従）"""
         if e.name == "delete":
@@ -826,6 +863,8 @@ class Object:
                     at = e.params.get("at", 0.0)
                     if at < v:
                         v = v + e.params.get("duration", 0.0)
+                elif e.name == "repeat":
+                    v = v * e.params.get("count", 1)
             durs.append(v)
         if audio_active:
             a = base_dur
@@ -843,6 +882,8 @@ class Object:
                     rate = e.params.get("rate", 1.0)
                     if rate > 0:
                         a = a / rate
+                elif e.name == "arepeat":
+                    a = a * e.params.get("count", 1)
             durs.append(a)
         if not durs:
             # 両 stream とも削除/不在 → 元尺を返す（0 は返さない）

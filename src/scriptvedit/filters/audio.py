@@ -53,6 +53,22 @@ def _build_audio_pre_filters(obj):
             rate = e.params.get("rate", 1.0)
             for r in _atempo_chain_rates(rate):
                 filters.append(f"atempo={r}")
+        elif e.name == "arepeat":
+            # obj * n（DSL糖衣）の音声側: 区間全体を n 回連続再生。
+            # aloop の size はサンプル数（segment × sample_rate）。
+            # sample_rate は probe で取得し、不能時は 44100 へフォールバック
+            # （dry_run の未生成キャッシュ等。実レンダでは通常 probe できる）
+            n = e.params["count"]
+            segment = e.params["segment"]
+            sr = None
+            proj = Project._current
+            if proj is not None:
+                info = proj._probe_media(obj.source)
+                sr = (info or {}).get("sample_rate")
+            sr = sr or 44100
+            filters.append(
+                f"aloop=loop={n - 1}:size={int(round(segment * sr))}")
+            filters.append("asetpts=N/SR/TB")
     return filters
 
 
@@ -75,3 +91,4 @@ def _build_audio_effect_filters(obj, dur):
 
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
 from scriptvedit.expr import Const
+from scriptvedit.project import Project

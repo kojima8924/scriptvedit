@@ -852,6 +852,8 @@ def _estimate_effect_input_length(obj, upto_effect):
             at = e.params.get("at", 0.0)
             if at < cur:
                 cur = cur + e.params.get("duration", 0.0)
+        elif e.name == "repeat":
+            cur = cur * e.params.get("count", 1)
     return cur
 
 
@@ -885,6 +887,18 @@ def _build_video_pre_filters(obj, label_prefix="pre"):
                     f"reverse は全フレームをメモリに保持するため長尺には使えません。"
                     f"trim() で対象区間を短くしてから適用してください。")
             filters.append("reverse")
+        elif e.name == "repeat":
+            # obj * n（DSL糖衣）: 区間全体を n 回連続再生。
+            # segment は構築時に確定済みの区間実尺（dry_run でも決定的）。
+            # loop はフレームをメモリ保持するため size が必要 → segment×fps
+            n = e.params["count"]
+            segment = e.params["segment"]
+            proj = Project._current
+            fps = proj.fps if proj else 30
+            frames = _builtins.max(1, int(_math.ceil(segment * fps)))
+            filters.append(f"loop=loop={n - 1}:size={frames}:start=0")
+            # loop 後の PTS はフレーム番号基準で振り直す（連続再生に整列）
+            filters.append(f"setpts=N/({fps}*TB)")
         elif e.name == "freeze_frame":
             # 指定時刻のフレームで duration 秒静止 → 続きを再生（総尺 +duration）
             # trim 3分割 + loop(先頭フレーム複製) + concat のチェーン内サブグラフ

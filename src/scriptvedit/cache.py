@@ -404,6 +404,9 @@ def _apply_time_effects_to_duration(dur, effects):
             at = e.params.get("at", 0.0)
             if at < cur:
                 cur = cur + e.params.get("duration", 0.0)
+        elif name == "repeat":
+            # obj * n（DSL糖衣）: n回連続再生で尺は n 倍
+            cur = cur * e.params.get("count", 1)
     return cur
 
 

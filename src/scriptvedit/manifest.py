@@ -473,6 +473,9 @@ _MANIFEST_USAGE = {
         "slice": "clip = Object(src)[2:5]              # 素材時間2〜5秒を切り出し（表示尺=3秒が既定。負値は末尾相対、stepは不可）",
         "place": "clip @ 12                            # タイムライン12秒に絶対配置（非進行）。@ 'intro.end' でアンカー参照可",
         "sequence": "a >> b                             # b を a の終了直後に開始。a >> pause.time(0.5) >> b で間も可（要・先行の尺確定）",
+        "repeat": "clip * 3                             # 3回連続再生（表示尺=実効尺×3。映像loop+音声aloop）",
+        "reverse": "-clip                               # 逆再生（reverse()の糖衣。音声は反転されない）",
+        "strict": "p.render(out, strict=True)           # audit の warning があればレンダ前に停止",
     },
     "expr": {
         "lambda": "lambda u: lerp(0.2, 0.8, u)   # u は 0..1 の進行度",
@@ -725,6 +728,16 @@ _MANIFEST_INTERNAL_OPS = {
         "kind": "transform",
         "summary": "グリッド配置Transform（Object.grid(cols, rows, gap) で生成）",
         "example": "obj.grid(3, 2, gap=8)",
+    },
+    "repeat": {
+        "kind": "effect",
+        "summary": "n回連続再生の映像側Effect（DSL糖衣 `obj * n` で生成。live）",
+        "example": "clip = Object('v.mp4')[0:2] * 3   # 2秒区間を3回=6秒",
+    },
+    "arepeat": {
+        "kind": "audio_effect",
+        "summary": "n回連続再生の音声側AudioEffect（DSL糖衣 `obj * n` で生成）",
+        "example": "clip = Object('v.mp4')[0:2] * 3",
     },
 }
 

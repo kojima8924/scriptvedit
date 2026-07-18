@@ -228,3 +228,141 @@ def test_text_slice_rejected():
     t = text("字幕", size=48, border=3)
     with pytest.raises(TypeError, match="素材時間がない"):
         t[1:2]
+
+
+# --- obj * n リピート ------------------------------------------------------
+
+def test_repeat_sets_effects_and_duration():
+    """obj*3 は repeat/arepeat(count, segment) を積み、表示尺を3倍にする"""
+    _mk()
+    o = Object(asset("video/fox_noaudio.mp4"))[0:2] * 3
+    reps = [e for e in o.effects if e.name == "repeat"]
+    assert reps and reps[0].params["count"] == 3
+    assert abs(reps[0].params["segment"] - 2.0) < 1e-6
+    assert abs(o.duration - 6.0) < 1e-6
+    assert abs(o.length() - 6.0) < 1e-6
+
+
+def test_repeat_rmul_and_noop():
+    """3 * obj も可。*1 は何もしない"""
+    _mk()
+    src = asset("video/fox_noaudio.mp4")
+    o = 2 * Object(src)[0:1]
+    assert any(e.name == "repeat" for e in o.effects)
+    o2 = Object(src)[0:1] * 1
+    assert not any(e.name == "repeat" for e in o2.effects)
+
+
+def test_repeat_errors():
+    """非整数・0以下・画像は明示エラー"""
+    _mk()
+    src = asset("video/fox_noaudio.mp4")
+    with pytest.raises(TypeError, match="整数"):
+        Object(src) * 1.5
+    with pytest.raises(ValueError, match="1以上"):
+        Object(src) * 0
+    with pytest.raises(TypeError, match="素材尺がない"):
+        Object(asset("images/onigiri_tenmusu.png")) * 2
+
+
+def test_repeat_real_render(tmp_path):
+    """実レンダ: 赤1秒+青1秒の動画を*2すると尺4秒・2周目(t=2.5)が赤"""
+    src = _two_color_video_1s(tmp_path)
+    layer = tmp_path / "repeat_layer.py"
+    layer.write_text(
+        "from scriptvedit import *\n"
+        f"o = Object(r\"{src}\") * 2\n"
+        "o <= move(x=0.5, y=0.5, anchor='center')\n",
+        encoding="utf-8")
+    out = tmp_path / "rep.mp4"
+    p = Project()
+    p.configure(width=64, height=36, fps=10, background_color="black")
+    p.layer(str(layer))
+    p.render(str(out), timeout=120)
+
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(out)],
+        check=True, capture_output=True, text=True, timeout=30)
+    assert abs(float(probe.stdout.strip()) - 4.0) < 0.3
+    result = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", "2.5", "-i", str(out),
+         "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+        check=True, capture_output=True, timeout=30)
+    center = ((36 // 2) * 64 + 32) * 3
+    r, g, b = result.stdout[center:center + 3]
+    assert r > 128 and b < 100, f"2周目が赤でない: RGB=({r},{g},{b})"
+
+
+def _two_color_video_1s(tmp_path):
+    """赤1秒+青1秒の2秒動画（リピート検証用）"""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg が無い環境")
+    out = tmp_path / "rb1.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error",
+         "-f", "lavfi", "-i", "color=c=red:s=64x36:d=1:r=10",
+         "-f", "lavfi", "-i", "color=c=blue:s=64x36:d=1:r=10",
+         "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v]",
+         "-map", "[v]", "-pix_fmt", "yuv420p", str(out)],
+        check=True, capture_output=True, timeout=60)
+    return str(out)
+
+
+# --- -obj 逆再生 -----------------------------------------------------------
+
+def test_neg_applies_reverse():
+    """-obj は reverse() の糖衣"""
+    _mk()
+    o = -Object(asset("video/fox_noaudio.mp4"))[0:2]
+    assert any(e.name == "reverse" for e in o.effects)
+
+
+# --- render(strict=True) ---------------------------------------------------
+
+def test_render_strict_blocks_on_warning(tmp_path):
+    """auditのwarningがあればレンダ前にRuntimeError（dry_runにも適用）"""
+    from scriptvedit import Project as _P
+    layer = tmp_path / "strict_layer.py"
+    layer.write_text(
+        "from scriptvedit import *\n"
+        "text('裸の文字', size=60).time(2)\n",  # 縁取りなし→warning
+        encoding="utf-8")
+    p = _P()
+    p.configure(width=640, height=360, fps=30)
+    p.layer(str(layer))
+    with pytest.raises(RuntimeError, match="text-no-decoration"):
+        p.render(str(tmp_path / "s.mp4"), dry_run=True, strict=True)
+
+
+def test_render_strict_passes_clean(tmp_path):
+    """warningが無ければstrictでも通る"""
+    from scriptvedit import Project as _P
+    layer = tmp_path / "clean_layer.py"
+    layer.write_text(
+        "from scriptvedit import *\n"
+        "text('読みやすい', size=60, border=3).time(2)\n",
+        encoding="utf-8")
+    p = _P()
+    p.configure(width=640, height=360, fps=30)
+    p.layer(str(layer))
+    result = p.render(str(tmp_path / "c.mp4"), dry_run=True, strict=True)
+    assert result  # dry_runコマンドが返る
+
+
+# --- %P パーセント記法の網羅 -----------------------------------------------
+
+def test_percent_notation_across_factories():
+    """%P は数値を取る主要な引数で一貫して使える（50%P == 0.5）"""
+    from scriptvedit import P, crop, move, opacity, pad, resize
+    _mk()
+    assert 50 % P == 0.5 and 75 % P == 0.75
+
+    m = move(x=50 % P, y=25 % P)
+    assert m.params["x"].value == 0.5 and m.params["y"].value == 0.25
+    r = resize(sx=50 % P, sy=50 % P)
+    assert r.params["sx"] == 0.5
+    o = opacity(50 % P)
+    assert getattr(o.params["value"], "value", o.params["value"]) == 0.5
+    t = text("x", x=50 % P, y=10 % P, size=48, border=3)
+    assert t._text_spec["x"].value == 0.5

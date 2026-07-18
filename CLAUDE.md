@@ -55,7 +55,7 @@ Effect / Transform / AudioEffect の `respects_fast_hint` は、その op が `~
 
 ```bash
 pip install -e .[all]      # コアは標準ライブラリのみ。extras: morph/web/beat/tools
-pytest tests/              # 566件（約1分）
+pytest tests/              # 574件（約1分）
 python tests/render_all.py # 実レンダリング（重い。出力は tests/output/）
 ```
 

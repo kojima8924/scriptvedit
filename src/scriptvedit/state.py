@@ -120,7 +120,7 @@ _TERMINAL_FRAME_EFFECTS = {"morph_to", "explode_to", "assemble_from"}
 # 時間操作系の live Effect（setpts/reverse/concat による時間変形）。
 # チェックポイントベイクの表示尺基準と食い違うため bakeable にはしない
 # （ベイク済みソースに対して毎レンダ live で適用する）。
-_TIME_LIVE_EFFECTS = {"speed", "reverse", "freeze_frame"}
+_TIME_LIVE_EFFECTS = {"speed", "reverse", "freeze_frame", "repeat"}
 
 # reverse Effect の実効尺上限（全フレームをメモリに保持するため長尺は危険）
 _REVERSE_MAX_SEC = 30.0

@@ -747,19 +747,20 @@ class Project:
                         f"定義済みアンカー: {defined}")
 
     def render(self, output_path, *, dry_run=False, timeout=None,
-               start=None, end=None, draft=False, alpha=False):
+               start=None, end=None, draft=False, alpha=False, strict=False):
         # _ACTIVE_QUALITY を try/finally で復元（draft レンダ後に "draft" が
         # 残留して別レンダの鍵に混入するのを防ぐ。dry_run早期returnや例外時も復元）
         _prev_active_quality = _ACTIVE_QUALITY[0]
         try:
             return self._render_impl(
                 output_path, dry_run=dry_run, timeout=timeout,
-                start=start, end=end, draft=draft, alpha=alpha)
+                start=start, end=end, draft=draft, alpha=alpha, strict=strict)
         finally:
             _ACTIVE_QUALITY[0] = _prev_active_quality
 
     def _render_impl(self, output_path, *, dry_run=False, timeout=None,
-                     start=None, end=None, draft=False, alpha=False):
+                     start=None, end=None, draft=False, alpha=False,
+                     strict=False):
         output_path = os.fsdecode(output_path)
         self._reset_runtime_state()
         self._dry_run = dry_run
@@ -801,6 +802,19 @@ class Project:
             else:
                 self._exec_layer(spec["filename"], spec["priority"])
         self._resolve_anchors()
+
+        # strict: p.audit() の warning が1件でもあればレンダ前に停止する
+        # （品質lintの厳格モード。dry_run にも適用してCI等で早期検出できるように）
+        if strict:
+            from importlib import import_module as _import_module
+            _sva = _import_module("scriptvedit.audit")
+            warns = [f for f in _sva.audit_project(self)
+                     if f["severity"] == "warning"]
+            if warns:
+                raise RuntimeError(
+                    f"render(strict=True): audit の warning が {len(warns)} 件"
+                    f"あります:\n" + "\n".join(
+                        f"  [{f['code']}] {f['message']}" for f in warns))
 
         if dry_run:
             web_cmds = self._collect_web_cmds()
