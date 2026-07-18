@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""svbeat — numpy/scipy だけで音楽のビート(拍)時刻を検出するモジュール
+"""scriptvedit.beat — numpy/scipy だけで音楽のビート(拍)時刻を検出するモジュール
 
 scriptvedit のキーフレーム/カット同期用。librosa 非依存。
 依存: numpy, scipy, ffmpeg(サブプロセス経由でデコードのみ)

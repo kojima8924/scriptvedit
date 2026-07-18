@@ -836,9 +836,9 @@ class Project:
                 all_extra.update(checkpoint_cmds)
             if self._pending_compute_cmds:
                 all_extra.update(self._pending_compute_cmds)
-            if all_extra:
-                return {"main": cmd, "cache": all_extra}
-            return cmd  # 後方互換: cache不要ならlistのまま
+            # 常に {"main": 最終コマンド, "cache": {出力パス: 生成コマンド}} を返す
+            # （cache が空でも形は同じ。呼び出し側の分岐を不要にする）
+            return {"main": cmd, "cache": all_extra}
 
         self._ensure_formula_objects()
         self._ensure_web_objects()

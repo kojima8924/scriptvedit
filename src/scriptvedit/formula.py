@@ -41,11 +41,6 @@ _CSS_ONLY_COLOR_NAMES = frozenset({
     "transparent", "rebeccapurple", "grey", "darkgrey", "darkslategrey",
     "dimgrey", "lightgray", "lightslategrey", "slategrey",
 })
-# 旧内部名は参照互換のため従来の広い正規表現を残す。厳密な桁数・色名検証は
-# _validate_color が担うため、新規コードはこの正規表現だけで受理判定しないこと。
-_CSS_COLOR_RE = re.compile(
-    r"^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+|(rgb|rgba|hsl|hsla)"
-    r"\([0-9a-zA-Z.,%\s/+-]+\))$")
 
 
 def _katex_fingerprint():

@@ -441,37 +441,32 @@ def _web_cache_path(obj, project):
     return os.path.join(_ARTIFACT_DIR, "web", name, f"{key}.webm")
 
 
-def _layer_cache_paths(filename, project=None):
+def _layer_cache_paths(filename, project):
     """レイヤーキャッシュパスを計算（signature方式）"""
     basename = os.path.splitext(os.path.basename(filename))[0]
-    if project is not None:
-        # signatureベース
-        sigs = []
-        try:
-            ffp = _file_fingerprint(filename)
-            sigs.append(f"ffp={ffp}")
-        except (OSError, TypeError):
-            sigs.append(f"src={filename}")
-        sigs.append(f"ev={_ENGINE_VER}")
-        sigs.append(f"w={project.width}")
-        sigs.append(f"h={project.height}")
-        sigs.append(f"fps={project.fps}")
-        sigs.append(f"bg={project.background_color}")
-        # 出力尺も鍵に含める（キャッシュは -t dur で尺を焼き込むため、
-        # 総尺変更後に旧キャッシュを再利用すると短尺切れ/古い尺が戻る。issue #13 P1-4）
-        # render経路ではplan pass直後に総尺が確定済み（_render_impl参照）
-        sigs.append(f"dur={project.duration}")
-        key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
-        layer_dir = os.path.join(_ARTIFACT_DIR, "layer", basename)
-        # 拡張子は .webm 固定。レイヤーキャッシュは libvpx-vp9 + yuva420p で、
-        # 再利用時のデコーダ選択（_decoder_input_args）が .webm 拡張子で
-        # libvpx-vp9 を強制する。.mkv だとネイティブVP9デコーダ（alpha非対応）
-        # が選ばれ、透過が黒背景化して下層レイヤーを覆う（issue #13 P1-3）。
-        return (os.path.join(layer_dir, f"{key}.webm"),
-                os.path.join(layer_dir, f"{key}.anchors.json"))
-    # フォールバック（後方互換）
-    return (os.path.join(_CACHE_DIR, f"{basename}.webm"),
-            os.path.join(_CACHE_DIR, f"{basename}.anchors.json"))
+    sigs = []
+    try:
+        ffp = _file_fingerprint(filename)
+        sigs.append(f"ffp={ffp}")
+    except (OSError, TypeError):
+        sigs.append(f"src={filename}")
+    sigs.append(f"ev={_ENGINE_VER}")
+    sigs.append(f"w={project.width}")
+    sigs.append(f"h={project.height}")
+    sigs.append(f"fps={project.fps}")
+    sigs.append(f"bg={project.background_color}")
+    # 出力尺も鍵に含める（キャッシュは -t dur で尺を焼き込むため、
+    # 総尺変更後に旧キャッシュを再利用すると短尺切れ/古い尺が戻る。issue #13 P1-4）
+    # render経路ではplan pass直後に総尺が確定済み（_render_impl参照）
+    sigs.append(f"dur={project.duration}")
+    key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
+    layer_dir = os.path.join(_ARTIFACT_DIR, "layer", basename)
+    # 拡張子は .webm 固定。レイヤーキャッシュは libvpx-vp9 + yuva420p で、
+    # 再利用時のデコーダ選択（_decoder_input_args）が .webm 拡張子で
+    # libvpx-vp9 を強制する。.mkv だとネイティブVP9デコーダ（alpha非対応）
+    # が選ばれ、透過が黒背景化して下層レイヤーを覆う（issue #13 P1-3）。
+    return (os.path.join(layer_dir, f"{key}.webm"),
+            os.path.join(layer_dir, f"{key}.anchors.json"))
 
 
 def _iter_cache_files(cache_dir=_CACHE_DIR):

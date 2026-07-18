@@ -158,7 +158,7 @@ def sfx(source, at, *, volume=1.0):
 
 def voice(text, *, backend=None, speaker=None, speed=1.0, pitch=0.0, volume=1.0,
           **tts_kwargs):
-    """svtts で text を音声合成し、その wav を素材とする音声Objectを返す。
+    """scriptvedit.tts で text を音声合成し、その wav を素材とする音声Objectを返す。
 
     backend: "voicevox"（キャラボイス・オフライン。要エンジン起動）/
              "edge"（pip install edge-tts。導入が楽・オンライン必須）/
@@ -179,14 +179,14 @@ def voice(text, *, backend=None, speaker=None, speed=1.0, pitch=0.0, volume=1.0,
     try:
         # 属性参照(`from scriptvedit import tts`)ではなくモジュール直接 import。
         # プラグインがパッケージ名前空間へ同名を注入していても影響を受けない。
-        _svtts = _import_module("scriptvedit.tts")
+        _tts_mod = _import_module("scriptvedit.tts")
     except ImportError as e:
         raise ImportError(
             "voice() には scriptvedit.tts が必要です。"
             "scriptvedit.py と同じディレクトリに配置してください。") from e
-    wav = _svtts.tts(text, backend=backend, speaker=speaker, speed=speed,
+    wav = _tts_mod.tts(text, backend=backend, speaker=speaker, speed=speed,
                      pitch=pitch, **tts_kwargs)
-    dur = _svtts.tts_duration(wav)
+    dur = _tts_mod.tts_duration(wav)
     obj = Object(wav)
     obj.duration = dur
     if volume != 1.0:
@@ -230,7 +230,7 @@ def narrate(text_content, *, backend=None, speaker=None, speed=1.0, pitch=0.0,
             anchor="center", **tts_kwargs):
     """TTSナレーション音声 + 同期字幕を1回の呼び出しで生成・配置する。
 
-    voice()(svtts)でtext_contentを音声合成し、subtitle=Trueなら同じ内容の
+    voice()(scriptvedit.tts)でtext_contentを音声合成し、subtitle=Trueなら同じ内容の
     text()字幕Objectも生成する。字幕の表示窓は音声の実長(tts_duration)に
     一致させ、両者は同じ開始時刻からタイムラインに配置される。
     複数回呼べば、音声の実長ぶんタイムラインが進むため順次配置される
@@ -255,14 +255,14 @@ def narrate(text_content, *, backend=None, speaker=None, speed=1.0, pitch=0.0,
     """
     try:
         # 属性参照ではなくモジュール直接 import（名前空間注入の影響を受けない）
-        _svtts = _import_module("scriptvedit.tts")
+        _tts_mod = _import_module("scriptvedit.tts")
     except ImportError as e:
         raise ImportError(
             "narrate() には scriptvedit.tts が必要です。"
             "scriptvedit.py と同じディレクトリに配置してください。") from e
-    wav = _svtts.tts(text_content, backend=backend, speaker=speaker, speed=speed,
+    wav = _tts_mod.tts(text_content, backend=backend, speaker=speaker, speed=speed,
                      pitch=pitch, **tts_kwargs)
-    dur = _svtts.tts_duration(wav)
+    dur = _tts_mod.tts_duration(wav)
     # dur<=0（空テキスト等）だと show(0) で current_time が進まず
     # 連続 narrate が同じ開始点に重なるため明示エラーにする。
     if dur <= 0:
@@ -361,7 +361,7 @@ def beat_sync(audio_source, *, min_bpm=60, max_bpm=200):
             f"beat_sync: 音声/動画ファイルが見つかりません: {audio_source}")
     try:
         # 属性参照ではなくモジュール直接 import（名前空間注入の影響を受けない）
-        _svbeat = _import_module("scriptvedit.beat")
+        _beat_mod = _import_module("scriptvedit.beat")
     except ImportError as e:
         raise ImportError(
             "beat_sync() には numpy/scipy が必要です。\n"
@@ -382,7 +382,7 @@ def beat_sync(audio_source, *, min_bpm=60, max_bpm=200):
             pass
 
     try:
-        result = _svbeat.detect_beats(
+        result = _beat_mod.detect_beats(
             audio_source, min_bpm=min_bpm, max_bpm=max_bpm)
     except RuntimeError:
         raise

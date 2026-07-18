@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""svtts — 日本語ナレーション音声生成モジュール（バックエンド差し替え可能）
+"""scriptvedit.tts — 日本語ナレーション音声生成モジュール（バックエンド差し替え可能）
 
 複数の TTS バックエンドを同じ API で使えるようにし、テキストから wav を合成して
 scriptvedit の素材として使えるファイルパスを返す。
@@ -33,7 +33,7 @@ speaker（話者）の指定:
     バックエンドごとに意味が違うため「同じ引数をバックエンドが解釈する」方式にした。
       voicevox: 数値スタイルID（既定 1）
       edge    : 音声名の文字列（既定 "ja-JP-NanamiNeural"）。"nanami"/"keita" の
-                短縮名も可。互換のため**数値も受け付け**、日本語音声の一覧
+                短縮名も可。**数値も受け付け**（フォールバック運用のため）、日本語音声の一覧
                 （_EDGE_JA_VOICES）の index として解釈し warnings.warn で通知する
                 （VOICEVOX 前提のスクリプトが edge へフォールバックしても動くようにするため）
       sapi    : インストール済み音声名の部分一致文字列（既定はシステム既定音声）
@@ -426,7 +426,7 @@ def _edge_voice(speaker):
         voice = _EDGE_JA_VOICES[speaker % len(_EDGE_JA_VOICES)]
         warnings.warn(
             f'tts(backend="edge"): speaker={speaker}（数値）は VOICEVOX 用の指定です。'
-            f"edge では音声名で指定します。互換のため {voice} を使います"
+            f"edge では音声名で指定します。フォールバックとして {voice} を使います"
             f"（例: speaker=\"ja-JP-KeitaNeural\"）",
             stacklevel=3)
         return voice

@@ -1,4 +1,6 @@
 from scriptvedit import *
 
-bgm = Object(asset("audio/nc342423_【NASH公式】microscopist_-_NSF-371-01.mp3"))
+# BGM は assets/audio/ (または SCRIPTVEDIT_ASSETS の共有ライブラリ) に
+# 任意の楽曲を置いて、ファイル名をここに合わせる
+bgm = Object(asset("audio/bgm.mp3"))
 bgm.time(27)

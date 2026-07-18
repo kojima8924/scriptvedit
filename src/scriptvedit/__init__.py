@@ -44,7 +44,7 @@ __all__ = [
     "text", "typewriter", "counter", "subtitles", "karaoke",
     # オーディオ系
     "duck_under", "loop", "audio_sequence", "sfx", "audio_viz", "voice",
-    # 外部モジュール統合（svtts/svbeat/web）
+    # 統合サブモジュール（tts/beat/web）
     "narrate", "Narration", "beat_sync", "slide",
     # アンカー/同期
     "anchor", "pause", "scene",
@@ -101,7 +101,7 @@ __all__ = [
 
 
 # --- 各サブモジュールから全名（内部名を含む）を集約する ---
-# 旧 scriptvedit.py 単一モジュールと同じ属性集合を保つ（テスト/外部ツールが内部名を参照する）
+# テスト・検証ツールが内部名を scriptvedit 名前空間から参照するため、公開名以外も束ねる
 from scriptvedit.assets import (  # noqa: F401
     asset, assets_dir, here, resolve_layer_path,
 )
@@ -209,7 +209,7 @@ from scriptvedit.web import (  # noqa: F401
     label, rect, slide, spotlight, subtitle, subtitle_box,
 )
 from scriptvedit.formula import (  # noqa: F401
-    _CSS_COLOR_RE, _FORMULA_CACHE_DIR, _FORMULA_MAX_PX, _FORMULA_TEMPLATE, _FORMULA_VER,
+    _FORMULA_CACHE_DIR, _FORMULA_MAX_PX, _FORMULA_TEMPLATE, _FORMULA_VER,
     _KATEX_DIR, _build_formula_spec, _formula_cache_path, _import_playwright,
     _katex_fingerprint, _new_formula_object, _render_formula_png, _validate_color,
     _validate_latex, formula, formula_lines,
@@ -239,6 +239,5 @@ from scriptvedit.cli import (  # noqa: F401
 
 # --- プラグイン自動読込（import 時: カレントディレクトリの plugins/）---
 # 環境変数 SCRIPTVEDIT_NO_PLUGINS を設定すると自動読込を無効化できる。
-# パッケージ化により `python -m scriptvedit` でも本モジュールは正規名 "scriptvedit" で
-# 一度だけロードされるため、旧版の sys.modules 自己登録ハックは不要になった。
+# `python -m scriptvedit` でも本モジュールは正規名 "scriptvedit" で一度だけロードされる。
 _autoload_plugins(os.getcwd())

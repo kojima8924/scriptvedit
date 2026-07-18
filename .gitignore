@@ -30,8 +30,9 @@ assets/video/guitar_noaudio.mp4
 assets/audio/nc342423_*.mp3
 assets/images/computer_screen_programming.png
 
-# Claude 引き継ぎ保存データ(個人メモ・ローカル限定、公開しない)
+# AI 引き継ぎ・個人メモ(ローカル限定、公開しない)
 Claude_backup_*.md
+Report_for_ChatGPT*.txt
 
 # 共有素材ライブラリから取り込んだ素材(asset() が自動コピーする)
 assets/_imported/

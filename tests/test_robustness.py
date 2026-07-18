@@ -121,7 +121,7 @@ def test_audio_only_project_maps_raw_video_input(tmp_path):
     p.configure(width=320, height=180, fps=30)
     p.layer(str(layer))
     result = p.render(str(tmp_path / "out.mp4"), dry_run=True)
-    cmd = result["main"] if isinstance(result, dict) else result
+    cmd = result["main"]
     assert "-filter_complex" in cmd, "音声フィルタでfilter_complexが作られる前提"
     map_targets = [cmd[i + 1] for i, a in enumerate(cmd[:-1]) if a == "-map"]
     assert "0:v" in map_targets, f"-map の対象が不正: {map_targets}"
@@ -197,7 +197,7 @@ def test_layer_cache_fail_closed_and_param_tracking(tmp_path, monkeypatch):
     def _auto_uses_cache():
         p, _ = _make_p27_project(tmp_path, "auto")
         result = p.render(str(tmp_path / "a.mp4"), dry_run=True)
-        cmd = result["main"] if isinstance(result, dict) else result
+        cmd = result["main"]
         return cache_video.replace("\\", "/") in \
             " ".join(cmd).replace("\\", "/")
 
@@ -408,8 +408,7 @@ def test_layer_cache_duration_change_regenerates(tmp_path):
         # 同一総尺の 'auto' は既存キャッシュを使う（dry_runコマンドに現れる）
         cmd_same = _project(1, "auto").render(
             str(tmp_path / "d1b.mp4"), dry_run=True)
-        flat_same = " ".join(cmd_same["main"] if isinstance(cmd_same, dict)
-                             else cmd_same)
+        flat_same = " ".join(cmd_same["main"])
         assert cache1.replace("\\", "/") in flat_same.replace("\\", "/"), \
             "同一総尺でキャッシュが使われていない"
 
@@ -418,8 +417,7 @@ def test_layer_cache_duration_change_regenerates(tmp_path):
         cache2, _ = _layer_cache_paths(str(layer), p2)
         assert cache2 != cache1, "総尺変更後もキャッシュパスが同一"
         cmd_changed = p2.render(str(tmp_path / "d2.mp4"), dry_run=True)
-        flat = " ".join(cmd_changed["main"] if isinstance(cmd_changed, dict)
-                        else cmd_changed)
+        flat = " ".join(cmd_changed["main"])
         assert cache1.replace("\\", "/") not in flat.replace("\\", "/"), \
             "総尺変更後も旧キャッシュを入力に使っている"
     finally:

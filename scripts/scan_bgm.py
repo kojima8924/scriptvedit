@@ -37,7 +37,10 @@ def _default_bgm_dir():
     環境変数 SCRIPTVEDIT_ASSETS（`;` 区切りの探索パス）の各ルート配下から bgm/ を探す。
     """
     env = os.environ.get("SCRIPTVEDIT_ASSETS", "")
-    for root in [p.strip() for p in env.split(";") if p.strip()]:
+    parts = [env]
+    for sep in {os.pathsep, ";"}:   # 区切りは assets.py の library_dirs と同じ扱い
+        parts = [piece for part in parts for piece in part.split(sep)]
+    for root in [p.strip().strip('"') for p in parts if p.strip()]:
         cand = os.path.join(root, "bgm")
         if os.path.isdir(cand):
             return cand

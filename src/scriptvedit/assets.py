@@ -103,8 +103,8 @@ def library_dirs():
     """共有素材ライブラリの探索パス一覧（環境変数 SCRIPTVEDIT_ASSETS）。
 
     区切りは OS 標準の os.pathsep（Windows は `;`、POSIX は `:`）。
-    Windows では従来どおり `;` のまま。POSIX でも `;` を含む値は
-    後方互換のため区切りとして扱う（PATH と同じ流儀に合わせる。issue #13 P2-19）。
+    POSIX でも `;` は常に区切りとして扱う（Windows で書いた設定値を
+    そのまま持ち込んでも動くように。POSIX パスに `;` は現れない）。
     """
     env = os.environ.get(_ENV_VAR) or ""
     seps = {os.pathsep, ";"}

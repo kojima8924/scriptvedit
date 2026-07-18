@@ -2024,7 +2024,7 @@ def check_text_drawtext_in_cmd():
         p = _mk_project()
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp.mp4", dry_run=True)
-        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        s = " ".join(cmd["main"])
         if "drawtext" in s and "textfile=" in s:
             return True, "drawtext+textfile 出力OK"
         return False, "drawtext/textfile が見つからない"
@@ -2043,7 +2043,7 @@ def _text_dry_run_cmd(layer_body):
         p = _mk_project()
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp.mp4", dry_run=True)
-        return " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        return " ".join(cmd["main"])
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -2103,7 +2103,7 @@ def check_loudnorm_in_cmd():
         p.normalize_audio(-16)
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp.mp4", dry_run=True)
-        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        s = " ".join(cmd["main"])
         return (True, "loudnorm 出力OK") if "loudnorm=I=-16" in s else (False, "loudnorm欠落")
     finally:
         if os.path.exists(tmp):
@@ -2303,7 +2303,7 @@ def check_marker_in_cmd():
         p.marker(2, "B")
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp.mp4", dry_run=True)
-        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        s = " ".join(cmd["main"])
         ok = "ffmetadata" in s and "-map_metadata" in s
         return (True, "チャプター埋め込みOK") if ok else (False, "ffmetadata欠落")
     finally:
@@ -2419,8 +2419,8 @@ def check_gif_output_format():
         p = _mk_project()
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp.gif", dry_run=True)
-        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
-        if "palettegen" in s and "paletteuse" in s and "-an" in cmd:
+        s = " ".join(cmd["main"])
+        if "palettegen" in s and "paletteuse" in s and "-an" in cmd["main"]:
             return True, "GIFパレット出力OK"
         return False, f"パレット欠落: {s[-120:]}"
     finally:
@@ -2442,7 +2442,7 @@ def check_alpha_webm_format():
         p = _mk_project()
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp.webm", dry_run=True, alpha=True)
-        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        s = " ".join(cmd["main"])
         if "yuva420p" in s and "black@0.0" in s and "libvpx-vp9" in s:
             return True, "透過webm出力OK"
         return False, f"透過設定欠落: {s[:160]}"
@@ -2469,8 +2469,8 @@ def check_draft_key_separation():
     return False, "鍵が分離している（rqが残存）"
 
 
-def check_voice_without_svtts():
-    """voice()（svtts無し環境想定）: svtts経由の呼び出し形が正しい
+def check_voice_without_tts_module():
+    """voice()（tts依存が使えない環境想定）: scriptvedit.tts 経由の呼び出し形が正しい
 
     VOICEVOX未起動でも ImportError/ConnectionError の適切な例外になることを確認。
     """
@@ -2479,7 +2479,7 @@ def check_voice_without_svtts():
         voice("テスト", speaker=1)
         return True, "voice実行成功（VOICEVOX起動中）"
     except (ImportError, ConnectionError, TimeoutError, RuntimeError) as e:
-        # svtts不在 or VOICEVOX未起動: いずれも想定内の親切なエラー
+        # tts依存不在 or VOICEVOX未起動: いずれも想定内の親切なエラー
         return True, f"想定内エラー: {type(e).__name__}"
     except Exception as e:
         return False, f"予期しない例外: {type(e).__name__}: {e}"
@@ -2584,7 +2584,7 @@ def check_counter_reaches_target():
         p = _mk_project()
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp_counter.mp4", dry_run=True)
-        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        s = " ".join(cmd["main"])
         # 四捨五入項 +0.5 が eif 式に含まれること（100 が表示されるようになる）
         if "eif" in s and "+0.5" in s:
             return True, "四捨五入項 +0.5 を確認"
@@ -2608,7 +2608,7 @@ def check_typewriter_halfopen_enable():
         p = _mk_project()
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp_tw.mp4", dry_run=True)
-        s = " ".join(cmd) if isinstance(cmd, list) else " ".join(cmd["main"])
+        s = " ".join(cmd["main"])
         # 中間文字の drawtext enable が gte(t,..)*lt(t,..) の半開区間であること
         # （オーバーレイ側の enable は between を使うため、drawtext の gte*lt を確認）
         if "gte(t" in s and "lt(t" in s and "gte(t\\,0.2000)*lt(t" in s:
@@ -2634,7 +2634,7 @@ def check_ken_burns_overshoot_clamp():
         p.layer(tmp, priority=0)
         cmd = p.render("_tmp_kb.mp4", dry_run=True)
         # checkpoint の scale フィルタに clip( が入り、係数がクランプされること
-        cache = cmd.get("cache", {}) if isinstance(cmd, dict) else {}
+        cache = cmd.get("cache", {})
         for path, c in cache.items():
             cs = " ".join(c) if isinstance(c, list) else str(c)
             if "scale=w=" in cs and "crop=" in cs:
@@ -2940,10 +2940,10 @@ def check_narrate_without_voicevox():
 
 def check_narrate_returns_narration_tuple():
     """narrate()の戻り値: Narrationは(audio, subtitle)としてタプルアンパック可能"""
-    from scriptvedit import tts as svtts
-    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
-    svtts.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
-    svtts.tts_duration = lambda path: 1.5
+    from scriptvedit import tts as tts_mod
+    orig_tts, orig_dur = tts_mod.tts, tts_mod.tts_duration
+    tts_mod.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    tts_mod.tts_duration = lambda path: 1.5
     try:
         _mk_project()
         n = narrate("テスト", subtitle=True)
@@ -2958,32 +2958,32 @@ def check_narrate_returns_narration_tuple():
             return False, f"subtitleがtext Objectではありません: {s.media_type}"
         return True, f"audio.duration={a.duration}, subtitle.media_type={s.media_type}"
     finally:
-        svtts.tts = orig_tts
-        svtts.tts_duration = orig_dur
+        tts_mod.tts = orig_tts
+        tts_mod.tts_duration = orig_dur
 
 
 def check_narrate_subtitle_false_no_subtitle():
     """narrate(subtitle=False): subtitle属性がNoneになる"""
-    from scriptvedit import tts as svtts
-    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
-    svtts.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
-    svtts.tts_duration = lambda path: 1.0
+    from scriptvedit import tts as tts_mod
+    orig_tts, orig_dur = tts_mod.tts, tts_mod.tts_duration
+    tts_mod.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    tts_mod.tts_duration = lambda path: 1.0
     try:
         _mk_project()
         n = narrate("テスト", subtitle=False)
         ok = n.subtitle is None and n.audio is not None
         return (True, "subtitle=Noneを確認") if ok else (False, f"subtitle={n.subtitle!r}")
     finally:
-        svtts.tts = orig_tts
-        svtts.tts_duration = orig_dur
+        tts_mod.tts = orig_tts
+        tts_mod.tts_duration = orig_dur
 
 
 def check_narrate_subtitle_style_border_shadow():
     """narrate(subtitle_style={...}): border/shadow が字幕の _text_spec に渡る"""
-    from scriptvedit import tts as svtts
-    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
-    svtts.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
-    svtts.tts_duration = lambda path: 1.0
+    from scriptvedit import tts as tts_mod
+    orig_tts, orig_dur = tts_mod.tts, tts_mod.tts_duration
+    tts_mod.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    tts_mod.tts_duration = lambda path: 1.0
     try:
         _mk_project()
         n = narrate("テスト", subtitle=True,
@@ -3001,8 +3001,8 @@ def check_narrate_subtitle_style_border_shadow():
             return False, f"既定値が変わっている: {spec2['border']!r}/{spec2['shadow']!r}"
         return True, "narrate subtitle_style の border/shadow 透過OK"
     finally:
-        svtts.tts = orig_tts
-        svtts.tts_duration = orig_dur
+        tts_mod.tts = orig_tts
+        tts_mod.tts_duration = orig_dur
 
 
 # --- TTS バックエンド（voicevox / edge / sapi） ---
@@ -3015,17 +3015,17 @@ def _tts_scratch_dir():
 
 def _edge_or_skip():
     """edge-tts が使えない環境は正直に skip（PASS 扱いにしない）"""
-    from scriptvedit import tts as svtts
-    if not svtts._edge_available():
+    from scriptvedit import tts as tts_mod
+    if not tts_mod._edge_available():
         _skip("edge-tts 未導入（pip install edge-tts）")
-    return svtts
+    return tts_mod
 
 
 def check_tts_backend_invalid():
     """tts(backend='???'): 未知のバックエンドは ValueError"""
-    from scriptvedit import tts as svtts
+    from scriptvedit import tts as tts_mod
     try:
-        svtts.tts("テスト", backend="unknown_engine")
+        tts_mod.tts("テスト", backend="unknown_engine")
         return False, "未知の backend が通ってしまいました"
     except ValueError as e:
         msg = str(e)
@@ -3035,11 +3035,11 @@ def check_tts_backend_invalid():
 def check_tts_backend_env_selection():
     """backend=None の自動選択: 環境変数 SCRIPTVEDIT_TTS_BACKEND が最優先される"""
     import os
-    from scriptvedit import tts as svtts
+    from scriptvedit import tts as tts_mod
     orig = os.environ.get("SCRIPTVEDIT_TTS_BACKEND")
     os.environ["SCRIPTVEDIT_TTS_BACKEND"] = "sapi"
     try:
-        got = svtts._resolve_backend(None)
+        got = tts_mod._resolve_backend(None)
         return (True, "env→sapi") if got == "sapi" else (False, f"env が無視された: {got}")
     finally:
         if orig is None:
@@ -3051,11 +3051,11 @@ def check_tts_backend_env_selection():
 def check_tts_backend_fallback_to_edge():
     """backend=None の自動選択: VOICEVOX 未起動なら edge にフォールバックする"""
     import os
-    svtts = _edge_or_skip()
+    tts_mod = _edge_or_skip()
     orig = os.environ.pop("SCRIPTVEDIT_TTS_BACKEND", None)
     try:
         # 到達不能ポートを指定して「VOICEVOX 未起動」を再現する
-        got = svtts._resolve_backend(None, port=1)
+        got = tts_mod._resolve_backend(None, port=1)
         return (True, "未起動→edge") if got == "edge" else (False, f"edge にならない: {got}")
     finally:
         if orig is not None:
@@ -3064,9 +3064,9 @@ def check_tts_backend_fallback_to_edge():
 
 def check_tts_voicevox_error_suggests_edge():
     """VOICEVOX 未起動エラー: 代替案（backend="edge"）を案内する日本語メッセージ"""
-    from scriptvedit import tts as svtts
+    from scriptvedit import tts as tts_mod
     try:
-        svtts.tts("テスト", backend="voicevox", port=1, cache_dir=_tts_scratch_dir())
+        tts_mod.tts("テスト", backend="voicevox", port=1, cache_dir=_tts_scratch_dir())
         return False, "未起動なのに例外になりませんでした（ポート1で応答?）"
     except ConnectionError as e:
         msg = str(e)
@@ -3076,12 +3076,12 @@ def check_tts_voicevox_error_suggests_edge():
 
 def check_tts_cache_key_includes_backend():
     """キャッシュ鍵に backend が含まれる（同じ text/speaker でも別ファイルになる）"""
-    from scriptvedit import tts as svtts
-    a = svtts._cache_path("voicevox", "こんにちは", 1, 1.0, 0.0, "c")
-    b = svtts._cache_path("edge", "こんにちは", 1, 1.0, 0.0, "c")
+    from scriptvedit import tts as tts_mod
+    a = tts_mod._cache_path("voicevox", "こんにちは", 1, 1.0, 0.0, "c")
+    b = tts_mod._cache_path("edge", "こんにちは", 1, 1.0, 0.0, "c")
     if a == b:
         return False, "backend 違いで同じキャッシュパスになりました"
-    c = svtts._cache_path("edge", "こんにちは", 1, 1.0, 0.0, "c")
+    c = tts_mod._cache_path("edge", "こんにちは", 1, 1.0, 0.0, "c")
     if b != c:
         return False, "同一条件でキャッシュパスが安定しません"
     return True, f"backend でキー分離: {os.path.basename(a)} != {os.path.basename(b)}"
@@ -3089,18 +3089,18 @@ def check_tts_cache_key_includes_backend():
 
 def check_tts_edge_rate_pitch_mapping():
     """edge: speed/pitch を edge-tts の rate/pitch 文字列へ写像する"""
-    from scriptvedit import tts as svtts
+    from scriptvedit import tts as tts_mod
     cases = [
-        (svtts._edge_rate(1.0), "+0%"), (svtts._edge_rate(1.2), "+20%"),
-        (svtts._edge_rate(0.8), "-20%"),
-        (svtts._edge_pitch(0.0), "+0Hz"), (svtts._edge_pitch(0.1), "+10Hz"),
-        (svtts._edge_pitch(-0.1), "-10Hz"),
+        (tts_mod._edge_rate(1.0), "+0%"), (tts_mod._edge_rate(1.2), "+20%"),
+        (tts_mod._edge_rate(0.8), "-20%"),
+        (tts_mod._edge_pitch(0.0), "+0Hz"), (tts_mod._edge_pitch(0.1), "+10Hz"),
+        (tts_mod._edge_pitch(-0.1), "-10Hz"),
     ]
     bad = [(got, want) for got, want in cases if got != want]
     if bad:
         return False, f"写像が不正: {bad}"
     try:
-        svtts._edge_rate(0)
+        tts_mod._edge_rate(0)
         return False, "speed=0 が通ってしまいました"
     except ValueError:
         pass
@@ -3108,19 +3108,19 @@ def check_tts_edge_rate_pitch_mapping():
 
 
 def check_tts_edge_speaker_resolution():
-    """edge: speaker の解釈（音声名／短縮名／数値は互換のため警告付きで写像）"""
+    """edge: speaker の解釈（音声名／短縮名／数値は警告付きで写像）"""
     import warnings as _w
-    from scriptvedit import tts as svtts
-    if svtts._edge_voice(None) != "ja-JP-NanamiNeural":
+    from scriptvedit import tts as tts_mod
+    if tts_mod._edge_voice(None) != "ja-JP-NanamiNeural":
         return False, "既定音声が ja-JP-NanamiNeural ではありません"
-    if svtts._edge_voice("keita") != "ja-JP-KeitaNeural":
+    if tts_mod._edge_voice("keita") != "ja-JP-KeitaNeural":
         return False, "短縮名 keita が解決できません"
-    if svtts._edge_voice("ja-JP-NanamiNeural") != "ja-JP-NanamiNeural":
+    if tts_mod._edge_voice("ja-JP-NanamiNeural") != "ja-JP-NanamiNeural":
         return False, "音声名がそのまま通りません"
     with _w.catch_warnings(record=True) as rec:
         _w.simplefilter("always")
-        v = svtts._edge_voice(1)
-    if v not in svtts._EDGE_JA_VOICES:
+        v = tts_mod._edge_voice(1)
+    if v not in tts_mod._EDGE_JA_VOICES:
         return False, f"数値 speaker の写像先が不正: {v}"
     if not rec:
         return False, "数値 speaker で警告が出ていません"
@@ -3130,25 +3130,25 @@ def check_tts_edge_speaker_resolution():
 def check_tts_edge_synth_wav():
     """edge: 実際に日本語を合成して wav が得られ、tts_duration で尺が取れる（要ネット）"""
     import shutil as _sh
-    svtts = _edge_or_skip()
+    tts_mod = _edge_or_skip()
     cache = _tts_scratch_dir()
     try:
         try:
-            wav = svtts.tts("テスト音声です", backend="edge", cache_dir=cache)
+            wav = tts_mod.tts("テスト音声です", backend="edge", cache_dir=cache)
         except ConnectionError as e:
             _skip(f"edge-tts はオンライン必須（ネットワーク不通）: {str(e).splitlines()[0]}")
         if not wav.endswith(".wav") or not os.path.exists(wav):
             return False, f"wav が生成されていません: {wav}"
-        dur = svtts.tts_duration(wav)   # wave モジュールで開ける＝mp3→wav 変換済み
+        dur = tts_mod.tts_duration(wav)   # wave モジュールで開ける＝mp3→wav 変換済み
         if dur <= 0:
             return False, f"尺が0以下: {dur}"
         # 2回目はキャッシュヒット（ファイルの mtime が変わらない）
         mtime = os.path.getmtime(wav)
-        wav2 = svtts.tts("テスト音声です", backend="edge", cache_dir=cache)
+        wav2 = tts_mod.tts("テスト音声です", backend="edge", cache_dir=cache)
         if wav2 != wav or os.path.getmtime(wav2) != mtime:
             return False, "2回目にキャッシュが効いていません（再合成された）"
         # backend を変えれば別キャッシュ（voicevox 未起動でも鍵が違えば別パス）
-        other = svtts._cache_path("voicevox", "テスト音声です", 1, 1.0, 0.0, cache)
+        other = tts_mod._cache_path("voicevox", "テスト音声です", 1, 1.0, 0.0, cache)
         if other == wav:
             return False, "backend 違いで同じキャッシュになりました"
         return True, f"edge 合成OK: {dur:.2f}秒・キャッシュヒット確認"
@@ -3158,9 +3158,9 @@ def check_tts_edge_synth_wav():
 
 def check_tts_edge_speakers_list():
     """edge: 話者一覧に日本語音声が含まれる（要ネット）"""
-    svtts = _edge_or_skip()
+    tts_mod = _edge_or_skip()
     try:
-        sp = svtts.speakers(backend="edge")
+        sp = tts_mod.speakers(backend="edge")
     except ConnectionError as e:
         _skip(f"edge-tts はオンライン必須（ネットワーク不通）: {str(e).splitlines()[0]}")
     ids = [s["id"] for s in sp]
@@ -3454,10 +3454,10 @@ def check_probe_stream_durations():
 
 def check_narrate_zero_duration():
     """S15: narrate の tts_duration=0 → ValueError（連続narrate重なり防止）"""
-    from scriptvedit import tts as svtts
-    orig_tts, orig_dur = svtts.tts, svtts.tts_duration
-    svtts.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
-    svtts.tts_duration = lambda path: 0.0
+    from scriptvedit import tts as tts_mod
+    orig_tts, orig_dur = tts_mod.tts, tts_mod.tts_duration
+    tts_mod.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    tts_mod.tts_duration = lambda path: 0.0
     try:
         _mk_project()
         narrate("", subtitle=True)
@@ -3466,8 +3466,8 @@ def check_narrate_zero_duration():
         msg = str(e)
         return (True, msg.split("\n")[0]) if "0以下" in msg or "dur" in msg else (False, msg)
     finally:
-        svtts.tts = orig_tts
-        svtts.tts_duration = orig_dur
+        tts_mod.tts = orig_tts
+        tts_mod.tts_duration = orig_dur
 
 
 def check_karaoke_equal_split_sum_matches():
@@ -4838,7 +4838,7 @@ ALL_TESTS = [
     ("GIF出力形式", check_gif_output_format),
     ("透過webm形式", check_alpha_webm_format),
     ("draft鍵分離", check_draft_key_separation),
-    ("voice例外処理", check_voice_without_svtts),
+    ("voice例外処理", check_voice_without_tts_module),
     ("inspect レポート", check_inspect_report_text),
     # --- 統合レビュー修正の追加検証 ---
     ("alpha=True on mp4拒否", check_alpha_on_mp4_rejected),

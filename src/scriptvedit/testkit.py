@@ -168,7 +168,7 @@ def extract_frame(video_path, at, out_png=None, *, accurate=True):
     else:
         # 一時 PNG を作って読み込み後に削除(Windows のファイルロックを避けるため
         # NamedTemporaryFile は使わず mkstemp で fd を即クローズする)
-        fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="svtestkit_")
+        fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="svtk_")
         os.close(fd)
         target = tmp_path
 
@@ -422,7 +422,7 @@ def _main(argv=None):
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="svtestkit",
+        prog="scriptvedit.testkit",
         description="レンダリング結果の視覚検証ヘルパー(SSIM 比較・フレーム抽出)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
