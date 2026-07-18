@@ -25,6 +25,26 @@ class _AnchorMarker:
         self.priority = 0
 
 
+def _link_after(prev, nxt):
+    """DSL糖衣 `prev >> nxt`: nxt を prev の終了直後に開始する（浮動配置）。
+
+    nxt は順次配置のカーソルを進めない（_advance=False）。prev の尺は
+    リゾルバ時点で確定している必要がある（time()/スライス/until のいずれか）。
+    戻り値は nxt（`a >> b >> c` と連結できる）。
+    """
+    from scriptvedit.objects import Object as _Object
+    if not isinstance(nxt, (_Object, Pause)):
+        raise TypeError(
+            f">> の右辺は Object か pause.time(...) を指定してください: "
+            f"{type(nxt).__name__}")
+    if nxt is prev:
+        raise ValueError(">> に自分自身は連結できません")
+    nxt._start_after = prev
+    nxt._fixed_start = None
+    nxt._advance = False
+    return nxt
+
+
 class Pause:
     """非描画タイムラインアイテム（時間のみ占有、レンダリングなし）"""
     def __init__(self):
@@ -33,6 +53,8 @@ class Pause:
         self.priority = 0
         self._until_anchor = None
         self._until_offset = 0.0
+        self._fixed_start = None   # @ による絶対配置（Objectと共通の浮動配置属性）
+        self._start_after = None   # >> による直後連結
 
     def time(self, duration):
         self.duration = duration
@@ -42,6 +64,10 @@ class Pause:
         self._until_anchor = name
         self._until_offset = offset
         return self
+
+    def __rshift__(self, other):
+        """`a >> pause.time(0.5) >> b` の中継（次を自分の直後に配置）"""
+        return _link_after(self, other)
 
 
 class _ScenePad:

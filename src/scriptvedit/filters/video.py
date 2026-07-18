@@ -838,8 +838,12 @@ def _estimate_effect_input_length(obj, upto_effect):
     for e in obj.effects:
         if e is upto_effect:
             break
-        if e.name == "trim" and e.params.get("duration") is not None:
-            cur = _builtins.min(cur, e.params["duration"])
+        if e.name == "trim":
+            s = e.params.get("start") or 0
+            if s:
+                cur = _builtins.max(0.0, cur - s)
+            if e.params.get("duration") is not None:
+                cur = _builtins.min(cur, e.params["duration"])
         elif e.name == "speed":
             f = e.params.get("factor", 1.0)
             if f:
@@ -861,8 +865,12 @@ def _build_video_pre_filters(obj, label_prefix="pre"):
     for eff_idx, e in enumerate(obj.effects):
         if e.name == "trim":
             d = e.params.get("duration")
-            if d is not None:
-                filters.append(f"trim=duration={d}")
+            s = e.params.get("start") or 0
+            parts = ([f"start={s}"] if s else []) \
+                + ([f"duration={d}"] if d is not None else [])
+            if parts:
+                # trim の duration は「出力の最大尺」（start=2:duration=3 → 2〜5秒）
+                filters.append("trim=" + ":".join(parts))
                 filters.append("setpts=PTS-STARTPTS")
         elif e.name == "speed":
             factor = e.params.get("factor", 1.0)

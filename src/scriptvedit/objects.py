@@ -307,6 +307,8 @@ class Object:
         self._until_offset = 0.0
         self._anchor_name = None
         self._advance = True
+        self._fixed_start = None   # `obj @ t` の絶対配置（秒 or アンカー名）
+        self._start_after = None   # `a >> b` の直後連結（先行アイテム参照）
         self._priority_override = None
         self._video_deleted = False
         self._audio_deleted = False
@@ -424,6 +426,77 @@ class Object:
         if priority is not None:
             self._priority_override = priority
         return self
+
+    # --- DSL糖衣: タイムライン3点セット（スライス / @ / >>）------------------
+
+    def __getitem__(self, key):
+        """`obj[2:5]`: 素材時間の切り出し（イン点2秒〜アウト点5秒）。
+
+        軸の区別: スライスは**素材時間**（trim/atrim）、`@` は**タイムライン時間**。
+        `obj[3:8] @ 12` は「素材の3〜8秒をタイムライン12秒に置く」。
+        表示尺は切り出し長（end-start）が既定になる（time()で上書き可）。
+        負値は素材末尾からの相対（length()で解決。probe可能な素材のみ）。
+        step（`obj[::2]`）は「2倍速」と「間引き」で曖昧なため不可（speed(2)を使う）。
+        """
+        if not isinstance(key, slice):
+            raise TypeError(
+                f"Object のインデックスは時間スライスのみです: obj[start:end]"
+                f"（例: obj[2:5] = 2〜5秒を切り出し）。指定値: {key!r}")
+        if key.step is not None:
+            raise ValueError(
+                "obj[a:b:step] の step は未対応です（2倍速なら speed(2)、"
+                "コマ落としなら pixelize 等のEffectを使ってください）")
+        if self.media_type in ("image", "text"):
+            raise TypeError(
+                f"{self.media_type} には素材時間がないためスライスできません。"
+                f"表示尺は time(seconds) で指定してください。")
+        start = 0.0 if key.start is None else float(key.start)
+        end = None if key.stop is None else float(key.stop)
+        # 負値は素材末尾からの相対（probe が必要）
+        if start < 0 or (end is not None and end < 0):
+            total = self.length()
+            if start < 0:
+                start = _builtins.max(0.0, total + start)
+            if end is not None and end < 0:
+                end = total + end
+        if end is not None and end <= start:
+            raise ValueError(
+                f"スライスの範囲が不正です: [{key.start!r}:{key.stop!r}] "
+                f"→ start={start:g}s, end={end:g}s（end > start が必要）")
+        dur = None if end is None else end - start
+        if self._has_video is not False and not self._video_deleted:
+            self._append_effect(Effect("trim", start=start, duration=dur))
+        if self._has_audio is not False and not self._audio_deleted:
+            self.audio_effects.append(
+                AudioEffect("atrim", start=start, duration=dur))
+        if dur is not None:
+            self.duration = dur
+            self._duration_auto = False
+        else:
+            # アウト点省略（obj[3:]）: 素材末尾まで → 尺は自動確定に委ねる
+            self.duration = None
+            self._duration_auto = True
+        return self
+
+    def __matmul__(self, at):
+        """`obj @ 12` / `obj @ "intro.end"`: タイムライン上の絶対配置（浮動）。
+
+        順次配置のカーソルは進めない（show() と同じ非進行）。数値は秒、
+        文字列はアンカー名（`"名前.start"` / `"名前.end"` / `"scene:名前"` 等）。
+        """
+        if isinstance(at, bool) or not isinstance(at, (int, float, str)):
+            raise TypeError(
+                f"@ の右辺は秒（数値）かアンカー名（文字列）です: {at!r}")
+        if isinstance(at, (int, float)) and at < 0:
+            raise ValueError(f"@ の時刻は0以上が必要です: {at}")
+        self._fixed_start = at
+        self._start_after = None
+        self._advance = False
+        return self
+
+    def __rshift__(self, other):
+        """`a >> b`: b を a の終了直後に開始する（`a >> pause.time(0.5) >> b` 可）"""
+        return _link_after(self, other)
 
     def _append_effect(self, e):
         """Effect追加の共通経路（delete処理・時間系の検証・speedの音声追従）"""
@@ -737,6 +810,9 @@ class Object:
             for e in self.effects:
                 if e.name == "trim":
                     d = e.params.get("duration")
+                    s = e.params.get("start") or 0
+                    if s:
+                        v = _builtins.max(0.0, v - s)
                     if d is not None:
                         v = min(v, d)
                 elif e.name == "speed":
@@ -758,6 +834,9 @@ class Object:
             for e in self.audio_effects:
                 if e.name == "atrim":
                     d = e.params.get("duration")
+                    s = e.params.get("start") or 0
+                    if s:
+                        a = _builtins.max(0.0, a - s)
                     if d is not None:
                         a = min(a, d)
                 elif e.name == "atempo":
@@ -1020,4 +1099,4 @@ from scriptvedit.filters.video import _build_effect_filters, _build_transform_fi
 from scriptvedit.media import _source_signature
 from scriptvedit.project import Project
 from scriptvedit.state import _ARTIFACT_DIR, _CACHE_DIR, _ENGINE_VER, _GEN_COUNTER, _GEN_COUNTER_LOCK, _TIME_LIVE_EFFECTS, _detect_media_type, _suggest_hint
-from scriptvedit.timeline import pause
+from scriptvedit.timeline import _link_after, pause

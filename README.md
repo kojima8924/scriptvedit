@@ -39,7 +39,7 @@ scriptvedit/
 │   ├── assets.py        素材パス解決（asset / here / layer、共有ライブラリ取り込み）
 │   └── templates/       テンプレートHTML + vendor/katex（同梱、CDN参照なし）
 ├── assets/              素材（images/ video/ audio/）
-├── tests/               pytest（551件）
+├── tests/               pytest（566件）
 │   ├── layers/          レイヤー定義（testNN_*.py）とフィクスチャ
 │   └── snapshots/       ffmpegコマンドのスナップショット
 ├── examples/basic/      最小サンプル
@@ -147,6 +147,25 @@ obj <= -resize(sx=0.3, sy=0.3)    # off: キャッシュ対象から除外
 obj.time(6) <= move(x=0.5, y=0.5, anchor="center") \
                & scale(lambda u: lerp(0.5, 1, u)) \
                & fade(lambda u: u)
+```
+
+### タイムライン演算子（スライス / `@` / `>>`）
+
+**軸の区別**が重要: スライスは**素材時間**（イン点・アウト点）、`@` は
+**タイムライン時間**（いつから表示するか）。
+
+- `obj[2:5]` ... 素材の2〜5秒を切り出し（trim/atrim）。表示尺は切り出し長（3秒）が
+  既定になる（`time()` で上書き可）。`obj[3:]`（3秒以降）、`obj[-2:]`（末尾2秒。
+  probe可能な素材のみ）。step（`obj[::2]`）は「2倍速」と曖昧なため不可（`speed(2)` を使う）
+- `obj @ 12` ... タイムライン12秒に絶対配置。順次配置のカーソルは進めない
+  （`show()` と同じ非進行＝周囲のレイアウトを乱さない）。
+  `obj @ "intro.end"` でアンカー名も指定できる
+- `a >> b` ... b を a の終了直後に開始。`a >> pause.time(0.5) >> b` で間も置ける。
+  先行アイテムの尺は `time()`・スライス・`until()` のいずれかで確定している必要がある
+
+```python
+clip = Object("interview.mp4")[3:8] @ 12   # 素材の3〜8秒を、タイムライン12秒に置く
+clip >> pause.time(0.5) >> Object("reaction.mp4")[0:2]
 ```
 
 ### パーセント記法
@@ -1185,7 +1204,7 @@ cmd = p.render("output.mp4", dry_run=True)
 pytest で実行する（どのディレクトリからでも可。`cd tests` は不要）。
 
 ```
-pytest tests/                             # 全551件（スナップショット/エラーケース/素材解決/雛形生成/堅牢性/フォント解決）
+pytest tests/                             # 全566件（スナップショット/エラーケース/素材解決/雛形生成/堅牢性/フォント解決）
 pytest tests/test_snapshot.py             # スナップショットのみ
 pytest tests/test_errors.py -k plugin     # 名前で絞り込み
 pytest tests/test_snapshot.py --snapshot-update   # スナップショット再生成

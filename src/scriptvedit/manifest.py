@@ -470,6 +470,9 @@ _MANIFEST_USAGE = {
         "length": "obj.length()                        # trim/atempo を反映した実効尺",
         "quality": "~fade(1.0)                         # ~op は品質ヒント（内容は削除しない）",
         "policy": "+fade(1.0) / -fade(1.0)             # +op=force, -op=cache off",
+        "slice": "clip = Object(src)[2:5]              # 素材時間2〜5秒を切り出し（表示尺=3秒が既定。負値は末尾相対、stepは不可）",
+        "place": "clip @ 12                            # タイムライン12秒に絶対配置（非進行）。@ 'intro.end' でアンカー参照可",
+        "sequence": "a >> b                             # b を a の終了直後に開始。a >> pause.time(0.5) >> b で間も可（要・先行の尺確定）",
     },
     "expr": {
         "lambda": "lambda u: lerp(0.2, 0.8, u)   # u は 0..1 の進行度",

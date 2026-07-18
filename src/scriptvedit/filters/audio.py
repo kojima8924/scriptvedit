@@ -42,8 +42,12 @@ def _build_audio_pre_filters(obj):
     for e in obj.audio_effects:
         if e.name == "atrim":
             d = e.params.get("duration")
-            if d is not None:
-                filters.append(f"atrim=duration={d}")
+            s = e.params.get("start") or 0
+            parts = ([f"start={s}"] if s else []) \
+                + ([f"duration={d}"] if d is not None else [])
+            if parts:
+                # atrim の duration は「出力の最大尺」（start=2:duration=3 → 2〜5秒）
+                filters.append("atrim=" + ":".join(parts))
                 filters.append("asetpts=PTS-STARTPTS")
         elif e.name == "atempo":
             rate = e.params.get("rate", 1.0)

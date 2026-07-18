@@ -670,23 +670,44 @@ class Project:
                             changed = True
                         current_time += pad_amt
                         continue
-                    item.start_time = current_time
-                    # name anchor: X.start 登録
+                    # DSL糖衣の浮動配置（@ 絶対配置 / >> 直後連結）。
+                    # どちらも _advance=False で順次カーソルは進めない。
+                    # 依存先が未確定の反復では前回値を据え置き、確定時に
+                    # changed で再収束させる（anchor と同じ固定点反復に乗せる）
+                    after = getattr(item, '_start_after', None)
+                    fixed = getattr(item, '_fixed_start', None)
+                    new_start = current_time
+                    if after is not None:
+                        if after.duration is not None:
+                            new_start = after.start_time + after.duration
+                        else:
+                            new_start = item.start_time  # 未確定: 据え置き
+                    elif fixed is not None:
+                        if isinstance(fixed, str):
+                            at = self._anchors.get(fixed)
+                            new_start = (item.start_time if at is None
+                                         else at)  # 未定義アンカーは据え置き
+                        else:
+                            new_start = float(fixed)
+                    if item.start_time != new_start:
+                        item.start_time = new_start
+                        changed = True
+                    # name anchor: X.start 登録（浮動配置でも実開始時刻を張る）
                     anchor_name = getattr(item, '_anchor_name', None)
                     if anchor_name:
                         start_key = f"{anchor_name}.start"
                         old_val = self._anchors.get(start_key)
-                        self._anchors[start_key] = current_time
-                        if old_val != current_time:
+                        self._anchors[start_key] = item.start_time
+                        if old_val != item.start_time:
                             changed = True
-                    # until解決（offset対応）
+                    # until解決（offset対応。基準は実開始時刻＝浮動配置と整合）
                     until_name = getattr(item, '_until_anchor', None)
                     if until_name:
                         anchor_time = self._anchors.get(until_name)
                         if anchor_time is not None:
                             offset = getattr(item, '_until_offset', 0.0)
                             target_time = anchor_time + offset
-                            new_dur = max(0, target_time - current_time)
+                            new_dur = max(0, target_time - item.start_time)
                             if item.duration != new_dur:
                                 item.duration = new_dur
                                 changed = True
@@ -710,6 +731,20 @@ class Project:
                 until_name = getattr(item, '_until_anchor', None)
                 if until_name and until_name not in self._anchors:
                     raise RuntimeError(f"未定義のアンカー: '{until_name}'")
+                after = getattr(item, '_start_after', None)
+                if after is not None and after.duration is None:
+                    src = getattr(after, 'source', type(after).__name__)
+                    raise RuntimeError(
+                        f">> の先行アイテム（{src}）の尺が確定していません。\n"
+                        f"time(seconds)・スライス（obj[a:b]）・until() の"
+                        f"いずれかで尺を確定させてください。")
+                fixed = getattr(item, '_fixed_start', None)
+                if isinstance(fixed, str) and fixed not in self._anchors:
+                    defined = ", ".join(f"'{n}'" for n in sorted(self._anchors)) \
+                        or "(なし)"
+                    raise RuntimeError(
+                        f"@ に指定されたアンカーが未定義です: '{fixed}'\n"
+                        f"定義済みアンカー: {defined}")
 
     def render(self, output_path, *, dry_run=False, timeout=None,
                start=None, end=None, draft=False, alpha=False):
