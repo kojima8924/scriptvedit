@@ -1016,6 +1016,33 @@ class Project:
             return _svi.render_timeline(self, out_html, title=title)
         return _svi.report_text(self)
 
+    def audit(self, *, strict=False, quiet=False):
+        """動画の品質lint。findings のリストを返す（レンダはしない）。
+
+        過去の人間レビュー由来のチェック（文字サイズ・縁取り、BGMの
+        duck_under/ループ/尺、normalize_audio）と、`~` 品質ヒントが
+        尊重されない op の報告（契約どおり実行時警告は出さず、ここに集約）。
+
+        strict=True: warning が1件でもあれば RuntimeError（CI等の厳格モード用）。
+        quiet=True: レポートを print しない（戻り値だけ使う場合）。
+        戻り値: [{"severity": "warning"|"info", "code": str, "message": str}, ...]
+        """
+        from importlib import import_module as _import_module
+        _sva = _import_module("scriptvedit.audit")
+        # objects 未解決（layer登録のみ）なら dry_run で解決してから検査する
+        if not self.objects and self._layer_specs:
+            self.render("__audit__.mp4", dry_run=True)
+        findings = _sva.audit_project(self)
+        if not quiet:
+            print(_sva.format_report(findings))
+        if strict:
+            warns = [f for f in findings if f["severity"] == "warning"]
+            if warns:
+                raise RuntimeError(
+                    f"audit: warning が {len(warns)} 件あります（strict=True）:\n"
+                    + "\n".join(f"  [{f['code']}] {f['message']}" for f in warns))
+        return findings
+
     def _plan_resolve(self):
         """Plan pass: 固定点反復でアンカーを解決"""
         converged = False
