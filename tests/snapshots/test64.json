@@ -11,7 +11,7 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/1bbaba61/ffc343fd7b148135.png",
+    "__cache__/artifacts/checkpoint/1bbaba61/6eb20c7bf60554ba.png",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc((0.5+(((sin(((clip((t-0)/4/,0/,1)*7.099999397112931)+2.8423845638813536))+(sin(((clip((t-0)/4/,0/,1)*15.833626974092557)+3.5171536315858307))*0.5))+(sin(((clip((t-0)/4/,0/,1)*34.9345103079185)+5.806986362277761))*0.25))*0.017142857142857144))*W-w/2):trunc((0.5+(((sin(((clip((t-0)/4/,0/,1)*7.099999397112931)+6.020607096469552))+(sin(((clip((t-0)/4/,0/,1)*15.833626974092557)+0.8819618627575181))*0.5))+(sin(((clip((t-0)/4/,0/,1)*34.9345103079185)+0.14838462871485986))*0.25))*0.017142857142857144))*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v1]",
     "-map",
@@ -26,7 +26,7 @@
     "test64.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/1bbaba61/ffc343fd7b148135.png": [
+    "__cache__/artifacts/checkpoint/1bbaba61/6eb20c7bf60554ba.png": [
       "ffmpeg",
       "-y",
       "-i",
@@ -37,7 +37,7 @@
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/1bbaba61/ffc343fd7b148135.png"
+      "__cache__/artifacts/checkpoint/1bbaba61/6eb20c7bf60554ba.png"
     ]
   }
 }

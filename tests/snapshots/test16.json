@@ -9,7 +9,7 @@
     "-i",
     "assets/audio/Impact-38.mp3",
     "-i",
-    "__cache__/artifacts/checkpoint/1bbaba61/136904036abc3e94.mkv",
+    "__cache__/artifacts/checkpoint/1bbaba61/5499603342b4885d.mkv",
     "-i",
     "assets/audio/ビックリ音.mp3",
     "-filter_complex",
@@ -29,7 +29,7 @@
     "test16.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/1bbaba61/136904036abc3e94.mkv": [
+    "__cache__/artifacts/checkpoint/1bbaba61/5499603342b4885d.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -48,7 +48,7 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/1bbaba61/136904036abc3e94.mkv"
+      "__cache__/artifacts/checkpoint/1bbaba61/5499603342b4885d.mkv"
     ]
   }
 }

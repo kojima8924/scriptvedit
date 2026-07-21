@@ -22,6 +22,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: 改行規約の検証
+        # .gitattributes(自前text=CRLF固定)に対しリポジトリが正規化済みであること。
+        # 内容ハッシュ指紋がclone環境の改行差でずれない前提を守る(監査 issue #17)
+        shell: bash
+        run: git add --renormalize . && git diff --cached --stat --exit-code
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
