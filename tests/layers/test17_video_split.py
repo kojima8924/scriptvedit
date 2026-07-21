@@ -1,5 +1,5 @@
 from scriptvedit import *
-clip = Object(asset("video/fox_noaudio.mp4"))
+clip = Object(asset("video/clip_with_audio.mp4"))
 v, a = clip.split()
 # a is None（音声なし動画）
 v <= resize(sx=0.5, sy=0.5)

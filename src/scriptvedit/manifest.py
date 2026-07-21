@@ -278,7 +278,7 @@ _MANIFEST_EXAMPLES = {
     "keyframes": "img <= scale(keyframes((0, 1.0), (0.5, 1.5), (1, 1.0), easing=ease_in_out_sine))",
     "again": "bgm <= again(0.3)",
     "duck_under": "bgm <= duck_under(voice_obj, ratio=8)",
-    "sfx": "sfx('ビックリ音.mp3', at=2.5, volume=0.8)",
+    "sfx": "sfx('効果音.mp3', at=2.5, volume=0.8)",
     "narrate": "n = narrate('こんにちは', speaker=1)   # n.duration で尺が取れる",
     "group": "g = group(obj_a, obj_b)\ng <= move(x=lambda u: u)",
     "pip": "video <= pip(x=0.75, y=0.75, scale=0.3, radius=12)",

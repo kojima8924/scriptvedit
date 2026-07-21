@@ -112,14 +112,14 @@ def test_not_found_suggests(proj, monkeypatch):
     """4. 見つからないときは difflib の「もしかして」候補を出す（ライブラリも走査）"""
     _write(str(proj / "assets" / "images" / "logo.png"))
     lib = proj.parent / "lib"
-    _write(str(lib / "audio" / "Impact-38.mp3"))
+    _write(str(lib / "audio" / "bgm_loop.mp3"))
     monkeypatch.setenv("SCRIPTVEDIT_ASSETS", str(lib))
     with pytest.raises(FileNotFoundError) as e:
         asset("images/logo.jpg")
     assert "もしかして" in str(e.value) and "images/logo.png" in str(e.value)
     with pytest.raises(FileNotFoundError) as e2:
         asset("audio/Impact-39.mp3")
-    assert "audio/Impact-38.mp3" in str(e2.value)
+    assert "audio/bgm_loop.mp3" in str(e2.value)
 
 
 def test_env_no_longer_overrides_assets_dir(proj, monkeypatch):

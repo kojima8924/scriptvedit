@@ -173,7 +173,7 @@ def test_checkpoint_key_includes_project_resolution():
     from scriptvedit.cache import _checkpoint_cache_path
     from scriptvedit.objects import Transform
 
-    src = asset("images/onigiri_tenmusu.png")
+    src = asset("images/shape_badge.png")
     ops = [("transform", Transform("resize", sx=0.5, sy=0.5))]
     p1 = Project(); p1.configure(width=320, height=180, fps=30)
     path_320 = _checkpoint_cache_path(src, ops)

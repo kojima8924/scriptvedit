@@ -9,9 +9,9 @@
     "-c:v",
     "libvpx-vp9",
     "-i",
-    "__cache__/artifacts/layer/test14_maku/48db1722078e2446.webm",
+    "__cache__/artifacts/layer/test14_maku/5a6137c6114c0a63.webm",
     "-i",
-    "__cache__/artifacts/checkpoint/1bbaba61/05a4144ba593274f.mkv",
+    "__cache__/artifacts/checkpoint/ac9b64e5/5234257f3c3911f0.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=(W-w)/2:(H-h)/2:eof_action=pass:enable='between(t/,0/,3.0)'[v1];[2:v]tpad=start_duration=3.0:start_mode=clone[obj2];[v1][obj2]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,3.0/,6.0)'[v2]",
     "-map",
@@ -26,7 +26,7 @@
     "test15.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/1bbaba61/05a4144ba593274f.mkv": [
+    "__cache__/artifacts/checkpoint/ac9b64e5/5234257f3c3911f0.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -34,7 +34,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/onigiri_tenmusu.png",
+      "assets/images/shape_badge.png",
       "-vf",
       "scale=iw*0.4:ih*0.4,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/3/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/3/,0/,1))))/2)*2':eval=frame,format=rgba,pad=258:320:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy,format=rgba,geq=r='r(X/,Y)':g='g(X/,Y)':b='b(X/,Y)':a='alpha(X/,Y)*clip(clip((T-0)/3/,0/,1)/,0/,1)'",
       "-c:v",
@@ -45,7 +45,7 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/1bbaba61/05a4144ba593274f.mkv"
+      "__cache__/artifacts/checkpoint/ac9b64e5/5234257f3c3911f0.mkv"
     ]
   }
 }

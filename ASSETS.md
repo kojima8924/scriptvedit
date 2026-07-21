@@ -1,45 +1,49 @@
-# 素材台帳（assets/ の追跡バイナリの出典・利用条件）
+# 素材台帳（assets/）
 
-リポジトリの **MIT ライセンスはソースコードにのみ適用**され、`assets/` 配下の
-画像・音声・動画素材には**適用されない**。各素材は下表の出典元の利用条件に従う。
+**同梱素材はすべて自作物です。** 第三者の著作物は含みません。
+`scripts/generate_test_assets.py` が図形描画（Pillow）と合成音・合成映像（FFmpeg の
+lavfi）だけで生成しており、生成手順そのものがリポジトリに入っています。
 
-これらの素材はライブラリの**テスト用フィクスチャ**としてのみ同梱している
-（スナップショットテストが内容ハッシュを参照するため差し替えにくい）。
-自分の動画制作にはこの素材を使わず、各自の `assets/` / 共有素材ライブラリを使うこと。
+- ライセンス: リポジトリの **MIT ライセンスが素材にも適用されます**
+  （コードと素材で条件が分かれません）。
+- 用途: ライブラリのテスト用フィクスチャです。寸法・尺・ストリーム構成に
+  テストが依存しているため、差し替えるときはテストも合わせて確認してください。
+- 再生成: `pip install Pillow` の上で `python scripts/generate_test_assets.py`。
 
-## 台帳
+## 一覧
 
-状態の凡例: ✅=出典・条件確認済み / ⚠=推定出典あり・**要確認** / ❓=出典不明・**要確認**
+| ファイル | 仕様 | 内容 | 主な用途 |
+|---|---|---|---|
+| `images/shape_badge.png` | 644×800 RGBA | 角丸三角のバッジ | 汎用の被写体（最多使用）・morph の入力 |
+| `images/shape_figure.png` | 1130×1130 RGBA | 緑背景の人型アイコン | morph の相手役・`chroma_key`（緑を抜く） |
+| `images/shape_dots.png` | 412×356 RGBA | 水玉の楕円 | 小さめの被写体 |
+| `images/shape_portrait.png` | 812×849 RGBA | 積み木風の顔 | 縦長の被写体 |
+| `images/shape_starburst.png` | 845×771 RGBA | 集中線バースト | 登場演出の被写体 |
+| `images/banner_wide.png` | 1573×647 RGBA | 横長バナー | 横幅の大きい素材 |
+| `images/pattern_curtain.png` | 700×690 RGB | 縦縞（不透明） | 幕・背景（アルファ無し素材の代表） |
+| `images/bg_pattern_tiles.jpg` | 800×450 JPEG | タイル模様 | 背景（唯一の JPEG 素材） |
+| `images/mask_circle.png` | 320×240 グレー | 円マスク | `mask()` |
+| `images/mask_gradient.png` | 320×240 グレー | 横グラデーション | `mask_wipe()` |
+| `audio/bgm_loop.mp3` | 31.56秒 44.1kHz ステレオ | 3和音の合成音 | BGM・ループ・ダッキング |
+| `audio/効果音.mp3` | 1.36秒 44.1kHz ステレオ | 減衰する打撃音 | 効果音・**非ASCIIパスの検証** |
+| `video/clip_with_audio.mp4` | 5.545秒 640×360 29.97fps + AAC | 矩形が往復する映像 | 動画素材全般（映像と音声で実効尺が異なる検証を含む） |
 
-| ファイル | 種別 | 推定出典 | 状態 | 備考 |
-|---|---|---|---|---|
-| `assets/images/onigiri_tenmusu.png` | 画像 | いらすとや | ⚠ | ファイル名の命名様式より推定 |
-| `assets/images/mushi_tentoumushi.png` | 画像 | いらすとや | ⚠ | 同上 |
-| `assets/images/nigaoe_franz_kafka.png` | 画像 | いらすとや | ⚠ | 同上 |
-| `assets/images/virus_message_fuyoufukyu_gaisyutsu.png` | 画像 | いらすとや | ⚠ | 同上 |
-| `assets/images/pop_shinsyakaijin_ganbare.png` | 画像 | いらすとや | ⚠ | 同上 |
-| `assets/images/figure_cafe.png` | 画像 | いらすとや | ⚠ | 同上 |
-| `assets/images/pattern_teishiki_maku.png` | 画像 | いらすとや | ⚠ | 同上 |
-| `assets/images/bg_pattern_ishigaki.jpg` | 画像 | フリー背景素材サイト | ❓ | 取得元URL不明 |
-| `assets/images/mask_circle.png` | 画像 | 自作（プログラム生成） | ⚠ | マスク用の単純図形 |
-| `assets/images/mask_gradient.png` | 画像 | 自作（プログラム生成） | ⚠ | マスク用グラデーション |
-| `assets/audio/Impact-38.mp3` | 音声 | OtoLogic（フリー効果音） | ⚠ | ファイル名の命名様式より推定。CC BY 4.0（クレジット必須）の可能性 |
-| `assets/audio/ビックリ音.mp3` | 音声 | フリー効果音サイト | ❓ | 取得元不明。再配布不可の規約が多い分野なので優先的に確認 |
-| `assets/video/fox_noaudio.mp4` | 動画 | フリー動画素材サイト | ❓ | 取得元URL不明 |
+合計 685KB。
 
-※ `assets/images/computer_screen_programming.png` と `assets/audio/nc*.mp3` は
-ライセンス未確認のため **git 管理外**（`.gitignore` 済み。ローカルテスト専用）。
+## 注意
 
-## 未確認素材の扱い（TODO）
-
-- [ ] ⚠/❓ の各素材について、取得元URL・作者・利用条件を確認して本表を更新する
-- [ ] 再配布根拠を確認できない素材は、明確な許諾のある素材
-      （自作・CC0 等）へ差し替える（差し替え時はスナップショットの
-      内容ハッシュ更新が必要: `pytest tests/test_snapshot.py --snapshot-update`）
-- [ ] いらすとや素材は規約（商用条件・「素材の再配布」の解釈）を確認する
+- `audio/効果音.mp3` の日本語ファイル名は意図的です。フィルタ文字列や
+  コマンドラインでの非ASCIIパスの取り扱いをテストが検証しています。
+- `video/clip_with_audio.mp4` は**音声ストリームを持ちます**。映像と音声で
+  実効尺が違う場合の `length()` の挙動をテストが検証しているためです。
+- 大容量の検証用動画（`assets/video/flowerbg_noaudio.mp4` 等）は git 管理外です。
+  無い環境では該当テストが `pytest.skip` されます。
 
 ## 素材を追加・差し替えるとき
 
-1. 本表へ行を追加する（出典URL・ライセンス・改変内容を必ず記録）
-2. 再配布根拠を文書で確認できない素材はコミットしない
-   （ローカル限定にする場合は `.gitignore` へ追加して理由を書く）
+1. `scripts/generate_test_assets.py` に生成処理を追加して再生成する
+   （第三者の素材を持ち込まない。持ち込む場合は出典・ライセンス・帰属を
+   本表へ必ず記録する）
+2. 内容が変わると内容ハッシュ＝キャッシュ鍵が変わるため、スナップショットを
+   再生成する（`pytest tests/test_snapshot.py --snapshot-update`。差分が
+   鍵ハッシュのみであることを確認してから）

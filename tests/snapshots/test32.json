@@ -11,7 +11,7 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/1bbaba61/3960650c62c34145.png",
+    "__cache__/artifacts/checkpoint/ac9b64e5/309c08aab52728e7.png",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,2)'[v1]",
     "-map",
@@ -26,18 +26,18 @@
     "test32.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/1bbaba61/3960650c62c34145.png": [
+    "__cache__/artifacts/checkpoint/ac9b64e5/309c08aab52728e7.png": [
       "ffmpeg",
       "-y",
       "-i",
-      "assets/images/onigiri_tenmusu.png",
+      "assets/images/shape_badge.png",
       "-vf",
       "scale=iw*0.5:ih*0.5,pad=640:480:(ow-iw)/2:(oh-ih)/2:color=navy",
       "-frames:v",
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/1bbaba61/3960650c62c34145.png"
+      "__cache__/artifacts/checkpoint/ac9b64e5/309c08aab52728e7.png"
     ]
   }
 }

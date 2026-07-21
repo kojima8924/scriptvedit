@@ -28,7 +28,7 @@ def _mk_project():
 
 def test_audio_sequence_atomic_on_missing_path():
     """audio_sequence: 2番目が不存在パス → 例外後も先行 Object が残る"""
-    audio_src = _require_asset("audio/Impact-38.mp3")
+    audio_src = _require_asset("audio/bgm_loop.mp3")
     p = _mk_project()
     o1 = Object(audio_src)
     assert o1 in p.objects
@@ -39,7 +39,7 @@ def test_audio_sequence_atomic_on_missing_path():
 
 def test_video_sequence_atomic_on_missing_path():
     """video_sequence: 2番目が不存在パス → 例外後も先行 Object が残る"""
-    video_src = _require_asset("video/fox_noaudio.mp4")
+    video_src = _require_asset("video/clip_with_audio.mp4")
     p = _mk_project()
     o1 = Object(video_src)
     assert o1 in p.objects
@@ -50,7 +50,7 @@ def test_video_sequence_atomic_on_missing_path():
 
 def test_audio_sequence_atomic_on_short_crossfade():
     """audio_sequence: crossfade 過大（後段の尺検証で失敗）でも Object が残る"""
-    audio_src = _require_asset("audio/Impact-38.mp3")
+    audio_src = _require_asset("audio/bgm_loop.mp3")
     p = _mk_project()
     o1 = Object(audio_src)
     o2 = Object(audio_src)
@@ -64,7 +64,7 @@ def test_audio_sequence_atomic_on_short_crossfade():
 
 def test_audio_sequence_rejects_effected_object():
     """audio_sequence: 音声効果付き Object → ValueError（黙って捨てない）"""
-    audio_src = _require_asset("audio/Impact-38.mp3")
+    audio_src = _require_asset("audio/bgm_loop.mp3")
     p = _mk_project()
     o1 = Object(audio_src)
     o1 <= again(0.5)
@@ -79,8 +79,8 @@ def test_audio_sequence_rejects_effected_object():
 
 def test_audio_sequence_normal_consumes_and_builds_cmd():
     """audio_sequence: 正常系は両 Object を消費し acrossfade コマンドを生成する"""
-    src1 = _require_asset("audio/Impact-38.mp3")
-    src2 = _require_asset("audio/ビックリ音.mp3")
+    src1 = _require_asset("audio/bgm_loop.mp3")
+    src2 = _require_asset("audio/効果音.mp3")
     p = _mk_project()
     p._dry_run = True
     p._pending_compute_cmds = {}

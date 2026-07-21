@@ -11,7 +11,7 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/d35024c0/63cae9a3caf8c77e.png",
+    "__cache__/artifacts/checkpoint/a04e6a90/633867d099f283c3.png",
     "-c:v",
     "libvpx-vp9",
     "-i",
@@ -51,18 +51,18 @@
       "3",
       "__cache__/artifacts/web/subtitle_box_b5cdcfa0/f33f07cf3dc98b44.webm"
     ],
-    "__cache__/artifacts/checkpoint/d35024c0/63cae9a3caf8c77e.png": [
+    "__cache__/artifacts/checkpoint/a04e6a90/633867d099f283c3.png": [
       "ffmpeg",
       "-y",
       "-i",
-      "assets/images/bg_pattern_ishigaki.jpg",
+      "assets/images/bg_pattern_tiles.jpg",
       "-vf",
       "scale=iw*2:ih*2",
       "-frames:v",
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/d35024c0/63cae9a3caf8c77e.png"
+      "__cache__/artifacts/checkpoint/a04e6a90/633867d099f283c3.png"
     ]
   }
 }

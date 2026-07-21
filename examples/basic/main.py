@@ -13,6 +13,6 @@ if __name__ == "__main__":
 
     # レイヤーファイルはこのスクリプトからの相対でも解決される
     p.layer("bg.py", priority=0)
-    p.layer("onigiri.py", priority=1)
+    p.layer("badge.py", priority=1)
 
     p.render(os.path.join(os.path.dirname(os.path.abspath(__file__)), "output.mp4"))

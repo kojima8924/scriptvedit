@@ -11,11 +11,11 @@
     "-r",
     "30",
     "-i",
-    "__cache__/artifacts/checkpoint/8fcd4e39/599f1e3f61364fe5.png",
+    "__cache__/artifacts/checkpoint/294bde45/0457b3f44ce2a0f6.png",
     "-i",
-    "__cache__/artifacts/checkpoint/1bbaba61/2ded4fcae8bc029d.mkv",
+    "__cache__/artifacts/checkpoint/ac9b64e5/9bd122c19f66829a.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/651a4471/5bdc6b6283e701de.mkv",
+    "__cache__/artifacts/checkpoint/b00c4c21/939e77e5d734da10.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=(W-w)/2:(H-h)/2:eof_action=pass:enable='between(t/,0/,3)'[v1];[2:v]tpad=start_duration=3:start_mode=clone[obj2];[v1][obj2]overlay=trunc(0.3*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,3/,6)'[v2];[3:v]tpad=start_duration=6:start_mode=clone[obj3];[v2][obj3]overlay=trunc(0.7*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,6/,9)'[v3]",
     "-map",
@@ -30,20 +30,20 @@
     "test62.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/8fcd4e39/599f1e3f61364fe5.png": [
+    "__cache__/artifacts/checkpoint/294bde45/0457b3f44ce2a0f6.png": [
       "ffmpeg",
       "-y",
       "-i",
-      "assets/images/pattern_teishiki_maku.png",
+      "assets/images/pattern_curtain.png",
       "-vf",
       "scale=iw*0.2:ih*0.2,tile=3x2:padding=4:margin=0:color=0x00000000",
       "-frames:v",
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/8fcd4e39/599f1e3f61364fe5.png"
+      "__cache__/artifacts/checkpoint/294bde45/0457b3f44ce2a0f6.png"
     ],
-    "__cache__/artifacts/checkpoint/1bbaba61/2ded4fcae8bc029d.mkv": [
+    "__cache__/artifacts/checkpoint/ac9b64e5/9bd122c19f66829a.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -51,7 +51,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/onigiri_tenmusu.png",
+      "assets/images/shape_badge.png",
       "-vf",
       "scale=iw*0.3:ih*0.3,format=rgba,fade=t=in:st=0:d=0.6000000000000001:alpha=1",
       "-c:v",
@@ -62,9 +62,9 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/1bbaba61/2ded4fcae8bc029d.mkv"
+      "__cache__/artifacts/checkpoint/ac9b64e5/9bd122c19f66829a.mkv"
     ],
-    "__cache__/artifacts/checkpoint/651a4471/5bdc6b6283e701de.mkv": [
+    "__cache__/artifacts/checkpoint/b00c4c21/939e77e5d734da10.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -72,7 +72,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/figure_cafe.png",
+      "assets/images/shape_figure.png",
       "-vf",
       "scale=iw*0.3:ih*0.3,format=rgba,fade=t=in:st=0:d=0.6000000000000001:alpha=1",
       "-c:v",
@@ -83,7 +83,7 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/651a4471/5bdc6b6283e701de.mkv"
+      "__cache__/artifacts/checkpoint/b00c4c21/939e77e5d734da10.mkv"
     ]
   }
 }

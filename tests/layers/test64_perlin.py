@@ -1,7 +1,7 @@
 # perlin ノイズによる手ブレカメラ風の揺れ（move の x/y に加算）
 from scriptvedit import *
 
-oni = Object(asset("images/onigiri_tenmusu.png"))
+oni = Object(asset("images/shape_badge.png"))
 oni.time(4) <= resize(sx=0.5, sy=0.5)
 # 中央 + perlin ノイズで微小な揺れ
 oni <= move(

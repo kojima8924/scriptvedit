@@ -7,7 +7,7 @@
     "-i",
     "color=c=black:s=1280x720:d=6.7725:r=30",
     "-i",
-    "assets/video/fox_noaudio.mp4",
+    "assets/video/clip_with_audio.mp4",
     "-i",
     "__cache__/artifacts/checkpoint/3177c556/ed98189cea479c17.mkv",
     "-filter_complex",

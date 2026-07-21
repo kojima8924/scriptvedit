@@ -871,7 +871,7 @@ def setup_test85():
     （VOICEVOX不要。tts.tts/tts_duration を差し替えて実行する）"""
     from scriptvedit import tts as svtts
     orig_tts, orig_dur = svtts.tts, svtts.tts_duration
-    fake_wav = asset("audio/Impact-38.mp3")
+    fake_wav = asset("audio/bgm_loop.mp3")
 
     def _fake_tts(text, *, speaker=1, speed=1.0, pitch=0.0, **kw):
         return fake_wav

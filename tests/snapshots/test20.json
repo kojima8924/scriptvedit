@@ -7,7 +7,7 @@
     "-i",
     "color=c=black:s=1280x720:d=8:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/d35024c0/dfff70dc62da425d.mkv",
+    "__cache__/artifacts/checkpoint/a04e6a90/571dae99a45c4539.mkv",
     "-i",
     "__cache__/artifacts/checkpoint/442998c8/b6d8d4af421b6760.mkv",
     "-c:v",
@@ -118,7 +118,7 @@
       "1.0",
       "__cache__/artifacts/web/bubble_2042e1cb/4611cc2d153bd633.webm"
     ],
-    "__cache__/artifacts/checkpoint/d35024c0/dfff70dc62da425d.mkv": [
+    "__cache__/artifacts/checkpoint/a04e6a90/571dae99a45c4539.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -126,7 +126,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/bg_pattern_ishigaki.jpg",
+      "assets/images/bg_pattern_tiles.jpg",
       "-vf",
       "scale=w='trunc(iw*((1.0+(0.10000000000000009*clip((t-0)/8/,0/,1))))/2)*2':h='trunc(ih*((1.0+(0.10000000000000009*clip((t-0)/8/,0/,1))))/2)*2':eval=frame,format=rgba,pad=882:496:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy",
       "-c:v",
@@ -137,7 +137,7 @@
       "yuva444p",
       "-t",
       "8",
-      "__cache__/artifacts/checkpoint/d35024c0/dfff70dc62da425d.mkv"
+      "__cache__/artifacts/checkpoint/a04e6a90/571dae99a45c4539.mkv"
     ],
     "__cache__/artifacts/checkpoint/442998c8/b6d8d4af421b6760.mkv": [
       "ffmpeg",

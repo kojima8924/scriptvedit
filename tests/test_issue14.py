@@ -17,8 +17,8 @@ import pytest
 import scriptvedit as sv
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IMG = os.path.join(ROOT, "assets", "images", "onigiri_tenmusu.png")
-VID = os.path.join(ROOT, "assets", "video", "fox_noaudio.mp4")
+IMG = os.path.join(ROOT, "assets", "images", "shape_badge.png")
+VID = os.path.join(ROOT, "assets", "video", "clip_with_audio.mp4")
 
 
 def _make_project():

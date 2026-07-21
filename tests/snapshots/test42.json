@@ -7,7 +7,7 @@
     "-i",
     "color=c=black:s=1280x720:d=2:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/9c59afed/9a1871853db197fd.mkv",
+    "__cache__/artifacts/checkpoint/ad076f7b/b8ae04da9ed3fc49.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,2)'[v1]",
     "-map",
@@ -22,7 +22,7 @@
     "test42.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/9c59afed/9a1871853db197fd.mkv": [
+    "__cache__/artifacts/checkpoint/ad076f7b/b8ae04da9ed3fc49.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -30,7 +30,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/pop_shinsyakaijin_ganbare.png",
+      "assets/images/shape_starburst.png",
       "-vf",
       "scale=iw*0.5:ih*0.5,format=rgba,split[fxe0a][fxe0b];[fxe0b]gblur=sigma=8[fxe0c];[fxe0a][fxe0c]blend=all_mode=screen:all_opacity=0.8",
       "-c:v",
@@ -41,7 +41,7 @@
       "yuva444p",
       "-t",
       "2",
-      "__cache__/artifacts/checkpoint/9c59afed/9a1871853db197fd.mkv"
+      "__cache__/artifacts/checkpoint/ad076f7b/b8ae04da9ed3fc49.mkv"
     ]
   }
 }

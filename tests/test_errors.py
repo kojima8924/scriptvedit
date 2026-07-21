@@ -55,8 +55,8 @@ def _skip(reason):
 
 def _require_beat_env():
     """beat_sync 系テストの前提（音声素材 + numpy/scipy）を要求する"""
-    if not os.path.exists(asset("audio/Impact-38.mp3", must_exist=False)):
-        _skip("素材 assets/audio/Impact-38.mp3 が無い環境")
+    if not os.path.exists(asset("audio/bgm_loop.mp3", must_exist=False)):
+        _skip("素材 assets/audio/bgm_loop.mp3 が無い環境")
     try:
         import scriptvedit.beat  # noqa: F401
     except ImportError:
@@ -89,7 +89,7 @@ def check_undefined_anchor():
     layer_code = (
         'from scriptvedit import *\n'
         'pause.until("nonexistent")\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     temp_path = _tmp_file("_tmp_err_undef.py")
@@ -115,14 +115,14 @@ def check_same_anchor_different_files():
     """異ファイル間で同名アンカー定義 → RuntimeError"""
     layer1_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
         'anchor("my_anchor")\n'
     )
     layer2_code = (
         'from scriptvedit import *\n'
         'anchor("my_anchor")\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     temp1 = _tmp_file("_tmp_err_dup1.py")
@@ -194,7 +194,7 @@ def check_cache_use_no_file():
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(
                 'from scriptvedit import *\n'
-                'o = Object(asset("images/onigiri_tenmusu.png"))\n'
+                'o = Object(asset("images/shape_badge.png"))\n'
                 'o.time(1)\n')
         p = Project()
         p.configure(width=320, height=240, fps=1, background_color="black")
@@ -215,7 +215,7 @@ def check_cache_use_no_file():
 def check_image_length():
     """画像の length() → TypeError"""
     p = Project()
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     try:
         obj.length()
         return False, "例外が発生しませんでした"
@@ -243,7 +243,7 @@ def check_missing_file_length():
 def check_view_time_forbidden():
     """VideoView.time() / AudioView.time() → TypeError"""
     p = Project()
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     vv = VideoView(obj)
     try:
         vv.time(3)
@@ -258,7 +258,7 @@ def check_view_time_forbidden():
 def check_view_until_forbidden():
     """VideoView.until() / AudioView.until() → TypeError"""
     p = Project()
-    obj = Object(asset("audio/Impact-38.mp3"))
+    obj = Object(asset("audio/bgm_loop.mp3"))
     av = AudioView(obj)
     try:
         av.until("test")
@@ -273,7 +273,7 @@ def check_view_until_forbidden():
 def check_video_audio_effect_mismatch():
     """VideoView <= again() → TypeError"""
     p = Project()
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     vv = VideoView(obj)
     try:
         vv <= again(0.5)
@@ -288,7 +288,7 @@ def check_video_audio_effect_mismatch():
 def check_audio_video_effect_mismatch():
     """AudioView <= move() → TypeError"""
     p = Project()
-    obj = Object(asset("audio/Impact-38.mp3"))
+    obj = Object(asset("audio/bgm_loop.mp3"))
     av = AudioView(obj)
     try:
         av <= move(x=0.5, y=0.5)
@@ -304,7 +304,7 @@ def check_web_kwargs_on_non_web():
     """画像にduration/sizeを渡す → TypeError"""
     p = Project()
     try:
-        Object(asset("images/onigiri_tenmusu.png"), duration=2.0, size=(640, 360))
+        Object(asset("images/shape_badge.png"), duration=2.0, size=(640, 360))
         return False, "例外が発生しませんでした"
     except TypeError as e:
         msg = str(e)
@@ -563,7 +563,7 @@ def check_video_no_time_checkpoint_has_duration():
     """video + transform-only + time未指定 → checkpointコマンドに-tが含まれる"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("video/fox_noaudio.mp4"))\n'
+        'obj = Object(asset("video/clip_with_audio.mp4"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
     )
     temp_path = _tmp_file("_tmp_vid_notime.py")
@@ -603,7 +603,7 @@ def check_video_with_time_uses_specified_duration():
     """video + time指定 → obj.time()の値がcheckpointのdurationに使われる"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("video/fox_noaudio.mp4"))\n'
+        'obj = Object(asset("video/clip_with_audio.mp4"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2.5) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
@@ -650,8 +650,8 @@ def check_morph_to_not_last():
     """morph_to が bakeable ops の末尾でない → ValueError"""
     layer_code = (
         'from scriptvedit import *\n'
-        'img1 = Object(asset("images/onigiri_tenmusu.png"))\n'
-        'img2 = Object(asset("images/figure_cafe.png"))\n'
+        'img1 = Object(asset("images/shape_badge.png"))\n'
+        'img2 = Object(asset("images/shape_figure.png"))\n'
         'img1.time(3) <= morph_to(img2)\n'
         'img1 <= scale(0.5)\n'
     )
@@ -702,7 +702,7 @@ def check_rotate_to_preserves_move():
     """rotate_to(bakeable) + move(live) → checkpoint後もmoveが残る"""
     layer_code = (
         'from scriptvedit import *\n'
-        'img = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'img = Object(asset("images/shape_badge.png"))\n'
         'img <= resize(sx=0.5, sy=0.5)\n'
         'img.time(2) <= rotate_to(from_deg=0, to_deg=90)\n'
         'img <= move(x=0.3, y=0.7, anchor="center")\n'
@@ -731,8 +731,8 @@ def check_morph_to_hint_message():
     """morph_to末尾でないときエラーに「回避策」が含まれる"""
     layer_code = (
         'from scriptvedit import *\n'
-        'img1 = Object(asset("images/onigiri_tenmusu.png"))\n'
-        'img2 = Object(asset("images/figure_cafe.png"))\n'
+        'img1 = Object(asset("images/shape_badge.png"))\n'
+        'img2 = Object(asset("images/shape_figure.png"))\n'
         'img1.time(3) <= morph_to(img2)\n'
         'img1 <= scale(0.5)\n'
     )
@@ -758,7 +758,7 @@ def check_morph_to_hint_message():
 def check_image_time_no_args():
     """画像に対する time() 省略は TypeError"""
     try:
-        obj = Object(asset("images/onigiri_tenmusu.png"))
+        obj = Object(asset("images/shape_badge.png"))
         obj.time()
         return False, "例外が発生しませんでした"
     except TypeError as e:
@@ -848,7 +848,7 @@ def _make_image_checkpoint_project(transforms_code, effects_code=""):
     """画像+Transform/Effect→dry_run結果を返すヘルパー"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         f'obj <= {transforms_code}\n'
         f'obj.time(1) <= move(x=0.5, y=0.5, anchor="center"){" & " + effects_code if effects_code else ""}\n'
     )
@@ -893,7 +893,7 @@ def check_wipe_filter_in_checkpoint():
     """wipe Effectがcheckpointのfiltergraphに出ること"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= wipe("left") & move(x=0.5, y=0.5, anchor="center")\n'
     )
@@ -941,7 +941,7 @@ def check_zoom_filter_in_checkpoint():
     """zoom(scale) Effectがcheckpointのfiltergraphに出ること"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= zoom(lambda u: lerp(1, 2, u)) & move(x=0.5, y=0.5, anchor="center")\n'
     )
@@ -966,7 +966,7 @@ def check_color_shift_filter_in_checkpoint():
     """color_shift Effectがcheckpointのfiltergraphに出ること"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= color_shift(hue=90) & move(x=0.5, y=0.5, anchor="center")\n'
     )
@@ -988,7 +988,7 @@ def check_rotate_to_filter_in_checkpoint():
     """rotate_to Effectがcheckpointのfiltergraphに出ること"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= rotate_to(from_deg=0, to_deg=90) & move(x=0.5, y=0.5, anchor="center")\n'
     )
@@ -1010,7 +1010,7 @@ def check_move_survives_bakeable_checkpoint():
     """move(live) + wipe(bakeable) でcheckpoint後もmoveがoverlayに残ること"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= wipe("left") & move(from_x=0.2, from_y=0.5, to_x=0.8, to_y=0.5, anchor="center")\n'
     )
@@ -1038,7 +1038,7 @@ def check_shake_is_live():
     """shake(live)がcheckpointに焼かれずoverlayに残ること"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= shake(amplitude=0.05, frequency=8) & move(x=0.5, y=0.5, anchor="center")\n'
     )
@@ -1098,11 +1098,11 @@ def check_until_offset_positive():
     """anchor後 pause.until(name, offset=0.2) → 0.2秒待ち"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
         'anchor("A")\n'
         'pause.until("A", offset=0.2)\n'
-        'obj2 = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj2 = Object(asset("images/shape_badge.png"))\n'
         'obj2.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     temp_path = _tmp_file("_tmp_offset_pos.py")
@@ -1130,7 +1130,7 @@ def check_until_offset_negative():
     """obj.until(name, offset=-0.5) → anchor前に終了"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(2) <= move(x=0.5, y=0.5, anchor="center")\n'
         'anchor("B")\n'
         'pause.time(1)\n'
@@ -1138,7 +1138,7 @@ def check_until_offset_negative():
     temp_path1 = _tmp_file("_tmp_offset_neg1.py")
     layer_code2 = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.until("B", offset=-0.5)\n'
         'obj.time(3) <= move(x=0.3, y=0.3, anchor="center")\n'
     )
@@ -1170,11 +1170,11 @@ def check_until_offset_zero_default():
     """offset省略時は従来互換"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(2) <= move(x=0.5, y=0.5, anchor="center")\n'
         'anchor("C")\n'
         'pause.until("C")\n'
-        'obj2 = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj2 = Object(asset("images/shape_badge.png"))\n'
         'obj2.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     temp_path = _tmp_file("_tmp_offset_zero.py")
@@ -1201,7 +1201,7 @@ def check_time_name_anchors():
     """time(name=...) で .start/.end アンカーが自動生成"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(1.5, name="s1") <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     temp_path = _tmp_file("_tmp_name_anchor.py")
@@ -1230,13 +1230,13 @@ def check_time_name_duplicate():
     # time(name=...) も X.start/X.end がanchor()経由のanchorと衝突すればエラー
     layer_code1 = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(1, name="dup") <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     layer_code2 = (
         'from scriptvedit import *\n'
         'anchor("dup.start")\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(1) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     temp1 = _tmp_file("_tmp_name_dup1.py")
@@ -1271,13 +1271,13 @@ def check_time_name_with_until():
     """time(name=...) の .end を pause.until で参照"""
     layer_code1 = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(2, name="scene1") <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     layer_code2 = (
         'from scriptvedit import *\n'
         'pause.until("scene1.end")\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.time(1) <= move(x=0.3, y=0.3, anchor="center")\n'
     )
     temp1 = _tmp_file("_tmp_name_until1.py")
@@ -1309,11 +1309,11 @@ def check_show_no_advance():
     """show() で current_time が進まない"""
     layer_code = (
         'from scriptvedit import *\n'
-        'bg = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'bg = Object(asset("images/shape_badge.png"))\n'
         'bg.time(6) <= move(x=0.5, y=0.5, anchor="center")\n'
-        'a = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'a = Object(asset("images/shape_badge.png"))\n'
         'a.show(6) <= move(x=0.3, y=0.3, anchor="center")\n'
-        'b = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'b = Object(asset("images/shape_badge.png"))\n'
         'b.time(1) <= move(x=0.7, y=0.7, anchor="center")\n'
     )
     temp_path = _tmp_file("_tmp_show_noadvance.py")
@@ -1341,9 +1341,9 @@ def check_show_until_with_anchor():
     """show_until がanchor確定後にduration正しくなる"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj1 = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj1 = Object(asset("images/shape_badge.png"))\n'
         'obj1.time(3, name="main") <= move(x=0.5, y=0.5, anchor="center")\n'
-        'overlay = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'overlay = Object(asset("images/shape_badge.png"))\n'
         'overlay.show_until("main.end") <= move(x=0.3, y=0.3, anchor="center")\n'
     )
     temp_path = _tmp_file("_tmp_show_until.py")
@@ -1373,7 +1373,7 @@ def check_show_priority_override():
     """show(priority=10) で z-order が変わる"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj.show(3, priority=10) <= move(x=0.5, y=0.5, anchor="center")\n'
     )
     temp_path = _tmp_file("_tmp_show_priority.py")
@@ -1398,7 +1398,7 @@ def check_compute_removes_from_objects():
     """compute() で Project.objects から除外"""
     p = Project()
     p.configure(width=320, height=240, fps=1, background_color="black")
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     obj <= resize(sx=0.5, sy=0.5)
     # compute前: objectsに含まれる
     before = obj in p.objects
@@ -1414,7 +1414,7 @@ def check_compute_live_effect_error():
     """compute() で live Effect 使用時にエラー"""
     p = Project()
     p.configure(width=320, height=240, fps=1, background_color="black")
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     obj <= resize(sx=0.5, sy=0.5)
     obj.effects.append(move(x=0.5, y=0.5))
     try:
@@ -1431,7 +1431,7 @@ def check_compute_returns_object():
     """compute() の戻り値が Object"""
     p = Project()
     p.configure(width=320, height=240, fps=1, background_color="black")
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     obj <= resize(sx=0.5, sy=0.5)
     result = obj.compute()
     if isinstance(result, Object):
@@ -1616,7 +1616,7 @@ def check_outline_width_range():
 def check_slideshow_one_image():
     """slideshow 画像1枚 → ValueError"""
     try:
-        slideshow([asset("images/onigiri_tenmusu.png")])
+        slideshow([asset("images/shape_badge.png")])
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -1628,7 +1628,7 @@ def check_slideshow_one_image():
 def check_slideshow_unknown_transition():
     """slideshow 未知のtransition名 → ValueError"""
     try:
-        slideshow([asset("images/onigiri_tenmusu.png"), asset("images/figure_cafe.png")],
+        slideshow([asset("images/shape_badge.png"), asset("images/shape_figure.png")],
                   transition="explode")
         return False, "例外が発生しませんでした"
     except ValueError as e:
@@ -1641,7 +1641,7 @@ def check_slideshow_unknown_transition():
 def check_slideshow_tdur_too_long():
     """slideshow t_dur >= each → ValueError"""
     try:
-        slideshow([asset("images/onigiri_tenmusu.png"), asset("images/figure_cafe.png")],
+        slideshow([asset("images/shape_badge.png"), asset("images/shape_figure.png")],
                   each=1.0, t_dur=1.0)
         return False, "例外が発生しませんでした"
     except ValueError as e:
@@ -1655,9 +1655,9 @@ def check_transition_with_effects():
     """transition 加工済みObject → ValueError（compute()の案内）"""
     p = Project()
     p.configure(width=320, height=240, fps=1, background_color="black")
-    a = Object(asset("images/onigiri_tenmusu.png")).time(2)
+    a = Object(asset("images/shape_badge.png")).time(2)
     a <= resize(sx=0.5, sy=0.5)
-    b = Object(asset("images/figure_cafe.png")).time(2)
+    b = Object(asset("images/shape_figure.png")).time(2)
     try:
         transition(a, b)
         return False, "例外が発生しませんでした"
@@ -1672,8 +1672,8 @@ def check_transition_image_needs_time():
     """transition 画像に.time()未指定 → ValueError"""
     p = Project()
     p.configure(width=320, height=240, fps=1, background_color="black")
-    a = Object(asset("images/onigiri_tenmusu.png"))
-    b = Object(asset("images/figure_cafe.png")).time(2)
+    a = Object(asset("images/shape_badge.png"))
+    b = Object(asset("images/shape_figure.png")).time(2)
     try:
         transition(a, b)
         return False, "例外が発生しませんでした"
@@ -1689,8 +1689,8 @@ def check_transition_consumes_objects():
     p = Project()
     p.configure(width=320, height=240, fps=1, background_color="black")
     p._mode = "plan"  # 生成をスキップ
-    a = Object(asset("images/onigiri_tenmusu.png")).time(2)
-    b = Object(asset("images/figure_cafe.png")).time(2)
+    a = Object(asset("images/shape_badge.png")).time(2)
+    b = Object(asset("images/shape_figure.png")).time(2)
     tr = transition(a, b, kind="fade", duration=0.5)
     if a in p.objects or b in p.objects:
         return False, "消費されたObjectがobjectsに残っています"
@@ -1705,7 +1705,7 @@ def check_glow_filter_in_checkpoint():
     """glow Effect（split/blend複合チェーン）がcheckpointのfiltergraphに出ること"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= glow(radius=8, intensity=0.8) & move(x=0.5, y=0.5, anchor="center")\n'
     )
@@ -1730,7 +1730,7 @@ def check_drop_shadow_filter_in_checkpoint():
     """drop_shadow Effect（split/overlay複合チェーン）がcheckpointに出ること"""
     layer_code = (
         'from scriptvedit import *\n'
-        'obj = Object(asset("images/onigiri_tenmusu.png"))\n'
+        'obj = Object(asset("images/shape_badge.png"))\n'
         'obj <= resize(sx=0.5, sy=0.5)\n'
         'obj.time(2) <= drop_shadow(dx=8, dy=8, blur=6) & move(x=0.5, y=0.5, anchor="center")\n'
     )
@@ -1912,9 +1912,9 @@ def check_duck_under_other_not_in_project():
     """duck_under: other が再生対象外 → ValueError（レンダ時）"""
     layer_code = (
         "from scriptvedit import *\n"
-        "narr = Object(asset(\"audio/ビックリ音.mp3\"))\n"
+        "narr = Object(asset(\"audio/効果音.mp3\"))\n"
         "narr.time(2) <= adelete()\n"  # 音声を除外
-        "bgm = Object(asset(\"audio/Impact-38.mp3\"))\n"
+        "bgm = Object(asset(\"audio/bgm_loop.mp3\"))\n"
         "bgm.time(3) <= duck_under(narr)\n"
     )
     tmp = _tmp_file("_tmp_duck.py")
@@ -1937,7 +1937,7 @@ def check_audio_sequence_too_few():
     """audio_sequence: 入力1つ → ValueError"""
     _mk_project()
     try:
-        audio_sequence(asset("audio/Impact-38.mp3"))
+        audio_sequence(asset("audio/bgm_loop.mp3"))
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -1948,7 +1948,7 @@ def check_audio_sequence_non_audio():
     """audio_sequence: 画像パス → ValueError"""
     _mk_project()
     try:
-        audio_sequence(asset("images/onigiri_tenmusu.png"), asset("audio/Impact-38.mp3"))
+        audio_sequence(asset("images/shape_badge.png"), asset("audio/bgm_loop.mp3"))
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -1970,7 +1970,7 @@ def check_sfx_empty_at():
     """sfx: at空リスト → ValueError"""
     _mk_project()
     try:
-        sfx(asset("audio/ビックリ音.mp3"), at=[])
+        sfx(asset("audio/効果音.mp3"), at=[])
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -1981,7 +1981,7 @@ def check_audio_viz_bad_kind():
     """audio_viz: 未知kind → ValueError"""
     _mk_project()
     try:
-        audio_viz(asset("audio/Impact-38.mp3"), kind="bogus")
+        audio_viz(asset("audio/bgm_loop.mp3"), kind="bogus")
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -2092,7 +2092,7 @@ def check_loudnorm_in_cmd():
     """normalize_audio: 生成コマンドに loudnorm が出ること"""
     layer_code = (
         "from scriptvedit import *\n"
-        "bgm = Object(asset(\"audio/Impact-38.mp3\"))\n"
+        "bgm = Object(asset(\"audio/bgm_loop.mp3\"))\n"
         "bgm.time(3)\n"
     )
     tmp = _tmp_file("_tmp_ln.py")
@@ -2114,7 +2114,7 @@ def check_explode_to_not_last():
     """explode_to の後に bakeable op → エラー"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(2) <= explode_to()\n"
         "o <= scale(1.2)\n"
     )
@@ -2137,7 +2137,7 @@ def check_explode_to_needs_duration():
     """explode_to を含む画像に time() 未指定 → エラー"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o <= explode_to()\n"
         "o <= move(x=0.5, y=0.5)\n"
     )
@@ -2169,8 +2169,8 @@ def check_two_terminal_effects():
     """morph_to と explode_to を同時指定 → エラー"""
     layer = (
         "from scriptvedit import *\n"
-        "tgt = Object(asset(\"images/figure_cafe.png\"))\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "tgt = Object(asset(\"images/shape_figure.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(2) <= morph_to(tgt)\n"
         "o <= explode_to()\n"
     )
@@ -2210,7 +2210,7 @@ def check_path_bezier_bad_count():
 def check_group_non_object():
     """group: 非Object → TypeError"""
     try:
-        group(Object(asset("images/onigiri_tenmusu.png")), "x")
+        group(Object(asset("images/shape_badge.png")), "x")
         return False, "例外が発生しませんでした"
     except TypeError as e:
         return True, str(e)[:60]
@@ -2219,7 +2219,7 @@ def check_group_non_object():
 def check_grid_on_non_image():
     """grid: 音声素材 → TypeError"""
     try:
-        o = Object(asset("audio/Impact-38.mp3"))
+        o = Object(asset("audio/bgm_loop.mp3"))
         o.grid(2, 2)
         return False, "例外が発生しませんでした"
     except TypeError as e:
@@ -2230,7 +2230,7 @@ def check_render_window_bad_range():
     """render: end <= start → ValueError"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(3) <= move(x=0.5, y=0.5)\n"
     )
     tmp = _tmp_file("_tmp_win.py")
@@ -2291,7 +2291,7 @@ def check_marker_in_cmd():
     """p.marker: 生成コマンドに ffmetadata/-map_metadata が出る"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(4) <= move(x=0.5, y=0.5)\n"
     )
     tmp = _tmp_file("_tmp_mrk.py")
@@ -2315,7 +2315,7 @@ def check_explode_produces_particle_cache():
     """explode_to: dry_runでparticle .mkv キャッシュコマンドが出る"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(2) <= explode_to()\n"
     )
     tmp = _tmp_file("_tmp_pc.py")
@@ -2409,7 +2409,7 @@ def check_gif_output_format():
     """.gif 出力で palettegen/paletteuse が cmd に出る"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
     )
     tmp = _tmp_file("_tmp_gif.py")
@@ -2432,7 +2432,7 @@ def check_alpha_webm_format():
     """.webm + alpha=True で透明背景 + yuva420p"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
     )
     tmp = _tmp_file("_tmp_webm.py")
@@ -2460,9 +2460,9 @@ def check_draft_key_separation():
     from scriptvedit import _checkpoint_cache_path, _ACTIVE_QUALITY, resize
     ops = [("transform", resize(sx=0.5, sy=0.5))]
     _ACTIVE_QUALITY[0] = ""
-    final_path = _checkpoint_cache_path(asset("images/onigiri_tenmusu.png"), ops)
+    final_path = _checkpoint_cache_path(asset("images/shape_badge.png"), ops)
     _ACTIVE_QUALITY[0] = "draft"
-    draft_path = _checkpoint_cache_path(asset("images/onigiri_tenmusu.png"), ops)
+    draft_path = _checkpoint_cache_path(asset("images/shape_badge.png"), ops)
     _ACTIVE_QUALITY[0] = ""
     if final_path == draft_path:
         return True, "draft/final鍵共有OK（無駄な再生成なし）"
@@ -2489,7 +2489,7 @@ def check_inspect_report_text():
     """inspect()（out_html省略）でテキストレポート文字列を返す"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
     )
     tmp = _tmp_file("_tmp_insp.py")
@@ -2512,7 +2512,7 @@ def check_alpha_on_mp4_rejected():
     """alpha=True を .mp4(非透過コンテナ)で指定 → ValueError（黒潰れ防止）"""
     layer = (
         "from scriptvedit import *\n"
-        "o = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "o = Object(asset(\"images/shape_badge.png\"))\n"
         "o.time(2) <= move(x=0.5, y=0.5, anchor='center')\n"
     )
     tmp = _tmp_file("_tmp_alpha_mp4.py")
@@ -2536,8 +2536,8 @@ def check_alpha_on_mp4_rejected():
 def check_audio_sequence_short_crossfade():
     """audio_sequence: 素材長 < crossfade → ValueError"""
     try:
-        # Impact-38.mp3 は約31秒。crossfade=100 は素材長を超える
-        audio_sequence(asset("audio/Impact-38.mp3"), asset("audio/Impact-38.mp3"), crossfade=100)
+        # bgm_loop.mp3 は約31秒。crossfade=100 は素材長を超える
+        audio_sequence(asset("audio/bgm_loop.mp3"), asset("audio/bgm_loop.mp3"), crossfade=100)
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -2623,7 +2623,7 @@ def check_ken_burns_overshoot_clamp():
     """ken_burns: overshoot easing でも scale式が[0,1]クランプされ幅破綻しない"""
     layer = (
         "from scriptvedit import *\n"
-        "img = Object(asset(\"images/onigiri_tenmusu.png\"))\n"
+        "img = Object(asset(\"images/shape_badge.png\"))\n"
         "img.time(3) <= ken_burns((0,0,800,450),(100,60,400,225), easing=ease_out_back)\n"
     )
     tmp = _tmp_file("_tmp_kb_overshoot.py")
@@ -2702,11 +2702,11 @@ def check_video_sequence_tdur_too_big():
     guitar = _require_asset("video/guitar_noaudio.mp4")
     _mk_project()
     try:
-        video_sequence(asset("video/fox_noaudio.mp4"), guitar, t_dur=6.0)
+        video_sequence(asset("video/clip_with_audio.mp4"), guitar, t_dur=6.0)
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
-        if "t_dur" in msg and "fox_noaudio" in msg:
+        if "t_dur" in msg and "clip_with_audio" in msg:
             return True, msg.split("\n")[0]
         return False, f"メッセージが不適切: {msg}"
 
@@ -2715,7 +2715,7 @@ def check_video_sequence_one_clip():
     """video_sequence: 1クリップのみ → ValueError"""
     _mk_project()
     try:
-        video_sequence(asset("video/fox_noaudio.mp4"))
+        video_sequence(asset("video/clip_with_audio.mp4"))
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -2726,7 +2726,7 @@ def check_video_sequence_non_video():
     """video_sequence: 画像パスを混ぜる → ValueError"""
     _mk_project()
     try:
-        video_sequence(asset("video/fox_noaudio.mp4"), asset("images/onigiri_tenmusu.png"))
+        video_sequence(asset("video/clip_with_audio.mp4"), asset("images/shape_badge.png"))
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -2746,7 +2746,7 @@ def check_speed_bad_factor():
 def check_speed_on_image():
     """speed: 画像素材への適用 → ValueError"""
     _mk_project()
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     try:
         obj <= speed(2.0)
         return False, "例外が発生しませんでした"
@@ -2758,7 +2758,7 @@ def check_speed_on_image():
 def check_speed_length_reflected():
     """speed: length() に factor が反映される（自動atempoの二重計上なし）"""
     p = _mk_project()
-    obj = Object(asset("video/fox_noaudio.mp4"))
+    obj = Object(asset("video/clip_with_audio.mp4"))
     obj <= speed(2.0)
     ln = obj.length()
     expected = 5.545 / 2.0
@@ -2775,7 +2775,7 @@ def check_speed_length_reflected():
 def check_freeze_frame_length_reflected():
     """freeze_frame: length() に +duration が反映される"""
     p = _mk_project()
-    obj = Object(asset("video/fox_noaudio.mp4"))
+    obj = Object(asset("video/clip_with_audio.mp4"))
     obj <= freeze_frame(at=1.0, duration=2.0)
     ln = obj.length()
     expected = 5.545 + 2.0
@@ -2827,7 +2827,7 @@ def check_mask_missing_file():
 def check_mask_wipe_non_image():
     """mask_wipe: 動画をマスクに指定 → ValueError"""
     try:
-        mask_wipe(asset("video/fox_noaudio.mp4"))
+        mask_wipe(asset("video/clip_with_audio.mp4"))
         return False, "例外が発生しませんでした"
     except ValueError as e:
         msg = str(e)
@@ -2911,7 +2911,7 @@ def check_atempo_chain_decompose():
 def check_compute_rejects_blend_mode():
     """compute: live Effect blend_mode → ValueError"""
     _mk_project()
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     obj <= blend_mode("screen")
     try:
         obj.compute()
@@ -2942,7 +2942,7 @@ def check_narrate_returns_narration_tuple():
     """narrate()の戻り値: Narrationは(audio, subtitle)としてタプルアンパック可能"""
     from scriptvedit import tts as tts_mod
     orig_tts, orig_dur = tts_mod.tts, tts_mod.tts_duration
-    tts_mod.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    tts_mod.tts = lambda text, **kw: asset("audio/bgm_loop.mp3")
     tts_mod.tts_duration = lambda path: 1.5
     try:
         _mk_project()
@@ -2966,7 +2966,7 @@ def check_narrate_subtitle_false_no_subtitle():
     """narrate(subtitle=False): subtitle属性がNoneになる"""
     from scriptvedit import tts as tts_mod
     orig_tts, orig_dur = tts_mod.tts, tts_mod.tts_duration
-    tts_mod.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    tts_mod.tts = lambda text, **kw: asset("audio/bgm_loop.mp3")
     tts_mod.tts_duration = lambda path: 1.0
     try:
         _mk_project()
@@ -2982,7 +2982,7 @@ def check_narrate_subtitle_style_border_shadow():
     """narrate(subtitle_style={...}): border/shadow が字幕の _text_spec に渡る"""
     from scriptvedit import tts as tts_mod
     orig_tts, orig_dur = tts_mod.tts, tts_mod.tts_duration
-    tts_mod.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    tts_mod.tts = lambda text, **kw: asset("audio/bgm_loop.mp3")
     tts_mod.tts_duration = lambda path: 1.0
     try:
         _mk_project()
@@ -3258,7 +3258,7 @@ def check_karaoke_end_before_start():
 def check_beat_sync_detects_and_caches():
     """beat_sync: 実音声でビート検出し、2回目はJSONキャッシュから即返す"""
     _require_beat_env()
-    audio = asset("audio/Impact-38.mp3")
+    audio = asset("audio/bgm_loop.mp3")
     from scriptvedit import _ARTIFACT_DIR
     import shutil as _sh
     beats_dir = os.path.join(_ARTIFACT_DIR, "beats")
@@ -3299,7 +3299,7 @@ def check_slide_bad_extension():
     """slide: .html/.htm以外 → ValueError"""
     _mk_project()
     try:
-        slide(asset("images/onigiri_tenmusu.png"), page=0)
+        slide(asset("images/shape_badge.png"), page=0)
         return False, "例外が発生しませんでした"
     except ValueError as e:
         return True, str(e).split("\n")[0]
@@ -3376,7 +3376,7 @@ def check_export_metadata_txt_format():
 def check_freeze_frame_at_beyond_clip():
     """S3: freeze_frame の at がクリップ実効尺以上 → 構築時にValueError"""
     _mk_project()
-    obj = Object(asset("video/fox_noaudio.mp4"))
+    obj = Object(asset("video/clip_with_audio.mp4"))
     # trim(2) 後の実効尺は2s。at=5 はそれ以上なので空セグメントになる
     obj <= trim(2) & freeze_frame(at=5.0, duration=1.0)
     try:
@@ -3391,7 +3391,7 @@ def check_freeze_frame_at_beyond_clip():
 def check_freeze_frame_at_beyond_length_no_overcount():
     """S3: at>=実尺 のとき length() は +duration を計上しない"""
     _mk_project()
-    obj = Object(asset("video/fox_noaudio.mp4"))
+    obj = Object(asset("video/clip_with_audio.mp4"))
     # trim(2) で実尺2s、freeze at=5(>=2) → 静止区間は成立しないので尺は2sのまま
     # ※この素材は名前に反して音声streamを持つ。issue #13 P2-11 で length() が
     #   「有効streamの最大」になったため、映像側の計算を検証するには音声を除外する
@@ -3409,7 +3409,7 @@ def check_speed_auto_atrim_after_atempo():
     layer = _tmp_file("_tmp_s1_layer.py")
     with open(layer, "w", encoding="utf-8") as f:
         f.write("from scriptvedit import *\n"
-                "a = Object(asset(\"video/fox_noaudio.mp4\"))\n"
+                "a = Object(asset(\"video/clip_with_audio.mp4\"))\n"
                 "a.time(2.0) <= speed(2.0) & move(x=0.5, y=0.5)\n")
     p = _mk_project()
     p.layer(layer)
@@ -3429,7 +3429,7 @@ def check_speed_auto_atrim_after_atempo():
 def check_rounded_radius_clamped_in_geq():
     """S7: rounded の geq が半径を実寸(min(W,H)/2)で上限クランプする"""
     _mk_project()
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     obj <= rounded(40)
     filters = _build_effect_filters(obj, 0.0, 4.0)
     flat = str(filters)
@@ -3441,7 +3441,7 @@ def check_rounded_radius_clamped_in_geq():
 def check_probe_stream_durations():
     """S8: _probe_media が映像/音声ストリーム個別の尺を返す"""
     p = _mk_project()
-    info = p._probe_media(asset("video/fox_noaudio.mp4"))
+    info = p._probe_media(asset("video/clip_with_audio.mp4"))
     if info is None:
         _skip("ffprobe が使えない環境")
     # 映像ストリーム尺のキーが存在する（コンテナ尺と食い違ってもよい）
@@ -3456,7 +3456,7 @@ def check_narrate_zero_duration():
     """S15: narrate の tts_duration=0 → ValueError（連続narrate重なり防止）"""
     from scriptvedit import tts as tts_mod
     orig_tts, orig_dur = tts_mod.tts, tts_mod.tts_duration
-    tts_mod.tts = lambda text, **kw: asset("audio/Impact-38.mp3")
+    tts_mod.tts = lambda text, **kw: asset("audio/bgm_loop.mp3")
     tts_mod.tts_duration = lambda path: 0.0
     try:
         _mk_project()
@@ -3507,7 +3507,7 @@ def check_export_metadata_json_intro_chapter():
 def check_beat_sync_corrupt_cache_self_heal():
     """S11: 破損キャッシュJSONは無視して再解析（self-heal）"""
     _require_beat_env()
-    audio = asset("audio/Impact-38.mp3")
+    audio = asset("audio/bgm_loop.mp3")
     import glob as _glob
     beats_dir = os.path.join(_ARTIFACT_DIR, "beats")
     # 一旦正常に解析してキャッシュを作る
@@ -3703,7 +3703,7 @@ def check_plugin_bakeable_checkpoint():
         if not _sv._is_bakeable("effect", e):
             return False, "_is_bakeable が False"
         obj = Object.__new__(Object)
-        obj.source = asset("images/onigiri_tenmusu.png")
+        obj.source = asset("images/shape_badge.png")
         obj.transforms = []
         obj.effects = [e]
         obj.media_type = "image"
@@ -3808,7 +3808,7 @@ def check_plugin_builder_bad_return():
 
     try:
         obj = Object.__new__(Object)
-        obj.source = asset("images/onigiri_tenmusu.png")
+        obj.source = asset("images/shape_badge.png")
         obj.transforms = []
         obj.effects = [getattr(_sv, "t_badret")()]
         obj.media_type = "image"
@@ -4662,7 +4662,7 @@ def check_min_max_two_arg_fold():
 def check_wipe_geq_uses_uppercase_T():
     """#6: wipe の geq 進行度式が大文字 T（geq に小文字 t は無い）"""
     _mk_project()
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     obj <= wipe("left")
     flat = str(_build_effect_filters(obj, 0, 2))
     if "clip((t-" in flat:
@@ -4676,13 +4676,13 @@ def check_color_shift_eq_eval_frame():
     """#7: color_shift の動的 saturation/brightness に eval=frame が付く（定数には付かない）"""
     _mk_project()
     # 動的式 → eval=frame 必須（既定 eval=init だと t=0 で凍結する）
-    obj = Object(asset("images/onigiri_tenmusu.png"))
+    obj = Object(asset("images/shape_badge.png"))
     obj <= color_shift(saturation=lambda u: 1 + u, brightness=lambda u: 0.2 * u)
     flat = str(_build_effect_filters(obj, 0, 2))
     if "eq=saturation=" not in flat or ":eval=frame" not in flat:
         return False, f"動的式に eval=frame が無い: {flat[:300]}"
     # 定数のみ → eval=frame 不要（挙動不変の最小差分）
-    obj2 = Object(asset("images/onigiri_tenmusu.png"))
+    obj2 = Object(asset("images/shape_badge.png"))
     obj2 <= color_shift(saturation=1.2)
     flat2 = str(_build_effect_filters(obj2, 0, 2))
     if "eval=frame" in flat2:

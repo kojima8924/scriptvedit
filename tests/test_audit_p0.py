@@ -50,7 +50,7 @@ def test_rshift_long_reverse_chain_resolves():
     """10個の逆順連結でも全開始時刻が正しく収束する"""
     p = Project()
     p.configure(width=320, height=180, fps=30)
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     objs = [Object(src)[0:1] for _ in range(10)]
     chain = objs[9]
     for o in reversed(objs[:-1]):
@@ -65,7 +65,7 @@ def test_rshift_cycle_detected():
     """a >> b; b >> a は関係Objectを示す循環エラー"""
     p = Project()
     p.configure(width=320, height=180, fps=30)
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     x = Object(src)[0:1]
     y = Object(src)[0:1]
     x >> y
@@ -79,7 +79,7 @@ def test_rshift_three_way_cycle_detected():
     """3個以上の循環も検出する"""
     p = Project()
     p.configure(width=320, height=180, fps=30)
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     a, b, c = (Object(src)[0:1] for _ in range(3))
     a >> b >> c
     c >> a
@@ -100,7 +100,7 @@ def test_nondeterministic_layer_detected(tmp_path):
         f"_c = r\"{counter}\"\n"
         "n = int(open(_c).read()) + 1\n"
         "open(_c, 'w').write(str(n))\n"
-        "o = Object(asset('images/onigiri_tenmusu.png'))\n"
+        "o = Object(asset('images/shape_badge.png'))\n"
         "o.time(n) <= move(x=0.5, y=0.5)\n",
         encoding="utf-8")
     p = Project()
@@ -115,7 +115,7 @@ def test_deterministic_layer_passes(tmp_path):
     layer = tmp_path / "det.py"
     layer.write_text(
         "from scriptvedit import *\n"
-        "o = Object(asset('images/onigiri_tenmusu.png'))\n"
+        "o = Object(asset('images/shape_badge.png'))\n"
         "o.time(2) <= move(x=0.5, y=0.5)\n",
         encoding="utf-8")
     p = Project()

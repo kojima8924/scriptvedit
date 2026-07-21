@@ -59,7 +59,7 @@ scriptvedit/
 ```python
 from scriptvedit import *
 
-bg  = Object(asset("images/bg_pattern_ishigaki.jpg"))  # assets/ 配下を絶対パスで解決
+bg  = Object(asset("images/bg_pattern_tiles.jpg"))  # assets/ 配下を絶対パスで解決
 web = Object(here("scene.html"))                       # レイヤーファイルと同じ場所
 ```
 
@@ -132,7 +132,7 @@ cd myvideo && python main.py     # output/myvideo.mp4
 ```
 main.py        ... 構成定義（設定・レイヤー順序・レンダリング）
 bg.py          ... 背景レイヤー
-onigiri.py     ... 素材レイヤー
+badge.py     ... 素材レイヤー
 ```
 
 ### 演算子によるDSL
@@ -1158,7 +1158,7 @@ p = Project()
 p.configure(width=1280, height=720, fps=30, background_color="black")
 
 p.layer("bg.py", priority=0)
-p.layer("onigiri.py", priority=1)
+p.layer("badge.py", priority=1)
 
 p.render("output.mp4")
 ```
@@ -1168,7 +1168,7 @@ p.render("output.mp4")
 ```python
 from scriptvedit import *
 
-bg = Object("bg_pattern_ishigaki.jpg")
+bg = Object("bg_pattern_tiles.jpg")
 bg <= resize(sx=1, sy=1)
 bg.time(6) <= move(x=0.5, y=0.5, anchor="center") \
               & scale(lambda u: lerp(1.5, 1, u)) \
@@ -1282,7 +1282,7 @@ python scripts/tools_baseline.py verify baseline_snapshots.json
 
 ## ライセンス
 
-[MIT License](LICENSE)
+[MIT License](LICENSE)。同梱の `assets/` はすべて自作のテスト用素材で（`scripts/generate_test_assets.py` が生成）、コードと同じく MIT が適用されます（[ASSETS.md](ASSETS.md)）。`src/scriptvedit/templates/vendor/katex/` の KaTeX のみ同ディレクトリのライセンスに従います。
 
 ## ロードマップ
 

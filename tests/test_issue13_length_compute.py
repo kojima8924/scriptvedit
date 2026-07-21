@@ -136,7 +136,7 @@ def test_speed_auto_atempo_consistent(av_clip):
 def test_compute_image_with_effect_rejected():
     """静止画 + fade + duration なし compute() → 日本語 ValueError で明示拒否"""
     _mk_project()
-    img = Object(asset("images/onigiri_tenmusu.png"))
+    img = Object(asset("images/shape_badge.png"))
     img <= fade(0.5)
     with pytest.raises(ValueError, match="duration を指定して動画として compute"):
         img.compute()
@@ -147,7 +147,7 @@ def test_compute_image_without_effect_still_allowed():
     p = _mk_project()
     p._mode = "plan"
     try:
-        img = Object(asset("images/onigiri_tenmusu.png"))
+        img = Object(asset("images/shape_badge.png"))
         result = img.compute()
         assert result.source.endswith(".png")
         assert result.effects == []
@@ -162,7 +162,7 @@ def test_compute_video_bakes_fade_into_command():
     p._dry_run = True
     p._pending_compute_cmds = {}
     try:
-        img = Object(asset("images/onigiri_tenmusu.png"))
+        img = Object(asset("images/shape_badge.png"))
         img <= fade(0.5)
         img.compute(duration=2.0)
         assert p._pending_compute_cmds, "dry_run で生成コマンドが記録されていない"

@@ -3,7 +3,7 @@
 
 レイヤーファイルや examples/tests は cwd に依存せずに素材を参照できる必要がある。
 本モジュールは利用者プロジェクトの `assets/` ディレクトリを自動発見し、
-`asset("images/onigiri_tenmusu.png")` のような相対指定を絶対パスへ解決する。
+`asset("images/shape_badge.png")` のような相対指定を絶対パスへ解決する。
 
 ## プロジェクトの assets/ の発見順（**利用者プロジェクト優先**）
 
@@ -236,7 +236,7 @@ def _suggest(relpath, project_assets):
 def asset(relpath, *, must_exist=True):
     """素材を絶対パスで解決する（プロジェクト → _imported → 共有ライブラリ）。
 
-    例: asset("images/onigiri_tenmusu.png") / asset("audio/Impact-38.mp3")
+    例: asset("images/shape_badge.png") / asset("audio/bgm_loop.mp3")
     cwd に依存しないため、レイヤーファイル・テスト・examples から安全に使える。
 
     共有ライブラリ（環境変数 SCRIPTVEDIT_ASSETS、`;` 区切り）にしか無い素材は

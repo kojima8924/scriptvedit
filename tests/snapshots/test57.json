@@ -7,9 +7,9 @@
     "-i",
     "color=c=black:s=1280x720:d=7:r=30",
     "-i",
-    "__cache__/artifacts/aseq/e9e54bd9269ef5ed.m4a",
+    "__cache__/artifacts/aseq/87d2276c56d03903.m4a",
     "-i",
-    "__cache__/artifacts/sfx/581fedc1a09f7d83.m4a",
+    "__cache__/artifacts/sfx/816ec1640f8d0d7c.m4a",
     "-filter_complex",
     "[1:a]atrim=duration=3,asetpts=PTS-STARTPTS[a0];[2:a]atrim=duration=4,asetpts=PTS-STARTPTS,adelay=3000:all=1[a1];[a0][a1]amix=inputs=2:normalize=0[aout];[aout]loudnorm=I=-14:TP=-1.5:LRA=11[aout_ln]",
     "-map",
@@ -27,13 +27,13 @@
     "test57.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/aseq/e9e54bd9269ef5ed.m4a": [
+    "__cache__/artifacts/aseq/87d2276c56d03903.m4a": [
       "ffmpeg",
       "-y",
       "-i",
-      "assets/audio/Impact-38.mp3",
+      "assets/audio/bgm_loop.mp3",
       "-i",
-      "assets/audio/ビックリ音.mp3",
+      "assets/audio/効果音.mp3",
       "-filter_complex",
       "[0:a][1:a]acrossfade=d=0.5[axf1]",
       "-map",
@@ -42,13 +42,13 @@
       "aac",
       "-b:a",
       "192k",
-      "__cache__/artifacts/aseq/e9e54bd9269ef5ed.m4a"
+      "__cache__/artifacts/aseq/87d2276c56d03903.m4a"
     ],
-    "__cache__/artifacts/sfx/581fedc1a09f7d83.m4a": [
+    "__cache__/artifacts/sfx/816ec1640f8d0d7c.m4a": [
       "ffmpeg",
       "-y",
       "-i",
-      "assets/audio/ビックリ音.mp3",
+      "assets/audio/効果音.mp3",
       "-filter_complex",
       "[0:a]asplit=3[s0][s1][s2];[s0]adelay=500:all=1[d0];[s1]adelay=1500:all=1[d1];[s2]adelay=2500:all=1[d2];[d0][d1][d2]amix=inputs=3:normalize=0,volume=0.8[a]",
       "-map",
@@ -58,8 +58,8 @@
       "-b:a",
       "192k",
       "-t",
-      "3.858375",
-      "__cache__/artifacts/sfx/581fedc1a09f7d83.m4a"
+      "3.858005",
+      "__cache__/artifacts/sfx/816ec1640f8d0d7c.m4a"
     ]
   }
 }

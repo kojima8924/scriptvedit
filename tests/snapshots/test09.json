@@ -7,13 +7,13 @@
     "-i",
     "color=c=gray:s=1280x720:d=4:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/1bbaba61/af1ada74abd81e38.mkv",
+    "__cache__/artifacts/checkpoint/ac9b64e5/c19919e2df6854fe.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/651a4471/2df7a1ad73a8d9de.mkv",
+    "__cache__/artifacts/checkpoint/b00c4c21/c3d9daa79de34e77.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/c3dc4efd/7834c52c333437fc.mkv",
+    "__cache__/artifacts/checkpoint/fa445802/4c55ef10bc937bb3.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/9c59afed/47efbadd956fc12b.mkv",
+    "__cache__/artifacts/checkpoint/ad076f7b/09fdc9091b43c038.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc((0.1+(0.4*clip((t-0)/4/,0/,1)))*W-w/2):trunc((0.1+(0.4*clip((t-0)/4/,0/,1)))*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v1];[v1][2:v]overlay=trunc((0.9+(-0.4*clip((t-0)/4/,0/,1)))*W-w/2):trunc((0.1+(0.4*clip((t-0)/4/,0/,1)))*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v2];[v2][3:v]overlay=trunc((0.1+(0.4*clip((t-0)/4/,0/,1)))*W-w/2):trunc((0.9+(-0.4*clip((t-0)/4/,0/,1)))*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v3];[v3][4:v]overlay=trunc((0.9+(-0.4*clip((t-0)/4/,0/,1)))*W-w/2):trunc((0.9+(-0.4*clip((t-0)/4/,0/,1)))*H-h/2):eof_action=pass:enable='between(t/,0/,4)'[v4]",
     "-map",
@@ -28,7 +28,7 @@
     "test09.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/1bbaba61/af1ada74abd81e38.mkv": [
+    "__cache__/artifacts/checkpoint/ac9b64e5/c19919e2df6854fe.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -36,7 +36,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/onigiri_tenmusu.png",
+      "assets/images/shape_badge.png",
       "-vf",
       "scale=iw*0.15:ih*0.15,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=96:120:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy",
       "-c:v",
@@ -47,9 +47,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/1bbaba61/af1ada74abd81e38.mkv"
+      "__cache__/artifacts/checkpoint/ac9b64e5/c19919e2df6854fe.mkv"
     ],
-    "__cache__/artifacts/checkpoint/651a4471/2df7a1ad73a8d9de.mkv": [
+    "__cache__/artifacts/checkpoint/b00c4c21/c3d9daa79de34e77.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -57,7 +57,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/figure_cafe.png",
+      "assets/images/shape_figure.png",
       "-vf",
       "scale=iw*0.15:ih*0.15,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=170:170:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy",
       "-c:v",
@@ -68,9 +68,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/651a4471/2df7a1ad73a8d9de.mkv"
+      "__cache__/artifacts/checkpoint/b00c4c21/c3d9daa79de34e77.mkv"
     ],
-    "__cache__/artifacts/checkpoint/c3dc4efd/7834c52c333437fc.mkv": [
+    "__cache__/artifacts/checkpoint/fa445802/4c55ef10bc937bb3.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -78,7 +78,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/virus_message_fuyoufukyu_gaisyutsu.png",
+      "assets/images/banner_wide.png",
       "-vf",
       "scale=iw*0.15:ih*0.15,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=236:98:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy",
       "-c:v",
@@ -89,9 +89,9 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/c3dc4efd/7834c52c333437fc.mkv"
+      "__cache__/artifacts/checkpoint/fa445802/4c55ef10bc937bb3.mkv"
     ],
-    "__cache__/artifacts/checkpoint/9c59afed/47efbadd956fc12b.mkv": [
+    "__cache__/artifacts/checkpoint/ad076f7b/09fdc9091b43c038.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -99,7 +99,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/pop_shinsyakaijin_ganbare.png",
+      "assets/images/shape_starburst.png",
       "-vf",
       "scale=iw*0.15:ih*0.15,scale=w='trunc(iw*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':h='trunc(ih*((0.5+(0.5*clip((t-0)/4/,0/,1))))/2)*2':eval=frame,format=rgba,pad=126:116:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame,copy",
       "-c:v",
@@ -110,7 +110,7 @@
       "yuva444p",
       "-t",
       "4",
-      "__cache__/artifacts/checkpoint/9c59afed/47efbadd956fc12b.mkv"
+      "__cache__/artifacts/checkpoint/ad076f7b/09fdc9091b43c038.mkv"
     ]
   }
 }

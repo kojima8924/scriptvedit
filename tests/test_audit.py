@@ -46,7 +46,7 @@ def _tone(tmp_path, name, seconds):
 def test_quality_hint_ignored_reported():
     """~を付けたが軽量代替の無いopはinfoで報告される（実行時警告は出さない契約）"""
     p = _mk()
-    o = Object(asset("images/onigiri_tenmusu.png"))
+    o = Object(asset("images/shape_badge.png"))
     o.time(2) <= ~fade(0.5) & move(x=0.5, y=0.5)
     findings = p.audit(quiet=True)
     assert "quality-hint-ignored" in _codes(findings)
@@ -58,7 +58,7 @@ def test_quality_hint_ignored_reported():
 def test_normal_ops_not_reported():
     """~なしの通常opは報告されない"""
     p = _mk()
-    o = Object(asset("images/onigiri_tenmusu.png"))
+    o = Object(asset("images/shape_badge.png"))
     o.time(2) <= fade(0.5) & move(x=0.5, y=0.5)
     assert "quality-hint-ignored" not in _codes(p.audit(quiet=True))
 
@@ -156,7 +156,7 @@ def test_normalize_audio_hint(tmp_path):
 def test_no_audio_no_audio_findings():
     """音声が無ければ音声系findingは一切出ない"""
     p = _mk()
-    o = Object(asset("images/onigiri_tenmusu.png"))
+    o = Object(asset("images/shape_badge.png"))
     o.time(2) <= move(x=0.5, y=0.5)
     codes = _codes(p.audit(quiet=True))
     assert not any(c.startswith(("audio-", "bgm-", "no-normalize")) for c in codes)
@@ -175,7 +175,7 @@ def test_strict_raises_on_warning():
 def test_strict_passes_on_info_only():
     """infoだけならstrictでも通る"""
     p = _mk()
-    o = Object(asset("images/onigiri_tenmusu.png"))
+    o = Object(asset("images/shape_badge.png"))
     o.time(2) <= ~fade(0.5) & move(x=0.5, y=0.5)
     findings = p.audit(strict=True, quiet=True)
     assert all(f["severity"] == "info" for f in findings)
@@ -196,7 +196,7 @@ def test_audit_resolves_layers(tmp_path):
 def test_clean_project_is_clean():
     """指摘対象の無いプロジェクトはfindingsが空"""
     p = _mk()
-    o = Object(asset("images/onigiri_tenmusu.png"))
+    o = Object(asset("images/shape_badge.png"))
     o.time(2) <= fade(0.5) & move(x=0.5, y=0.5)
     text("読みやすい文字", size=60, border=3).time(2)
     assert p.audit(quiet=True) == []

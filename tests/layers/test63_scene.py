@@ -2,11 +2,11 @@
 from scriptvedit import *
 
 with scene("intro", 3):
-    oni = Object(asset("images/onigiri_tenmusu.png"))
+    oni = Object(asset("images/shape_badge.png"))
     oni.time(2) <= move(x=0.5, y=0.5, anchor="center")
 
 with scene("main", 4):
-    cafe = Object(asset("images/figure_cafe.png"))
+    cafe = Object(asset("images/shape_figure.png"))
     cafe.time(3) <= resize(sx=0.5, sy=0.5)
     cafe <= move(x=0.5, y=0.5, anchor="center")
 

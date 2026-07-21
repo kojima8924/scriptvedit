@@ -7,7 +7,7 @@
     "-i",
     "color=c=black:s=1280x720:d=2:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/d35024c0/c5006085c523f799.mkv",
+    "__cache__/artifacts/checkpoint/a04e6a90/c77242626e42caf2.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,2)'[v1]",
     "-map",
@@ -22,7 +22,7 @@
     "test40.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/d35024c0/c5006085c523f799.mkv": [
+    "__cache__/artifacts/checkpoint/a04e6a90/c77242626e42caf2.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -30,7 +30,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/bg_pattern_ishigaki.jpg",
+      "assets/images/bg_pattern_tiles.jpg",
       "-vf",
       "scale=iw*0.5:ih*0.5,vignette=angle='clip((clip((t-0)/2/,0/,1)*1.5707963267948966)/,0/,PI/2)':eval=frame",
       "-c:v",
@@ -41,7 +41,7 @@
       "yuva444p",
       "-t",
       "2",
-      "__cache__/artifacts/checkpoint/d35024c0/c5006085c523f799.mkv"
+      "__cache__/artifacts/checkpoint/a04e6a90/c77242626e42caf2.mkv"
     ]
   }
 }

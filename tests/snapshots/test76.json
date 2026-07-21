@@ -7,9 +7,9 @@
     "-i",
     "color=c=black:s=1280x720:d=6:r=30",
     "-i",
-    "__cache__/artifacts/checkpoint/1bbaba61/4f5b17e11e8f430f.mkv",
+    "__cache__/artifacts/checkpoint/ac9b64e5/6bf0014477010207.mkv",
     "-i",
-    "__cache__/artifacts/checkpoint/651a4471/1b950d421b5e36e8.mkv",
+    "__cache__/artifacts/checkpoint/b00c4c21/bf6f0e41aa478a33.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.35*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,3)'[v1];[2:v]tpad=start_duration=3:start_mode=clone[obj2];[v1][obj2]overlay=trunc(0.7*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,3/,6)'[v2]",
     "-map",
@@ -24,7 +24,7 @@
     "test76.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/1bbaba61/4f5b17e11e8f430f.mkv": [
+    "__cache__/artifacts/checkpoint/ac9b64e5/6bf0014477010207.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -32,7 +32,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/onigiri_tenmusu.png",
+      "assets/images/shape_badge.png",
       "-vf",
       "format=rgba,split[fxe0a][fxe0b];[fxe0b]alphaextract[fxe0oa];movie=filename='assets/images/mask_gradient.png',loop=loop=-1:size=1,fps=30,setpts=N/(30*TB)[fxe0mi];[fxe0mi][fxe0oa]scale2ref[fxe0ms][fxe0oa2];[fxe0ms]format=gray[fxe0mg];[fxe0oa2][fxe0mg]blend=all_expr='if(lte(B/,255*(clip((T-0)/3/,0/,1)))/,A/,0)':eof_action=repeat[fxe0na];[fxe0a][fxe0na]alphamerge",
       "-c:v",
@@ -43,9 +43,9 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/1bbaba61/4f5b17e11e8f430f.mkv"
+      "__cache__/artifacts/checkpoint/ac9b64e5/6bf0014477010207.mkv"
     ],
-    "__cache__/artifacts/checkpoint/651a4471/1b950d421b5e36e8.mkv": [
+    "__cache__/artifacts/checkpoint/b00c4c21/bf6f0e41aa478a33.mkv": [
       "ffmpeg",
       "-y",
       "-loop",
@@ -53,7 +53,7 @@
       "-r",
       "30",
       "-i",
-      "assets/images/figure_cafe.png",
+      "assets/images/shape_figure.png",
       "-vf",
       "format=rgba,split[fxe0a][fxe0b];[fxe0b]alphaextract[fxe0oa];movie=filename='assets/images/mask_circle.png',loop=loop=-1:size=1,fps=30,setpts=N/(30*TB)[fxe0mi];[fxe0mi][fxe0oa]scale2ref[fxe0ms][fxe0oa2];[fxe0ms]format=gray[fxe0mg];[fxe0oa2][fxe0mg]blend=all_expr='if(lte(B/,255*((clip((T-0)/3/,0/,1)*clip((T-0)/3/,0/,1))))/,A/,0)':eof_action=repeat[fxe0na];[fxe0a][fxe0na]alphamerge",
       "-c:v",
@@ -64,7 +64,7 @@
       "yuva444p",
       "-t",
       "3",
-      "__cache__/artifacts/checkpoint/651a4471/1b950d421b5e36e8.mkv"
+      "__cache__/artifacts/checkpoint/b00c4c21/bf6f0e41aa478a33.mkv"
     ]
   }
 }

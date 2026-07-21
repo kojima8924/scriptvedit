@@ -1,7 +1,7 @@
 from scriptvedit import *
 
 # おにぎり: 斜め移動+正弦波、縮小、4回転
-oni = Object(asset("images/onigiri_tenmusu.png"))
+oni = Object(asset("images/shape_badge.png"))
 oni.time(6) <= move(
     x=lambda u: 0.9 * u - 0.3 * (1 - u),
     y=lambda u: 0.5 + 0.2 * sin(u * 4 * PI) - 0.3 * (1 - u),

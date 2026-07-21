@@ -1,8 +1,8 @@
 from scriptvedit import *
 
 # タイトル画面下部: カフカ → テントウムシのモーフィング
-src = Object(asset("images/nigaoe_franz_kafka.png"))
-tgt = Object(asset("images/mushi_tentoumushi.png"))
+src = Object(asset("images/shape_portrait.png"))
+tgt = Object(asset("images/shape_dots.png"))
 
 src.time(7.5) <= morph_to(tgt, max_pixels=4000) \
     & -scale(0.5) \

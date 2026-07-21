@@ -2,13 +2,13 @@
 from scriptvedit import *
 
 # grid: 背景パターン生成（3x2 グリッド）
-bg = Object(asset("images/pattern_teishiki_maku.png"))
+bg = Object(asset("images/pattern_curtain.png"))
 bg.time(3) <= resize(sx=0.2, sy=0.2)
 bg.grid(3, 2, gap=4)
 
 # group: 複数Objを一括で同一Effect適用
-a = Object(asset("images/onigiri_tenmusu.png"))
-b = Object(asset("images/figure_cafe.png"))
+a = Object(asset("images/shape_badge.png"))
+b = Object(asset("images/shape_figure.png"))
 a.time(3) <= resize(sx=0.3, sy=0.3)
 b.show(3) <= resize(sx=0.3, sy=0.3)
 group(a, b) <= fade(keyframes((0, 0), (0.2, 1), (1.0, 1)))

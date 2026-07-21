@@ -52,7 +52,7 @@ def _resolve(p):
 def test_slice_sets_trim_and_duration():
     """スライスは trim/atrim(start, duration) を積み、表示尺を切り出し長にする"""
     _mk()
-    o = Object(asset("video/fox_noaudio.mp4"))[1:3]
+    o = Object(asset("video/clip_with_audio.mp4"))[1:3]
     trims = [e for e in o.effects if e.name == "trim"]
     assert trims and trims[0].params == {"start": 1.0, "duration": 2.0}
     atrims = [e for e in o.audio_effects if e.name == "atrim"]
@@ -63,7 +63,7 @@ def test_slice_sets_trim_and_duration():
 def test_slice_open_end_uses_auto_duration():
     """obj[3:] はアウト点省略＝素材末尾まで（尺は自動確定）"""
     _mk()
-    o = Object(asset("video/fox_noaudio.mp4"))[3:]
+    o = Object(asset("video/clip_with_audio.mp4"))[3:]
     assert o.duration is None and o._duration_auto
     # length() は「末尾-3秒」（fox_noaudio は約5.5秒）
     assert abs(o.length() - (5.545 - 3)) < 0.1
@@ -72,7 +72,7 @@ def test_slice_open_end_uses_auto_duration():
 def test_slice_negative_indices():
     """負値は素材末尾からの相対（obj[-2:] = 末尾2秒）"""
     _mk()
-    o = Object(asset("video/fox_noaudio.mp4"))[-2:]
+    o = Object(asset("video/clip_with_audio.mp4"))[-2:]
     trims = [e for e in o.effects if e.name == "trim"]
     assert trims and abs(trims[0].params["start"] - (5.545 - 2)) < 0.1
 
@@ -80,13 +80,13 @@ def test_slice_negative_indices():
 def test_slice_errors():
     """step・非スライス・画像・逆転範囲は明示エラー"""
     _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     with pytest.raises(ValueError, match="step"):
         Object(src)[::2]
     with pytest.raises(TypeError, match="スライス"):
         Object(src)[2]
     with pytest.raises(TypeError, match="素材時間がない"):
-        Object(asset("images/onigiri_tenmusu.png"))[1:2]
+        Object(asset("images/shape_badge.png"))[1:2]
     with pytest.raises(ValueError, match="end > start"):
         Object(src)[3:1]
 
@@ -120,7 +120,7 @@ def test_slice_in_point_real_render(tmp_path):
 def test_at_places_absolutely_and_does_not_advance():
     """@は絶対配置かつ非進行（後続の順次配置に影響しない）"""
     p = _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     a = Object(src)[0:2]           # 順次: 0〜2
     b = Object(src)[0:1] @ 10      # 絶対: 10〜11（カーソルは進めない）
     c = Object(src)[0:2]           # 順次: 2〜4（bの影響を受けない）
@@ -132,7 +132,7 @@ def test_at_places_absolutely_and_does_not_advance():
 def test_at_anchor_name():
     """@ にアンカー名を渡せる（"名前.end" 等）"""
     p = _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     a = Object(src)[0:2]
     a.time(2, name="head")
     b = Object(src)[0:1] @ "head.end"
@@ -143,7 +143,7 @@ def test_at_anchor_name():
 def test_at_undefined_anchor_raises():
     """@ の未定義アンカーは診断付きエラー"""
     p = _mk()
-    Object(asset("video/fox_noaudio.mp4"))[0:1] @ "no_such_anchor"
+    Object(asset("video/clip_with_audio.mp4"))[0:1] @ "no_such_anchor"
     with pytest.raises(RuntimeError, match="no_such_anchor"):
         _resolve(p)
 
@@ -151,7 +151,7 @@ def test_at_undefined_anchor_raises():
 def test_at_validates_operand():
     """@ の右辺は数値かアンカー名のみ・負の時刻は拒否"""
     _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     with pytest.raises(TypeError):
         Object(src) @ [1, 2]
     with pytest.raises(ValueError):
@@ -163,7 +163,7 @@ def test_at_validates_operand():
 def test_rshift_chains_after():
     """a >> b は b を a の終了直後に開始（pause.time() を挟める）"""
     p = _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     a = Object(src)[0:2]
     b = Object(src)[0:1]
     c = Object(src)[0:1]
@@ -177,7 +177,7 @@ def test_rshift_chains_after():
 def test_rshift_after_at():
     """スライス+@+>> の組み合わせ: src[3:8] @ 12 の直後に次クリップ"""
     p = _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     a = Object(src)[1:3] @ 12
     b = Object(src)[0:1]
     a >> b
@@ -189,7 +189,7 @@ def test_rshift_after_at():
 def test_rshift_requires_known_duration():
     """先行アイテムの尺未確定は日本語エラー"""
     p = _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     a = Object(src)          # time()もスライスもなし＝尺未確定
     b = Object(src)[0:1]
     a >> b
@@ -200,7 +200,7 @@ def test_rshift_requires_known_duration():
 def test_rshift_rejects_bad_operand():
     """>> の右辺の型チェックと自己連結の拒否"""
     _mk()
-    a = Object(asset("video/fox_noaudio.mp4"))[0:1]
+    a = Object(asset("video/clip_with_audio.mp4"))[0:1]
     with pytest.raises(TypeError):
         a >> 5
     with pytest.raises(ValueError):
@@ -212,7 +212,7 @@ def test_rshift_rejects_bad_operand():
 def test_until_from_floating_start():
     """浮動配置(@)のuntilは実開始時刻を基準に尺を計算する"""
     p = _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     a = Object(src)[0:2]
     a.time(2, name="head")
     b = Object(src) @ 1
@@ -235,7 +235,7 @@ def test_text_slice_rejected():
 def test_repeat_sets_effects_and_duration():
     """obj*3 は repeat/arepeat(count, segment) を積み、表示尺を3倍にする"""
     _mk()
-    o = Object(asset("video/fox_noaudio.mp4"))[0:2] * 3
+    o = Object(asset("video/clip_with_audio.mp4"))[0:2] * 3
     reps = [e for e in o.effects if e.name == "repeat"]
     assert reps and reps[0].params["count"] == 3
     assert abs(reps[0].params["segment"] - 2.0) < 1e-6
@@ -246,7 +246,7 @@ def test_repeat_sets_effects_and_duration():
 def test_repeat_rmul_and_noop():
     """3 * obj も可。*1 は何もしない"""
     _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     o = 2 * Object(src)[0:1]
     assert any(e.name == "repeat" for e in o.effects)
     o2 = Object(src)[0:1] * 1
@@ -256,13 +256,13 @@ def test_repeat_rmul_and_noop():
 def test_repeat_errors():
     """非整数・0以下・画像は明示エラー"""
     _mk()
-    src = asset("video/fox_noaudio.mp4")
+    src = asset("video/clip_with_audio.mp4")
     with pytest.raises(TypeError, match="整数"):
         Object(src) * 1.5
     with pytest.raises(ValueError, match="1以上"):
         Object(src) * 0
     with pytest.raises(TypeError, match="素材尺がない"):
-        Object(asset("images/onigiri_tenmusu.png")) * 2
+        Object(asset("images/shape_badge.png")) * 2
 
 
 def test_repeat_real_render(tmp_path):
@@ -314,7 +314,7 @@ def _two_color_video_1s(tmp_path):
 def test_neg_applies_reverse():
     """-obj は reverse() の糖衣"""
     _mk()
-    o = -Object(asset("video/fox_noaudio.mp4"))[0:2]
+    o = -Object(asset("video/clip_with_audio.mp4"))[0:2]
     assert any(e.name == "reverse" for e in o.effects)
 
 

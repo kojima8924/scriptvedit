@@ -7,7 +7,7 @@
     "-i",
     "color=c=black:s=1280x720:d=2:r=30",
     "-i",
-    "__cache__/artifacts/particle/e1b9804c/a8acbc1e0fca74f0.mkv",
+    "__cache__/artifacts/particle/67b69e75/961ba9edd8658b3b.mkv",
     "-filter_complex",
     "[0:v][1:v]overlay=trunc(0.5*W-w/2):trunc(0.5*H-h/2):eof_action=pass:enable='between(t/,0/,2)'[v1]",
     "-map",
@@ -22,20 +22,20 @@
     "test60.mp4"
   ],
   "cache": {
-    "__cache__/artifacts/checkpoint/1bbaba61/6eb20c7bf60554ba.png": [
+    "__cache__/artifacts/checkpoint/ac9b64e5/aca35f838882043c.png": [
       "ffmpeg",
       "-y",
       "-i",
-      "assets/images/onigiri_tenmusu.png",
+      "assets/images/shape_badge.png",
       "-vf",
       "scale=iw*0.5:ih*0.5",
       "-frames:v",
       "1",
       "-pix_fmt",
       "rgba",
-      "__cache__/artifacts/checkpoint/1bbaba61/6eb20c7bf60554ba.png"
+      "__cache__/artifacts/checkpoint/ac9b64e5/aca35f838882043c.png"
     ],
-    "__cache__/artifacts/particle/e1b9804c/a8acbc1e0fca74f0.mkv": [
+    "__cache__/artifacts/particle/67b69e75/961ba9edd8658b3b.mkv": [
       "ffmpeg",
       "-y",
       "-framerate",
@@ -50,7 +50,7 @@
       "yuva444p",
       "-t",
       "2",
-      "__cache__/artifacts/particle/e1b9804c/a8acbc1e0fca74f0.mkv"
+      "__cache__/artifacts/particle/67b69e75/961ba9edd8658b3b.mkv"
     ]
   }
 }
