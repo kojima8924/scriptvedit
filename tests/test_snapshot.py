@@ -37,6 +37,23 @@ _TEST91_CHECKPOINT_RE = re.compile(
 _TEST91_CHECKPOINT_TOKEN = (
     "__cache__/artifacts/checkpoint/<HASH8>/<HASH16>.mkv")
 
+# web/formula のキャッシュ鍵は renderer identity(Playwright バージョン = 同梱
+# Chromium リビジョンの代理)を含むため、環境ごとに鍵が変わる。鍵ハッシュだけを
+# 比較時に畳む(ffmpeg コマンド構造・フィルタ文字列の検出力は落とさない)。
+# 下流の checkpoint も web 生成物を入力に取ると鍵が連動して変わるため対象に含める。
+_RENDERER_KEY_RES = [
+    # 例: __cache__/artifacts/web/<name>/<16桁>.webm の16桁だけを <HASH16> へ
+    (re.compile(r"(?<=/)[0-9a-fA-F]{16}(?=\.webm)"), "<HASH16>"),
+    (re.compile(r"(?<=/formula/)[0-9a-fA-F]{16}(?=\.png)"), "<HASH16>"),
+    (re.compile(r"(?<=/checkpoint/)[0-9a-fA-F]{8}/[0-9a-fA-F]{16}"),
+     "<HASH8>/<HASH16>"),
+]
+
+# renderer identity を含む鍵が現れるテスト(web Object / formula を使うもの)
+_RENDERER_DEPENDENT_TESTS = frozenset({
+    "test19", "test20", "test21", "test29", "test38", "test87", "test91",
+})
+
 
 def L(name):
     """レイヤーファイルを絶対パスで解決（cwd 非依存）"""
@@ -76,12 +93,14 @@ def normalize_cmd(cmd):
 
 
 def _normalize_snapshot_comparison(name, value):
-    """test91 の環境依存 checkpoint ハッシュだけを比較時に正規化する。
+    """環境依存のキャッシュ鍵ハッシュだけを比較時に正規化する。
 
-    formula PNG のパスやフィルタ文字列はレンダ内容そのものなので保持する。
+    対象は (1) test91 の数式PNG由来 checkpoint、(2) renderer identity
+    (Playwright/Chromium バージョン)を鍵に含む web/formula 生成物とその下流。
+    フィルタ文字列・コマンド構造・素材パスはレンダ内容そのものなので保持する。
     スナップショット保存前には呼ばず、具体的なキャッシュ鍵も記録に残す。
     """
-    if name != "test91":
+    if name != "test91" and name not in _RENDERER_DEPENDENT_TESTS:
         return value
     if isinstance(value, dict):
         return {
@@ -92,7 +111,11 @@ def _normalize_snapshot_comparison(name, value):
     if isinstance(value, list):
         return [_normalize_snapshot_comparison(name, item) for item in value]
     if isinstance(value, str):
-        return _TEST91_CHECKPOINT_RE.sub(_TEST91_CHECKPOINT_TOKEN, value)
+        text = _TEST91_CHECKPOINT_RE.sub(_TEST91_CHECKPOINT_TOKEN, value)
+        if name in _RENDERER_DEPENDENT_TESTS:
+            for pattern, repl in _RENDERER_KEY_RES:
+                text = pattern.sub(repl, text)
+        return text
     return value
 
 
