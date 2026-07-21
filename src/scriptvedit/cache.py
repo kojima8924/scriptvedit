@@ -266,6 +266,12 @@ def _checkpoint_cache_path(original_source, ops, duration=None, fps=None, qualit
         sigs.append(f"dur={duration}")
     if fps is not None:
         sigs.append(f"fps={fps}")
+    # Project解像度も鍵に含める。blur_background_fill 等、Project寸法に依存する
+    # フィルタを焼くopがあり、320pと1080pで異なる出力が同一パスへ衝突していた
+    # （監査 issue #16 P1）。解像度非依存opでも分かれるが正しさを優先する
+    proj = Project._current
+    if proj is not None:
+        sigs.append(f"pctx={proj.width}x{proj.height}@{proj.fps}")
     key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
     # video入力 + transform-only でも動画ならmkv (ffv1)
     is_video = _detect_media_type(original_source) in ("video",)
@@ -410,9 +416,29 @@ def _apply_time_effects_to_duration(dur, effects):
     return cur
 
 
+_RENDERER_IDENTITY_MEMO = [None]
+
+
+def _renderer_identity():
+    """HTML→画素を実際に生成するレンダラ(Playwright同梱Chromium)の識別子。
+
+    pip の playwright バージョンは同梱 Chromium リビジョンと1対1のため、
+    ブラウザを起動せずに取れる軽量な代理識別子として使う。Chromium 更新で
+    フォントラスタライズ等が変わっても旧PNG/WebMを使い続けない
+    （監査 issue #16 P3）。未導入なら "none"（そもそも生成できない）。
+    """
+    if _RENDERER_IDENTITY_MEMO[0] is None:
+        try:
+            from importlib.metadata import version
+            _RENDERER_IDENTITY_MEMO[0] = f"playwright-{version('playwright')}"
+        except Exception:
+            _RENDERER_IDENTITY_MEMO[0] = "playwright-none"
+    return _RENDERER_IDENTITY_MEMO[0]
+
+
 def _web_cache_path(obj, project):
     """Web Objectのsignatureベースキャッシュパスを計算"""
-    sigs = []
+    sigs = [f"renderer={_renderer_identity()}"]
     # テンプレートファイルのフィンガープリント
     try:
         ffp = _file_fingerprint(obj._web_source)
@@ -599,4 +625,5 @@ def cache_clear(cache_dir=_CACHE_DIR, *, force=False):
 from scriptvedit.expr import Expr, max
 from scriptvedit.ffmpeg import _decoder_input_args
 from scriptvedit.plugins import _EFFECT_PLUGINS
+from scriptvedit.project import Project
 from scriptvedit.state import _ARTIFACT_DIR, _BAKEABLE_EFFECTS, _ENGINE_VER, _TERMINAL_FRAME_EFFECTS, _detect_media_type

@@ -1268,7 +1268,9 @@ python scripts/tools_baseline.py verify baseline_snapshots.json
 ## 依存
 
 - Python 3.10+
-- ffmpeg（PATHに必要）
+- **FFmpeg 8 以上**（PATH に `ffmpeg`/`ffprobe`。長大フィルタの
+  `-/filter_complex` 構文など FFmpeg 8 の機能を使うため、初回実行時に
+  メジャーバージョンを検証し、7 以下はエラーになる）
 - Playwright + Chromium（テンプレート/web Object/slide/`formula` 使用時。KaTeX は同梱のためネットワーク不要）
 - numpy + scipy（`beat_sync` 使用時。scipy はビート検出に必須）
 - numpy + PIL（`scriptvedit.testkit` の SSIM検証。scipy は任意で高速化）

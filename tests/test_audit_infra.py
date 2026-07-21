@@ -163,3 +163,33 @@ def test_dev_build_version_accepted(monkeypatch):
         stdout = "ffmpeg version N-125705-gc23123630e Copyright..."
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
     ffmpeg_mod._check_ffmpeg_version()  # 例外なし
+
+
+# --- #16: キャッシュ鍵のProject解像度とrenderer identity ---------------------
+
+def test_checkpoint_key_includes_project_resolution():
+    """同一素材・同一opでもProject解像度が違えばcheckpointパスが分かれる"""
+    from scriptvedit import Project, asset, resize
+    from scriptvedit.cache import _checkpoint_cache_path
+    from scriptvedit.objects import Transform
+
+    src = asset("images/onigiri_tenmusu.png")
+    ops = [("transform", Transform("resize", sx=0.5, sy=0.5))]
+    p1 = Project(); p1.configure(width=320, height=180, fps=30)
+    path_320 = _checkpoint_cache_path(src, ops)
+    p2 = Project(); p2.configure(width=1920, height=1080, fps=30)
+    path_1080 = _checkpoint_cache_path(src, ops)
+    assert path_320 != path_1080, "解像度が違うのに同一checkpointパス"
+
+
+def test_web_and_formula_keys_include_renderer(monkeypatch):
+    """renderer identityが変わればweb/formulaの鍵も変わる"""
+    import scriptvedit.cache as cache_mod
+    from importlib import import_module
+    formula_mod = import_module("scriptvedit.formula")
+
+    monkeypatch.setattr(cache_mod, "_RENDERER_IDENTITY_MEMO", ["playwright-1.0"])
+    fp_a = formula_mod._katex_fingerprint()
+    monkeypatch.setattr(cache_mod, "_RENDERER_IDENTITY_MEMO", ["playwright-2.0"])
+    fp_b = formula_mod._katex_fingerprint()
+    assert fp_a != fp_b, "rendererが変わってもformula鍵が同一"

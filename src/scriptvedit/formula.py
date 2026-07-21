@@ -58,7 +58,9 @@ def _katex_fingerprint():
                 f"KaTeX の同梱ファイルが見つかりません: {path}\n"
                 f"formula() は {_KATEX_DIR} に katex.min.css / katex.min.js / fonts/ が"
                 f"配置されている必要があります。")
-    parts = [f"tpl:{_file_fingerprint(_template_path(_FORMULA_TEMPLATE))}"]
+    from scriptvedit.cache import _renderer_identity
+    parts = [f"renderer:{_renderer_identity()}",
+             f"tpl:{_file_fingerprint(_template_path(_FORMULA_TEMPLATE))}"]
     # vendor(katex) のうち**レンダ結果に影響するファイルだけ**をハッシュ
     # （相対パス順で決定的に）。README 等のドキュメントを含めると、
     # 改行属性の履歴差（旧チェックアウトのCRLF vs fresh cloneのLF）だけで
