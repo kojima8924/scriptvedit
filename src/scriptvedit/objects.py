@@ -598,6 +598,23 @@ class Object:
             ae._auto_from_speed = True
             self.audio_effects.append(ae)
 
+    # 1つのObjectに複数適用しても2個目以降がfiltergraphへ反映されない
+    # AudioEffect（構築側が next(...) で1個だけ選ぶ）。黙殺せず適用時点で拒否する
+    _SINGLE_AUDIO_EFFECTS = ("duck_under", "loop")
+
+    def _append_audio_effect(self, ae):
+        """AudioEffect追加の共通経路（adelete処理・重複不可Effectの明示拒否）"""
+        if ae.name == "adelete":
+            self._audio_deleted = True
+            return
+        if ae.name in self._SINGLE_AUDIO_EFFECTS and any(
+                e.name == ae.name for e in self.audio_effects):
+            raise ValueError(
+                f"{ae.name}: 1つのObjectに {ae.name} は1回しか適用できません"
+                f"（2個目以降はフィルタに反映されず黙って無視されるため拒否します）。"
+                f"適用済みの {ae.name} を1つに統合してください。")
+        self.audio_effects.append(ae)
+
     def __le__(self, rhs):
         """<= 演算子: Transform/Effect/AudioEffect等を適用"""
         if isinstance(rhs, Transform):
@@ -611,16 +628,10 @@ class Object:
             for e in rhs.effects:
                 self._append_effect(e)
         elif isinstance(rhs, AudioEffect):
-            if rhs.name == "adelete":
-                self._audio_deleted = True
-            else:
-                self.audio_effects.append(rhs)
+            self._append_audio_effect(rhs)
         elif isinstance(rhs, AudioEffectChain):
             for e in rhs.effects:
-                if e.name == "adelete":
-                    self._audio_deleted = True
-                else:
-                    self.audio_effects.append(e)
+                self._append_audio_effect(e)
         else:
             raise TypeError(f"Object <= に渡せるのは Transform/Effect/AudioEffect 等のみ: {type(rhs)}")
         return self
@@ -753,6 +764,13 @@ class Object:
         dep_sources = sorted(set(dep_sources))
         for src in dep_sources:
             sigs.append(f"dep={_source_signature(src)}")
+        # 登録済み全プラグインのコード指紋を混ぜる（サブレイヤーがどのプラグインを
+        # 呼ぶかは静的に判別できないため全登録分。プラグインファイルだけ変更した
+        # 場合も cache='auto' が再生成する。issue #16 P1）
+        for pname in sorted(_EFFECT_PLUGINS):
+            sigs.append(f"plugin={pname}:{_EFFECT_PLUGINS[pname].code_ffp}")
+        # サブProject全体の出力へ影響する音声設定（normalize_audio）も署名対象
+        sigs.append(f"loudnorm={sub_project._loudnorm_target}")
         sigs.append(f"ev={_ENGINE_VER}")
         key = hashlib.sha256("||".join(sigs).encode()).hexdigest()[:16]
         cache_path = os.path.join(_ARTIFACT_DIR, "subproject", f"{key}.webm")
@@ -813,9 +831,16 @@ class Object:
         sigs.append(_op_prefix_fingerprint(ops))
         quality = _ops_effective_quality(ops)
         sigs.append(f"q={quality}")
+        # Project解像度/fpsを鍵に含める（blur_background_fill 等の一部Effectは
+        # Projectのwidth/heightでフィルタが変わるため、解像度違いの出力が
+        # 同一pathへ衝突していた。issue #16 P1。checkpoint側も同じ書式で対応）
+        proj = Project._current
+        if proj is not None:
+            sigs.append(f"pctx={proj.width}x{proj.height}@{proj.fps}")
+        else:
+            sigs.append("pctx=1280x720@30")
         sigs.append(f"ev={_ENGINE_VER}")
         if duration is not None:
-            proj = Project._current
             fps = proj.fps if proj else 30
             sigs.append(f"dur={duration}")
             sigs.append(f"fps={fps}")
@@ -1190,6 +1215,7 @@ from scriptvedit.expr import clip, min
 from scriptvedit.ffmpeg import _decoder_input_args, _run_ffmpeg_to_cache, _unique_tmp_path
 from scriptvedit.filters.video import _build_effect_filters, _build_transform_filters, _build_video_pre_filters, _get_base_dimensions
 from scriptvedit.media import _source_signature
+from scriptvedit.plugins import _EFFECT_PLUGINS
 from scriptvedit.project import Project
 from scriptvedit.state import _ARTIFACT_DIR, _CACHE_DIR, _ENGINE_VER, _GEN_COUNTER, _GEN_COUNTER_LOCK, _TIME_LIVE_EFFECTS, _detect_media_type, _suggest_hint
 from scriptvedit.timeline import _link_after, _register_anchor_owner, pause

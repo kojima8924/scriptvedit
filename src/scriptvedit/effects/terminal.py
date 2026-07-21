@@ -16,10 +16,32 @@ import concurrent.futures as _futures
 import inspect as _inspect
 
 
+def _validate_terminal_input_object(func, name, obj):
+    """morph_to(target)/assemble_from(source) に渡すObjectの早期検証。
+
+    生成処理はPILへ obj.source だけを渡すため、Transform/Effect付きObjectを
+    受理すると加工が黙って無視される（Objectは消費されるのに）。transition()
+    と同じく構築時点で明示拒否する。media typeも画像のみ（動画は最終フレーム
+    抽出等の暗黙変換をせず明示エラー）。監査 issue #15 P1。
+    """
+    if obj.transforms or obj.effects or obj.audio_effects:
+        raise ValueError(
+            f"{func}: {name} に Transform/Effect が適用されています"
+            f"（'{obj.source}'。生成処理は元素材しか読まないため、"
+            f"加工が黙って無視されます）。"
+            f"先に compute() で素材化してから渡してください。")
+    if obj.media_type != "image":
+        raise ValueError(
+            f"{func}: {name} は画像のみ対応です"
+            f"（'{obj.source}' は {obj.media_type}）。"
+            f"動画等は compute() やフレーム抽出で静止画にしてから渡してください。")
+
+
 def morph_to(target, blend=None, **morph_params):
     """モーフィングEffect: 画像→画像の最適輸送モーフ動画を生成"""
     if not isinstance(target, Object):
         raise TypeError(f"morph_to の target は Object のみ: {type(target)}")
+    _validate_terminal_input_object("morph_to", "target", target)
     # パラメータのタイポはレンダ深部（チェックポイント生成後）ではなく
     # 構築時点で検出する。morph モジュールが無い環境ではレンダ時に検出される
     try:
@@ -94,6 +116,7 @@ def assemble_from(source, blend=None, **particle_params):
     """
     if not isinstance(source, Object):
         raise TypeError(f"assemble_from の source は Object のみ: {type(source)}")
+    _validate_terminal_input_object("assemble_from", "source", source)
     _check_particle_params("assemble_from", particle_params)
     proj = Project._current
     if proj is not None and source in proj.objects:

@@ -16,6 +16,16 @@ import concurrent.futures as _futures
 import inspect as _inspect
 
 
+def _morph_frame_count(fps, dur):
+    """morph/particle の生成フレーム数を返す（短尺でも最低1フレームを保証）。
+
+    旧実装の int(fps * dur) は dur < 1/fps で 0 フレームになり PNG が
+    1枚も生成されず後段 ffmpeg が失敗し、非整数尺でも末尾区間を覆えなかった。
+    web Object（_web_frame_count）と同じ「切り上げ + 最低1」方針に統一する。
+    """
+    return _builtins.max(1, int(_math.ceil(float(fps) * float(dur))))
+
+
 class Project:
     _current = None
     # レイヤー実行中のProjectスタック（from_projectでの親特定用。
@@ -604,6 +614,14 @@ class Project:
             # web Objectの依存素材（deps=）も鮮度検証の対象にする
             if getattr(o, '_web_deps', None):
                 sources.extend(o._web_deps)
+            # text系Objectの解決済みフォント実ファイルも依存に含める
+            # （sourceは実体のない text:// のため、TTF差し替えが
+            # 鮮度検証から漏れて旧字形のキャッシュがfresh扱いになる。issue #16 P2）
+            tspec = getattr(o, '_text_spec', None)
+            if tspec:
+                font_path = tspec.get("font")
+                if font_path and os.path.isfile(font_path):
+                    sources.append(font_path)
         # morph_toターゲット等、objectsから除外された依存を併合
         sources.extend(self._extra_layer_deps.get(filename, []))
         self._layer_sources[filename] = sources
@@ -871,6 +889,19 @@ class Project:
         self._draft = bool(draft)
         self._alpha = bool(alpha)
         self._render_quality = "draft" if draft else "final"
+        # 奇数解像度の事前拒否: yuv420p系（h264/webm）はクロマサブサンプリングの
+        # 制約で偶数寸法が必須。受理するとチェックポイント等の重い処理の後に
+        # libx264 が "width not divisible by 2" で失敗するため、レンダ開始前に
+        # 日本語で拒否する（PNG連番/GIF/webp/サムネイルは奇数のまま出力できる）
+        _fmt_kind = self._resolve_output_format(output_path)["kind"]
+        if _fmt_kind in ("h264", "webm") and (
+                int(self.width) % 2 or int(self.height) % 2):
+            raise ValueError(
+                f"render: この出力形式（{_fmt_kind}, yuv420p系）は偶数解像度が"
+                f"必要です（現在 {self.width}x{self.height}）。"
+                f"configure() で幅・高さを偶数にするか、"
+                f"pngシーケンス（.png）や .gif など奇数解像度を扱える形式で"
+                f"出力してください。")
         # draft時はチェックポイント/morph鍵を本番と分離
         _ACTIVE_QUALITY[0] = "draft" if draft else ""
         _GEN_COUNTER[0] = 0
@@ -1293,6 +1324,15 @@ class Project:
         meta = {}
         for src in self._layer_sources.get(filename, []):
             key = str(src).replace("\\", "/")
+            if key.startswith("text://"):
+                # text系の合成ソースは実体ファイルを持たないが、名前自体が
+                # テキスト内容+スタイルのハッシュで一意（_text_synthetic_source）。
+                # 名前を指紋として記録する。None のままだと fail-closed により
+                # text を含むレイヤーが永遠に fresh にならない。テキスト内容の
+                # 変更は名前（キー）の変化として完全一致比較で検出される。
+                # フォント実ファイルは別途 _layer_sources に登録済み（issue #16 P2）
+                meta[key] = key
+                continue
             try:
                 meta[key] = _file_fingerprint(src)
             except (OSError, TypeError):
@@ -1678,7 +1718,7 @@ class Project:
                         import tempfile
                         from scriptvedit.morph import generate_rgba_frames
                         with tempfile.TemporaryDirectory() as tmpdir:
-                            n_frames = int(fps * dur)
+                            n_frames = _morph_frame_count(fps, dur)
                             # blend Exprを数値関数に変換
                             blend_expr = op.params.get("blend")
                             if blend_expr is not None and isinstance(blend_expr, Expr):
@@ -1747,7 +1787,7 @@ class Project:
                     if need_render:
                         import tempfile
                         with tempfile.TemporaryDirectory() as tmpdir:
-                            n_frames = int(fps * dur)
+                            n_frames = _morph_frame_count(fps, dur)
                             blend_expr = op.params.get("blend")
                             if blend_expr is not None and isinstance(blend_expr, Expr):
                                 blend_fn = lambda t, _e=blend_expr: _e.eval_at(t)

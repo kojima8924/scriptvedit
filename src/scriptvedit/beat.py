@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import warnings
@@ -302,6 +303,28 @@ def _refine_grid(times, env, period0, duration):
 # ビート検出(メイン API)
 # ---------------------------------------------------------------------------
 
+def _validate_detect_beats_params(*, sr, hop, tightness, min_bpm, max_bpm):
+    """detect_beats の数値パラメータをデコード前に検証する（日本語エラー）"""
+    for name, v in (("sr", sr), ("hop", hop)):
+        if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+            raise ValueError(
+                f"detect_beats: {name} は正の整数を指定してください: {v!r}")
+    if (isinstance(tightness, bool) or not isinstance(tightness, (int, float))
+            or not math.isfinite(float(tightness)) or tightness <= 0):
+        raise ValueError(
+            f"detect_beats: tightness は有限の正数を指定してください: "
+            f"{tightness!r}")
+    for name, v in (("min_bpm", min_bpm), ("max_bpm", max_bpm)):
+        if (isinstance(v, bool) or not isinstance(v, (int, float))
+                or not math.isfinite(float(v)) or v <= 0):
+            raise ValueError(
+                f"detect_beats: {name} は有限の正数を指定してください: {v!r}")
+    if not min_bpm < max_bpm:
+        raise ValueError(
+            f"detect_beats: min_bpm({min_bpm!r}) は max_bpm({max_bpm!r}) より"
+            f"小さい値を指定してください")
+
+
 def detect_beats(audio_path, *, sr=_DEFAULT_SR, hop=512, tightness=12.0,
                  min_bpm=60, max_bpm=200):
     """音声/動画ファイルからビート(拍)時刻を検出する。
@@ -317,6 +340,11 @@ def detect_beats(audio_path, *, sr=_DEFAULT_SR, hop=512, tightness=12.0,
     Returns:
         {"bpm": float, "beats": [秒, ...], "onsets": [秒, ...], "duration": float}
     """
+    # 入口検証: 無効値はFFmpegデコードやFFT等の高コスト処理へ進む前に
+    # 日本語で拒否する（tightness=0 のZeroDivisionError等の深部例外を防ぐ。
+    # 監査 issue #15 P2）
+    _validate_detect_beats_params(sr=sr, hop=hop, tightness=tightness,
+                                  min_bpm=min_bpm, max_bpm=max_bpm)
     y = _load_mono(audio_path, sr=sr)
     duration = len(y) / sr
     times, env = onset_strength(y, sr, hop=hop)
