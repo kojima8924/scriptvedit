@@ -389,6 +389,20 @@ class Object:
             return False  # probe不可→音声なしと推定（安全側）
         return self._has_audio
 
+    def _ensure_registered(self):
+        """Project._current に未登録なら現在位置へ再登録する（重複登録はしない）。
+
+        compute() は自身を「焼いた素材」へ変異させる際に Project.objects から
+        除外する。その後 time()/show()/until()/@ で再配置されたら、呼び出し
+        時点のタイムライン位置へ戻す（監査 issue #14 P1: README の
+        compute()→time() の例が空タイムラインになる問題の修正）。
+        """
+        proj = Project._current
+        if proj is None:
+            return
+        if not any(o is self for o in proj.objects):
+            proj.objects.append(self)
+
     def time(self, duration=None, *, name=None):
         """表示時間を設定。省略時は加工後長(length())で自動決定（layer exec後に確定）"""
         if duration is None:
@@ -398,33 +412,47 @@ class Object:
             self.duration = None
             self._duration_auto = True
         else:
+            _require_time("time", "duration", duration, lo=0, lo_exclusive=True)
             self.duration = duration
             self._duration_auto = False
         if name is not None:
+            # 生成アンカー（X.start / X.end）も明示 anchor() と同じ重複管理に
+            # 載せる（別レイヤーでの同名定義は last-write-wins にせずエラー）
+            proj = Project._current
+            if proj is not None:
+                _register_anchor_owner(proj, f"{name}.start")
+                _register_anchor_owner(proj, f"{name}.end")
             self._anchor_name = name
+        self._ensure_registered()
         return self
 
     def until(self, name, offset=0.0):
         """durationをアンカー時刻まで伸長"""
+        _require_time("until", "offset", offset)
         self._until_anchor = name
         self._until_offset = offset
+        self._ensure_registered()
         return self
 
     def show(self, duration, *, priority=None):
         """current_timeを進めずに表示。start=current_time, duration=指定値"""
+        _require_time("show", "duration", duration, lo=0, lo_exclusive=True)
         self.duration = duration
         self._advance = False
         if priority is not None:
             self._priority_override = priority
+        self._ensure_registered()
         return self
 
     def show_until(self, name, offset=0.0, *, priority=None):
         """current_timeを進めずにアンカーまで表示"""
+        _require_time("show_until", "offset", offset)
         self._until_anchor = name
         self._until_offset = offset
         self._advance = False
         if priority is not None:
             self._priority_override = priority
+        self._ensure_registered()
         return self
 
     # --- DSL糖衣: タイムライン3点セット（スライス / @ / >>）------------------
@@ -487,11 +515,12 @@ class Object:
         if isinstance(at, bool) or not isinstance(at, (int, float, str)):
             raise TypeError(
                 f"@ の右辺は秒（数値）かアンカー名（文字列）です: {at!r}")
-        if isinstance(at, (int, float)) and at < 0:
-            raise ValueError(f"@ の時刻は0以上が必要です: {at}")
+        if isinstance(at, (int, float)):
+            _require_time("@", "時刻", at, lo=0)
         self._fixed_start = at
         self._start_after = None
         self._advance = False
+        self._ensure_registered()
         return self
 
     def __rshift__(self, other):
@@ -535,6 +564,23 @@ class Object:
         self._append_effect(Effect("reverse"))
         return self
 
+    def _append_transform(self, t):
+        """Transform追加の共通経路（Effect適用後のTransformを明示拒否）。
+
+        適用順は「全Transform→全Effect」のカテゴリ順が正式仕様
+        （transforms/effects を別配列で保持するため、記述順の交互適用は
+        再現できない。監査 issue #14 P1）。Effect の後に Transform を書くと
+        記述順と実行順が食い違うため、受理せずエラーにする。
+        """
+        if self.effects:
+            names = ", ".join(e.name for e in self.effects)
+            raise ValueError(
+                f"Transform '{t.name}' は Effect より先に適用してください"
+                f"（適用済み Effect: {names}）。適用順は「全Transform→全Effect」の"
+                f"カテゴリ順です。Effect 適用後の静的変形が必要な場合は "
+                f"compute() で素材化してから Transform を適用してください。")
+        self.transforms.append(t)
+
     def _append_effect(self, e):
         """Effect追加の共通経路（delete処理・時間系の検証・speedの音声追従）"""
         if e.name == "delete":
@@ -555,9 +601,10 @@ class Object:
     def __le__(self, rhs):
         """<= 演算子: Transform/Effect/AudioEffect等を適用"""
         if isinstance(rhs, Transform):
-            self.transforms.append(rhs)
+            self._append_transform(rhs)
         elif isinstance(rhs, TransformChain):
-            self.transforms.extend(rhs.transforms)
+            for t in rhs.transforms:
+                self._append_transform(t)
         elif isinstance(rhs, Effect):
             self._append_effect(rhs)
         elif isinstance(rhs, EffectChain):
@@ -578,8 +625,29 @@ class Object:
             raise TypeError(f"Object <= に渡せるのは Transform/Effect/AudioEffect 等のみ: {type(rhs)}")
         return self
 
+    def _apply_compute_result(self, cache_path):
+        """compute() の生成物へ自身をその場で変異させる（「焼いた素材」化）。
+
+        source を生成物パスへ差し替え、焼き込み済みの transforms/effects を
+        クリアする。生成物（PNG / FFV1 mkv）はどちらも音声 stream を持たない
+        ため、音声状態も生成物に一致させる（audio_effects を残すと実体のない
+        音声を map してしまう。監査 issue #14 P1）。
+        """
+        self.source = cache_path
+        self.media_type = _detect_media_type(cache_path)
+        self.transforms = []
+        self.effects = []
+        self.audio_effects = []
+        self._has_audio = False
+        return self
+
     def compute(self, duration=None):
-        """タイムライン外で素材を生成。PNG(静止) or WebM(動画)を返す"""
+        """タイムライン外で素材を生成。PNG(静止) or WebM(動画)を返す
+
+        自身を生成物（焼いた素材）へその場で変異させて返す。Project からは
+        一旦除外されるが、time()/show()/until()/@ で再配置すればその時点の
+        位置へ再登録される（README の compute()→time() の契約）。
+        """
         # live effects チェック（時間系 speed/reverse/freeze_frame は
         # _build_compute_video_cmd の前処理フィルタでベイクできるため許可）
         for e in self.effects:
@@ -609,18 +677,10 @@ class Object:
             self._resolved_length = duration
         # plan pass: source差し替えのみ
         if proj is not None and proj._mode == "plan":
-            self.source = cache_path
-            self.media_type = _detect_media_type(cache_path)
-            self.transforms = []
-            self.effects = []
-            return self
+            return self._apply_compute_result(cache_path)
         # キャッシュ存在チェック
         if os.path.exists(cache_path):
-            self.source = cache_path
-            self.media_type = _detect_media_type(cache_path)
-            self.transforms = []
-            self.effects = []
-            return self
+            return self._apply_compute_result(cache_path)
         # 生成コマンド構築
         if duration is None:
             cmd = self._build_compute_image_cmd(cache_path)
@@ -629,19 +689,11 @@ class Object:
         # dry_run: コマンドを記録して生成スキップ
         if proj is not None and getattr(proj, '_dry_run', False):
             proj._pending_compute_cmds[cache_path] = cmd
-            self.source = cache_path
-            self.media_type = _detect_media_type(cache_path)
-            self.transforms = []
-            self.effects = []
-            return self
+            return self._apply_compute_result(cache_path)
         # 実生成
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         _run_ffmpeg_to_cache(cmd, cache_path, timeout=600)
-        self.source = cache_path
-        self.media_type = _detect_media_type(cache_path)
-        self.transforms = []
-        self.effects = []
-        return self
+        return self._apply_compute_result(cache_path)
 
     @staticmethod
     def from_project(sub_project, *, cache="auto"):
@@ -1005,7 +1057,7 @@ class Object:
             raise TypeError("grid() は画像素材にのみ使用できます")
         if cols < 1 or rows < 1:
             raise ValueError("grid: cols/rows は1以上が必要です")
-        self.transforms.append(
+        self._append_transform(
             Transform("grid", cols=int(cols), rows=int(rows), gap=int(gap)))
         return self
 
@@ -1140,4 +1192,5 @@ from scriptvedit.filters.video import _build_effect_filters, _build_transform_fi
 from scriptvedit.media import _source_signature
 from scriptvedit.project import Project
 from scriptvedit.state import _ARTIFACT_DIR, _CACHE_DIR, _ENGINE_VER, _GEN_COUNTER, _GEN_COUNTER_LOCK, _TIME_LIVE_EFFECTS, _detect_media_type, _suggest_hint
-from scriptvedit.timeline import _link_after, pause
+from scriptvedit.timeline import _link_after, _register_anchor_owner, pause
+from scriptvedit.validate import _require_time

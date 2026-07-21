@@ -57,10 +57,12 @@ class Pause:
         self._start_after = None   # >> による直後連結
 
     def time(self, duration):
+        _require_time("pause.time", "duration", duration, lo=0)
         self.duration = duration
         return self
 
     def until(self, name, offset=0.0):
+        _require_time("pause.until", "offset", offset)
         self._until_anchor = name
         self._until_offset = offset
         return self
@@ -93,8 +95,10 @@ class Scene:
     `scene:<name>` アンカーを張り、他レイヤーから参照できる。
     """
     def __init__(self, project, name, duration):
-        if duration is None or duration <= 0:
+        if duration is None:
             raise ValueError(f"scene '{name}': duration は正の値が必要です")
+        _require_time(f"scene '{name}'", "duration", duration,
+                      lo=0, lo_exclusive=True)
         self.project = project
         self.name = name
         self.duration = duration
@@ -130,11 +134,14 @@ class Scene:
 
 # --- アンカー/同期 ---
 
-def anchor(name):
-    """現在のレイヤー位置にアンカーを登録"""
-    proj = Project._current
-    if proj is None:
-        raise RuntimeError("anchor()にはアクティブなProjectが必要です")
+def _register_anchor_owner(proj, name):
+    """アンカー名の定義元レイヤーを登録し、別レイヤーでの再定義を拒否する。
+
+    明示 anchor() と time(name=...) の生成アンカー（X.start / X.end）の
+    共通経路。同一レイヤーファイルの再実行（Plan/Renderの複数pass）は許容し、
+    別レイヤーでの同名定義は last-write-wins にせずエラーにする
+    （監査 issue #14 P1）。
+    """
     current_file = proj._current_layer_file or "(unknown)"
     if name in proj._anchor_defined_in:
         existing_file = proj._anchor_defined_in[name]
@@ -144,6 +151,14 @@ def anchor(name):
                 f"('{current_file}' で再定義は禁止)"
             )
     proj._anchor_defined_in[name] = current_file
+
+
+def anchor(name):
+    """現在のレイヤー位置にアンカーを登録"""
+    proj = Project._current
+    if proj is None:
+        raise RuntimeError("anchor()にはアクティブなProjectが必要です")
+    _register_anchor_owner(proj, name)
     marker = _AnchorMarker(name)
     proj.objects.append(marker)
 
@@ -151,16 +166,13 @@ def anchor(name):
 class _PauseFactory:
     """pause.time(N) / pause.until(name) でPauseを生成・登録するファクトリ"""
     def time(self, duration):
-        p = Pause()
-        p.duration = duration
+        p = Pause().time(duration)
         if Project._current is not None:
             Project._current.objects.append(p)
         return p
 
     def until(self, name, offset=0.0):
-        p = Pause()
-        p._until_anchor = name
-        p._until_offset = offset
+        p = Pause().until(name, offset)
         if Project._current is not None:
             Project._current.objects.append(p)
         return p
@@ -183,3 +195,4 @@ def scene(name, duration):
 
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
 from scriptvedit.project import Project
+from scriptvedit.validate import _require_time

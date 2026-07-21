@@ -124,5 +124,20 @@ def _require_number(func_name, param_name, value, lo=None, hi=None):
     return value
 
 
+def _require_time(func_name, param_name, value, *, lo=None, lo_exclusive=False):
+    """時刻・尺パラメータ共通の検証（有限・非bool・下限）。
+
+    time()/show()/pause/scene/@ 等のタイムラインAPIは、NaN・±Infinity・負数を
+    受理すると filtergraph や総尺へ黙って伝播する（監査 issue #14 P1）。
+    入口で一括拒否する。値は変換せずそのまま返す（int→float 変換で
+    コマンド文字列やスナップショットが揺れるのを防ぐ）。
+    """
+    _require_number(func_name, param_name, value, lo, None)
+    if lo is not None and lo_exclusive and value == lo:
+        raise ValueError(
+            f"{func_name}: {param_name} は {lo} より大きい値が必要です: {value!r}")
+    return value
+
+
 # --- 遅延解決の相互参照（関数本体からのみ使用: 循環importを避けるため末尾で束縛）---
 from scriptvedit.expr import Expr

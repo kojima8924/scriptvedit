@@ -561,7 +561,18 @@ class Project:
     def _exec_layer(self, filename, priority):
         """レイヤーファイルを実行してobjectsに登録"""
         start_idx = len(self.objects)
+        # 例外時も current layer context を必ず元値へ戻す（残留すると
+        # 例外回復後の asset()/相対パス解決が失敗レイヤー基準で汚染される。
+        # 監査 issue #14 P2）
+        prev_layer_file = self._current_layer_file
         self._current_layer_file = filename
+        try:
+            self._exec_layer_body(filename, priority, start_idx)
+        finally:
+            self._current_layer_file = prev_layer_file
+
+    def _exec_layer_body(self, filename, priority, start_idx):
+        """_exec_layer の本体（current layer context 設定済みで呼ばれる）"""
         # exec中にmorph_to等が積む追加依存をリセット（plan/renderの再実行で重複させない）
         self._extra_layer_deps[filename] = []
         Project._current = self
@@ -618,7 +629,6 @@ class Project:
                     audio_sources.append(source_text)
         self._layer_audio_sources[filename] = audio_sources
         self._layer_unknown_audio_sources[filename] = unknown_audio_sources
-        self._current_layer_file = None
 
     def _fill_auto_durations(self, start_idx, end_idx):
         """duration_auto=Trueのオブジェクトにlength()でdurationを確定"""
@@ -868,10 +878,12 @@ class Project:
         self._pending_compute_cmds = {}
         # 部分レンダの時間窓を検証・保持（式のt基準は保ちつつ窓外を出力しない）
         if start is not None or end is not None:
+            if start is not None:
+                _require_time("render", "start", start, lo=0)
+            if end is not None:
+                _require_time("render", "end", end, lo=0)
             s = 0.0 if start is None else float(start)
             e = end if end is None else float(end)
-            if s < 0:
-                raise ValueError(f"render: start は0以上が必要です: {start}")
             if e is not None and e <= s:
                 raise ValueError(f"render: end({end}) は start({start}) より後が必要です")
             self._render_window = (s, e)
@@ -884,6 +896,19 @@ class Project:
         # 前に確定していなければならない（issue #13 P1-4）
         if self.duration is None:
             self.duration = self._calc_total_duration()
+        # 部分レンダ窓の実効出力長を検証する。start が総尺以上だと -ss/-t 0 の
+        # 空MP4が成功扱いで確定してしまう（監査 issue #14 P1）。
+        # end > 総尺は従来どおり総尺へ clamp する。
+        if self._render_window is not None:
+            w_start, w_end = self._render_window
+            eff_end = self.duration if w_end is None \
+                else min(w_end, self.duration)
+            if eff_end - w_start <= 0:
+                raise ValueError(
+                    f"render: 出力区間が空です（start={w_start}, "
+                    f"end={w_end if w_end is not None else '総尺'}, "
+                    f"総尺={self.duration}s）。start は総尺より小さい値を"
+                    f"指定してください。")
         # cache="use" の事前検証（鍵に総尺を含むため総尺確定後に行う）
         self._validate_cache_specs()
         # Render pass: 本実行（anchors確定済み）
@@ -2586,5 +2611,5 @@ from scriptvedit.assets import resolve_layer_path
 from scriptvedit.plugins import _EFFECT_PLUGINS, _autoload_plugins
 from scriptvedit.state import _ACTIVE_QUALITY, _ARTIFACT_DIR, _CACHE_DIR, _CONFIGURE_KEYS, _ENCODER_MAP, _ENGINE_VER, _GEN_COUNTER, _PRESETS, _TERMINAL_FRAME_EFFECTS, _TIME_LIVE_EFFECTS, _detect_media_type, _suggest_hint
 from scriptvedit.timeline import Pause, Scene, _AnchorMarker, _ScenePad
-from scriptvedit.validate import _require_number, _validate_ffmpeg_color
+from scriptvedit.validate import _require_number, _require_time, _validate_ffmpeg_color
 from scriptvedit.web import label
