@@ -75,7 +75,7 @@ def slide_title():
     _center(draw, 250, "scriptvedit", _jp(80, bold=True), ACCENT)
     _accent_line(draw, 355, 360)
     _center(draw, 400, "Python DSL for Video Editing", _jp(36), DIM)
-    _center(draw, 480, "FFmpeg backend  /  Expr compiler  /  27 Easings", _jp(22), DIM)
+    _center(draw, 480, "FFmpeg backend  /  Expr compiler  /  32 Easings", _jp(22), DIM)
 
     img.save(os.path.join(OUT, "slide_01_title.png"))
     print("  slide_01_title.png")
@@ -144,7 +144,7 @@ def slide_features():
 
     # 機能リスト
     features = [
-        "27種のイージング関数",
+        "32種のイージング関数",
         "キーフレーム補間",
         "シーケンス制御 (phase / repeat / bounce)",
         "Expr チェーンメソッド (.smooth / .map)",
@@ -229,7 +229,8 @@ def watermark():
     print("  watermark.png")
 
 
-if __name__ == "__main__":
+def generate_all():
+    """全スライドとウォーターマークを生成する（render_showcase.py からも呼ばれる）"""
     print("スライド生成中...")
     slide_title()
     slide_syntax()
@@ -237,3 +238,7 @@ if __name__ == "__main__":
     slide_closing()
     watermark()
     print("完了")
+
+
+if __name__ == "__main__":
+    generate_all()

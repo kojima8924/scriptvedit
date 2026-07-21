@@ -1,7 +1,8 @@
-"""assets/bgm/ の楽曲をスキャンして catalog.json / catalog.md を生成する
+"""共有素材ライブラリの bgm/ をスキャンして catalog.json / catalog.md を生成する
 
-楽曲を選ぶときの手がかり（尺・BPM・タグ）を一覧にする。カタログは
-assets/bgm/ の中にだけ置かれ、git には載らない（.gitignore 済み）。
+楽曲を選ぶときの手がかり（尺・BPM・タグ）を一覧にする。BGM とカタログは
+共有素材ライブラリ（環境変数 SCRIPTVEDIT_ASSETS 配下の bgm/）に置き、
+リポジトリには入れない。
 
 自動で集める情報:
   - 尺（ffprobe）
@@ -26,15 +27,13 @@ import sys
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac"}
 
 
-def _repo_root():
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
 def _default_bgm_dir():
     """既定のBGMフォルダ
 
-    BGM は共有素材ライブラリ側に置く（リポジトリには入れない）。
+    BGM は共有素材ライブラリ側に置く（リポジトリには入れない。リポジトリ内への
+    フォールバックは音源の誤 commit につながるため行わない）。
     環境変数 SCRIPTVEDIT_ASSETS（`;` 区切りの探索パス）の各ルート配下から bgm/ を探す。
+    見つからなければ SystemExit（--dir で明示指定した場合はこの関数を通らない）。
     """
     env = os.environ.get("SCRIPTVEDIT_ASSETS", "")
     parts = [env]
@@ -44,8 +43,11 @@ def _default_bgm_dir():
         cand = os.path.join(root, "bgm")
         if os.path.isdir(cand):
             return cand
-    # フォールバック: リポジトリ配下（ライブラリ自身のテスト用に置いている場合）
-    return os.path.join(_repo_root(), "assets", "bgm")
+    raise SystemExit(
+        "BGMフォルダが見つかりません。共有素材ライブラリに bgm/ を作り、\n"
+        "環境変数 SCRIPTVEDIT_ASSETS にライブラリのパスを設定してください\n"
+        "（`;` 区切りで複数指定可）。特定のフォルダを使う場合は --dir で指定できます。"
+    )
 
 
 def _probe_duration(path):
@@ -130,6 +132,20 @@ def _fetch_commons(nc_ids):
     return out
 
 
+def _license_note(track):
+    """曲ごとの出典・利用条件の注記を返す
+
+    ニコニ・コモンズID がファイル名にあり commons から情報が取れた曲だけ、
+    出典（コモンズの作品ページ）を示す。それ以外の曲に特定レーベル固有の
+    条件を推測で付けたりせず「未確認」と明記する。
+    """
+    if track.get("nc_id") and track.get("title"):
+        return (f"ニコニ・コモンズ {track['nc_id']}"
+                f"（利用条件は作品ページで確認: "
+                f"https://commons.nicovideo.jp/works/{track['nc_id']}）")
+    return "出典・利用条件: 未確認（各自で確認してください）"
+
+
 def _write_markdown(md_path, tracks):
     """曲と特徴の一覧（人が読む用）"""
     lines = [
@@ -141,25 +157,24 @@ def _write_markdown(md_path, tracks):
         "タグはニコニ・コモンズに登録されている客観情報。その曲がどんな文脈で",
         "使われてきたかが分かるので、場面に合う曲を選ぶ手がかりになる。",
         "",
-        "| 曲名 | ファイル | 尺 | BPM | タグ | memo |",
-        "|---|---|---:|---:|---|---|",
+        "| 曲名 | ファイル | 尺 | BPM | タグ | 出典・利用条件 | memo |",
+        "|---|---|---:|---:|---|---|---|",
     ]
     for t in tracks:
         tags = "、".join(t["tags"]) if t["tags"] else ""
         dur = f"{t['duration']}s" if t["duration"] else "?"
         bpm = f"{t['bpm']}" if t["bpm"] else "?"
         lines.append(
-            f"| {t['title'] or '-'} | `{t['file']}` | {dur} | {bpm} | {tags} | {t['memo']} |"
+            f"| {t['title'] or '-'} | `{t['file']}` | {dur} | {bpm} | {tags} "
+            f"| {_license_note(t)} | {t['memo']} |"
         )
     lines += [
         "",
-        "## 利用条件（Nash Music Library）",
+        "## 利用条件について",
         "",
-        "- **ニコニコ動画・ニコニコ生放送でのみ使用可**（他サービスへの投稿には使えない）",
-        "- 使用した原盤を **親作品として登録**する",
-        "- 概要欄に **クレジット表記**:「(楽曲名)」by Nash Music Library / https://www.nash.jp/nml/",
-        "- 個人であればクリエイター奨励プログラムによる収益化が可能",
-        "- 詳細: https://www.nash.jp/article/2148/show",
+        "- 「出典・利用条件」欄が **未確認** の曲は、使用前に必ず出典と利用条件を確認すること。",
+        "- ニコニ・コモンズの曲は各作品ページの利用条件（利用範囲・親作品登録・"
+        "クレジット表記等）に従うこと。",
         "",
     ]
     tmp = md_path + ".tmp"
@@ -236,7 +251,7 @@ def main():
             print(f"  BPM検出: {name}")
             bpm = _detect_bpm(path)
 
-        tracks.append({
+        track = {
             "file": name,
             "nc_id": nc,
             "title": title,
@@ -244,7 +259,9 @@ def main():
             "bpm": bpm,
             "tags": tags,
             "memo": prev.get("memo", ""),  # 手書き欄は必ず保持
-        })
+        }
+        track["license"] = _license_note(track)
+        tracks.append(track)
 
     tmp = json_path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\r\n") as f:
