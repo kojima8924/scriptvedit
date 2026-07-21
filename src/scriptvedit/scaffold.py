@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """`scriptvedit new <path>` — 動画プロジェクトの雛形生成
 
-生成物はそのまま `python main.py` でレンダできる（素材ゼロ・追加依存ゼロで動く）。
+生成物はそのまま `python main.py` でレンダできる（minimal は素材ゼロ・追加依存ゼロ。
+explainer テンプレートの formula() だけは Playwright + Chromium が必要:
+`pip install "scriptvedit[web]" && playwright install chromium`）。
 
   <path>/
     main.py            構成定義（configure / layer / render）
@@ -91,6 +93,16 @@ cd {name}
 python main.py                 # output/{name}.mp4
 python main.py out.mp4         # 出力先を指定
 python -m scriptvedit watch main.py   # 変更を監視して自動再レンダ
+```
+
+## 依存
+
+- コアは Python 標準ライブラリ + FFmpeg のみ（minimal テンプレートは追加依存ゼロ）。
+- `formula()`（explainer テンプレートの数式レンダ）は Playwright と Chromium が必要:
+
+```bash
+pip install "scriptvedit[web]"
+playwright install chromium
 ```
 
 ## 構成

@@ -38,8 +38,9 @@ plugin / project_method / transform。
 
 - `usage` … 概念・main スクリプト雛形・レイヤー雛形・DSL・Expr・**プラグイン雛形**・CLI
 - `constraints` … 守らないと壊れる制約（severity: error/warning/info）
-- `effects`(39) / `transforms`(7) / `audio_effects`(7) / `factories`(31) /
+- `effects`(40) / `transforms`(7) / `audio_effects`(8) / `factories`(32) /
   `objects`(15) / `object_methods`(9) / `project_methods`(14) / `expr`(98) / `plugins`(3)
+  （件数は変動する。正は `describe` の実測で、整合は tests/test_issue17_docs.py が検証する）
 
 各 Effect エントリには `bakeable` フィールドがあり、キャッシュに焼けるかが分かる。
 Effect / Transform / AudioEffect の `respects_fast_hint` は、その op が `~` の
@@ -55,7 +56,7 @@ Effect / Transform / AudioEffect の `respects_fast_hint` は、その op が `~
 
 ```bash
 pip install -e .[all]      # コアは標準ライブラリのみ。extras: morph/web/beat/tools
-pytest tests/              # 574件（約1分）
+pytest tests/              # 全テスト（約1分）
 python tests/render_all.py # 実レンダリング（重い。出力は tests/output/）
 ```
 
@@ -250,7 +251,7 @@ overlay の中央配置は `(W-pad_size[0])/2` で計算される
 ## 6. 機能を追加するときの判断フロー
 
 1. **まず `python -m scriptvedit describe` で既存機能を確認する。**
-   39 の Effect と 98 の Expr が既にある。車輪の再発明を避ける。
+   40 の Effect と 98 の Expr が既にある。車輪の再発明を避ける。
 2. **その動画プロジェクト固有の一発ネタ → `plugins/*.py` に `@effect_plugin`。**
    コアを汚さない。`plugins/` は自動読込され、`from scriptvedit import *` で使える。
    雛形は `describe` の `usage.plugin_template` にある。参考実装:

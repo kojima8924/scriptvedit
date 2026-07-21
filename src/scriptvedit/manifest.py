@@ -282,7 +282,7 @@ _MANIFEST_EXAMPLES = {
     "narrate": "n = narrate('こんにちは', speaker=1)   # n.duration で尺が取れる",
     "group": "g = group(obj_a, obj_b)\ng <= move(x=lambda u: u)",
     "pip": "video <= pip(x=0.75, y=0.75, scale=0.3, radius=12)",
-    "anchor": "obj.time(3, name='intro')\npause.until('intro')",
+    "anchor": "obj.time(3, name='intro')\npause.until('intro.end')",
     "scene": "with scene('導入', 5.0):\n    ...",
 }
 
@@ -318,7 +318,7 @@ _MANIFEST_CONSTRAINTS = [
         "topic": "キャッシュ",
         "severity": "warning",
         "applies_to": ["Project.layer"],
-        "text": "レイヤーキャッシュ（p.layer(..., cache='auto'/'on')）は音声を含まない。"
+        "text": "レイヤーキャッシュ（p.layer(..., cache='auto'/'use'/'make')）は音声を含まない。"
                 "音声を持つオブジェクトのあるレイヤーをキャッシュすると警告が出て音声が失われる。"
                 "音声レイヤーは cache='off'（既定）のままにする。",
     },
@@ -402,8 +402,9 @@ _MANIFEST_CONSTRAINTS = [
         "applies_to": [],
         "text": "`~op` は内容を削除しない品質ヒント。軽い代替処理を持つopだけが"
                 "それを使い、持たないopは通常と同一の処理を警告なしで行う。"
-                "明示的な音声削除には adelete() を使う。将来の audit/strict モードでは"
-                "無視されたヒントを info/warning 級lintとして報告する予定。",
+                "明示的な音声削除には adelete() を使う。無視されたヒントは"
+                "実装済みの p.audit() が quality-hint-ignored（info）として報告する"
+                "（render(strict=True) は audit の warning 以上でレンダ前に停止）。",
     },
     {
         "id": "render_timeout",
@@ -427,7 +428,10 @@ _MANIFEST_USAGE = {
         "Transform: 静的変形（resize/crop/rotate 等。時間非依存）",
         "Effect: 時間依存エフェクト（fade/move/scale 等。u=0..1 の進行度で変化）",
         "AudioEffect: 音声への効果（again/afade/atempo 等）",
-        "<= 演算子で Object に Transform/Effect/AudioEffect を適用する（適用順に実行される）",
+        "<= 演算子で Object に Transform/Effect/AudioEffect を適用する"
+        "（実行順は記述順ではなく「全Transform→全Effect」のカテゴリ順。"
+        "Effect 適用後に Transform を適用しようとすると ValueError。"
+        "Effect 適用後の静的変形は compute() で素材化してから行う）",
         "u: エフェクトの進行度 0..1。lambda u: ... または Expr で時間変化を書く",
         "Expr: FFmpeg 式へ展開される式オブジェクト。lambda u: lerp(0, 1, u) は自動で Expr になる",
         "asset('images/bg.jpg'): プロジェクトの assets/ → assets/_imported/ → "
@@ -465,8 +469,8 @@ _MANIFEST_USAGE = {
         "chain": "obj <= fade(0.5) & scale(1.2)       # Effect 同士は & で連結",
         "transform_chain": "obj <= resize(sx=0.5, sy=0.5) | blur(3)   # Transform 同士は |",
         "duration": "obj.time(3)                       # 表示尺3秒（省略時は素材の尺）",
-        "start": "obj.show(3)                          # 現在位置から3秒表示（順次配置）",
-        "anchor": "obj.time(3, name='intro'); pause.until('intro')",
+        "start": "obj.show(3)                          # 時計を進めずに3秒表示（並行表示・非進行）",
+        "anchor": "obj.time(3, name='intro'); pause.until('intro.end')   # name= は <name>.start / <name>.end を生成",
         "length": "obj.length()                        # trim/atempo を反映した実効尺",
         "quality": "~fade(1.0)                         # ~op は品質ヒント（内容は削除しない）",
         "policy": "+fade(1.0) / -fade(1.0)             # +op=force, -op=cache off",
@@ -831,7 +835,9 @@ def _manifest_enums():
         "encoder": sorted(_ENCODER_MAP),
         "wipe_direction": ["left", "right", "up", "down"],
         "anchor": ["center", "topleft", "left", "right", "top", "bottom"],
-        "layer_cache": ["off", "auto", "on"],
+        # Project.layer(cache=...) の検証タプル（project.py）と一致させること。
+        # 整合は tests/test_issue17_docs.py が実装側の許可値と突き合わせて検証する
+        "layer_cache": ["off", "auto", "use", "make"],
         "quality": ["final", "fast"],
         "policy": ["auto", "force", "off"],
         "media_type": ["image", "video", "audio", "web"],
