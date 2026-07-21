@@ -53,8 +53,37 @@ def _externalize_long_filters(cmd):
     return new_cmd, tmp_files
 
 
+# FFmpeg メジャーバージョン検証のプロセス内フラグ（1回だけ実行）
+_FFMPEG_VERSION_CHECKED = [False]
+
+
+def _check_ffmpeg_version():
+    """FFmpeg 8 以上であることを最初の実行前に1回だけ検証する。
+
+    長大フィルタの外部化(`-/filter_complex`)は FFmpeg 8 の構文で、旧版では
+    短い動画だけ動き複雑な動画で突然失敗する（監査 issue #17）。
+    バージョン文字列が数値で始まらない開発ビルド（master 等）は検証を通す。
+    """
+    if _FFMPEG_VERSION_CHECKED[0]:
+        return
+    _FFMPEG_VERSION_CHECKED[0] = True
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-version"], capture_output=True, text=True,
+            timeout=10).stdout
+        m = re.match(r"ffmpeg version n?(\d+)\.", out or "")
+    except Exception:
+        return  # ffmpeg 不在等は後続の実行エラーに任せる
+    if m and int(m.group(1)) < 8:
+        raise RuntimeError(
+            f"FFmpeg 8 以上が必要です（検出: {out.splitlines()[0] if out else '不明'}）。\n"
+            f"scriptvedit は FFmpeg 8 の構文（-/filter_complex 等）を使用します。"
+            f"https://ffmpeg.org/ から 8 系を導入してください。")
+
+
 def _run_ffmpeg(cmd, timeout=600):
     """ffmpegコマンドを実行（長大フィルタは一時ファイル経由で渡し、実行後に削除）"""
+    _check_ffmpeg_version()
     run_cmd, tmp_files = _externalize_long_filters(cmd)
     try:
         subprocess.run(run_cmd, check=True, timeout=timeout)
@@ -83,18 +112,36 @@ def _run_ffmpeg_to_cache(cmd, cache_path, timeout=600):
             f"_run_ffmpeg_to_cache: cmd内に出力先cache_pathが見つかりません: {cache_path}\n"
             f"コマンド構築時と実行時で出力パスが食い違っています。")
     run_cmd = [tmp_path if arg == cache_path else arg for arg in cmd]
+
+    def _dest_stat():
+        try:
+            st = os.stat(cache_path)
+            return (st.st_size, st.st_mtime_ns)
+        except OSError:
+            return None
+
+    stat_before = _dest_stat()
     try:
         _run_ffmpeg(run_cmd, timeout=timeout)
         try:
             os.replace(tmp_path, cache_path)
         except OSError:
             # Windows では同じ cache_path へ複数ワーカが同時に replace すると
-            # 一時的な共有違反(PermissionError)になり得る。同じキャッシュ鍵は
-            # 同じ内容なので、他ワーカが先に確定していれば自分の分は破棄してよい。
-            if not os.path.exists(cache_path):
-                raise
-        with _GEN_COUNTER_LOCK:  # 並列レイヤー生成からの同時更新をアトミック化
-            _GEN_COUNTER[0] += 1  # render統計用: 生成した中間ファイル数
+            # 一時的な共有違反(PermissionError)になり得る。ただし「宛先が
+            # 存在する」だけで成功扱いにすると、実行前から置いてある古い
+            # キャッシュ + 権限エラー等でも黙って旧内容を使い続けてしまう
+            # （監査 issue #16）。実行中に宛先が**変化した**（=他ワーカが
+            # 同一鍵を確定させた）場合のみ譲歩し、それ以外は失敗にする。
+            stat_after = _dest_stat()
+            if stat_after is None or stat_after == stat_before:
+                raise RuntimeError(
+                    f"キャッシュの確定(os.replace)に失敗しました: {cache_path}\n"
+                    f"別プロセスの使用・ウイルス対策ソフトのロック・権限を"
+                    f"確認してください。古いキャッシュ内容は使いません。")
+            # 他ワーカ勝ち: 自分の生成分は破棄（統計にも数えない）
+        else:
+            with _GEN_COUNTER_LOCK:  # 並列レイヤー生成からの同時更新をアトミック化
+                _GEN_COUNTER[0] += 1  # render統計用: 実際に確定できた中間ファイル数
     finally:
         # 失敗時に残った一時ファイルを削除（成功時はos.replace済みで存在しない）
         try:

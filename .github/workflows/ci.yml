@@ -1,6 +1,6 @@
 # CI: テスト(Windows/Linux × Python 3.10/3.13) + wheel ビルド + extras 単独インストール検証
-# issue #13 P3-21。gitignore対象の大容量素材・edge-tts・VOICEVOX が無い環境では
-# 依存テストが pytest.skip される前提(issue #12 で整備済み)。
+# gitignore対象の大容量素材・edge-tts・VOICEVOX が無い環境では依存テストが
+# pytest.skip される(許可リスト外の想定外skipは検知して失敗させる)。
 name: CI
 
 on:
@@ -29,20 +29,59 @@ jobs:
         if: runner.os == 'Windows'
         uses: FedericoCarboni/setup-ffmpeg@v3
       - name: FFmpeg と日本語フォントを導入 (Linux)
-        # setup-ffmpeg の Linux 静的ビルドは drawtext(freetype) 非搭載、
-        # apt の ffmpeg は 6.x で FFmpeg 8 の -/filter_complex 構文を知らない。
-        # 両方を満たす BtbN の master ビルド(GPL, freetype入り)を使う
+        # apt の ffmpeg は 6.x で FFmpeg 8 の -/filter_complex 構文を知らず、
+        # setup-ffmpeg の Linux 静的ビルドは drawtext(freetype) 非搭載。
+        # BtbN の日付固定リリース(FFmpeg 8系, GPL, freetype入り)へ SHA-256 検証つきで固定する。
+        # 更新するときは URL と SHA を明示的に PR で書き換えること(監査 issue #17)。
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
-          curl -fsSL -o /tmp/ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
-          tar -xf /tmp/ffmpeg.tar.xz -C /tmp
-          sudo cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/
+          FF_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-20-14-10/ffmpeg-n8.1.2-29-g703dcc25b9-linux64-gpl-8.1.tar.xz"
+          FF_SHA256="1beb1d21b4485962baeb2fff4f01e8b91faa6d1017567b07b8f26df1a93cbdfe"
+          curl -fsSL -o /tmp/ffmpeg.tar.xz "$FF_URL"
+          echo "$FF_SHA256  /tmp/ffmpeg.tar.xz" | sha256sum -c -
+          mkdir -p /tmp/ffdist && tar -xf /tmp/ffmpeg.tar.xz -C /tmp/ffdist --strip-components=1
+          sudo cp /tmp/ffdist/bin/ffmpeg /tmp/ffdist/bin/ffprobe /usr/local/bin/
+      - name: FFmpeg のメジャーバージョンを検証 (8系必須)
+        shell: bash
+        run: |
           ffmpeg -version | head -1
+          ffmpeg -version | head -1 | grep -Eq "ffmpeg version n?8\." \
+            || { echo "FFmpeg 8 系ではありません"; exit 1; }
       - name: 依存をインストール
         run: python -m pip install -e .[all,dev]
+      - name: Chromium を導入 (Linux)
+        # formula() / web Object の実ブラウザ生成テストを実行するため
+        if: runner.os == 'Linux'
+        run: python -m playwright install --with-deps chromium
       - name: テスト実行(カバレッジ付き)
-        run: python -m pytest tests/ -q --cov=scriptvedit --cov-report=term
+        run: python -m pytest tests/ -q -rs --cov=scriptvedit --cov-report=term --cov-fail-under=60 2>&1 | tee pytest.log
+        shell: bash
+      - name: 想定外の skip を検知
+        # 許可された理由(gitignore対象の大容量素材・edge-tts・VOICEVOX・
+        # Windows での Chromium/Pillow 未導入)以外の skip は失敗にする
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import re, sys
+          log = open("pytest.log", encoding="utf-8", errors="replace").read()
+          allowed = [
+              r"素材 .* が無い環境", r"ffmpeg", r"ffprobe", r"edge-tts",
+              r"VOICEVOX", r"Chromium", r"chromium", r"Playwright",
+              r"playwright", r"Pillow", r"scipy", r"numpy", r"フォント",
+              r"再生成しました",
+          ]
+          bad = []
+          for line in log.splitlines():
+              m = re.match(r"SKIPPED \[\d+\] .*?: (.*)", line.strip())
+              if m and not any(re.search(p, m.group(1)) for p in allowed):
+                  bad.append(line.strip())
+          if bad:
+              print("想定外の skip:")
+              print("\n".join(bad))
+              sys.exit(1)
+          print("skip はすべて許可リスト内")
+          EOF
 
   build:
     runs-on: ubuntu-latest

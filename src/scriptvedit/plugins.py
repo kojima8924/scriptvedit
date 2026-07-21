@@ -363,14 +363,48 @@ def _build_plugin_effect_filters(obj, e, eff_idx, start, dur, base_dims,
     return [f for f in result if f]
 
 
+def _snapshot_registries():
+    """プラグイン登録が触る全レジストリの復元用スナップショットを取る"""
+    g = _pkg_ns()
+    _all = _pkg_all()
+    return {
+        "plugins": dict(_EFFECT_PLUGINS),
+        "bakeable": set(_BAKEABLE_EFFECTS),
+        "all": list(_all),
+        # 名前空間はプラグイン由来のファクトリだけ差分復元する（全コピーは重い）
+        "ns_plugin_names": {k for k, v in g.items()
+                            if getattr(v, "_plugin_spec", None) is not None},
+    }
+
+
+def _restore_registries(snap):
+    """スナップショットへ完全復元する（部分登録の残留を根絶。監査 issue #16）"""
+    _EFFECT_PLUGINS.clear()
+    _EFFECT_PLUGINS.update(snap["plugins"])
+    _BAKEABLE_EFFECTS.clear()
+    _BAKEABLE_EFFECTS.update(snap["bakeable"])
+    _all = _pkg_all()
+    _all[:] = snap["all"]
+    g = _pkg_ns()
+    for k in [k for k, v in g.items()
+              if getattr(v, "_plugin_spec", None) is not None
+              and k not in snap["ns_plugin_names"]]:
+        del g[k]
+
+
 def load_plugin(path):
-    """単一のプラグイン .py を読み込む（失敗時は PluginError）"""
+    """単一のプラグイン .py を読み込む（失敗時は PluginError）
+
+    ファイル内で登録後に例外が起きても、レジストリ・名前空間・__all__ を
+    読み込み前の状態へ完全復元する（半端に使える Effect を残さない）。
+    """
     import importlib.util as _ilu
     abs_path = os.path.abspath(path)
     if not os.path.exists(abs_path):
         raise PluginError(f"プラグインファイルが見つかりません: {path}")
     mod_name = "_svplugin_" + hashlib.sha256(
         abs_path.replace("\\", "/").encode()).hexdigest()[:12]
+    snap = _snapshot_registries()
     try:
         spec = _ilu.spec_from_file_location(mod_name, abs_path)
         if spec is None or spec.loader is None:
@@ -380,15 +414,20 @@ def load_plugin(path):
         spec.loader.exec_module(module)
     except PluginError:
         sys.modules.pop(mod_name, None)
+        _restore_registries(snap)
         raise
     except Exception as exc:
         sys.modules.pop(mod_name, None)
+        _restore_registries(snap)
         raise PluginError(
             f"プラグインの読み込みに失敗しました: {path}\n"
             f"  {type(exc).__name__}: {exc}") from exc
     _LOADED_PLUGIN_FILES.add(abs_path.replace("\\", "/"))
     return module
 
+
+# 直近の load_plugins で読込失敗があったか（autoload の再試行判定用）
+_LOAD_HAD_FAILURE = [False]
 
 # 読み込み済みプラグインファイル（二重読み込み防止）
 _LOADED_PLUGIN_FILES = set()
@@ -415,21 +454,31 @@ def load_plugins(directory, quiet=False):
             load_plugin(path)
             loaded.append(path)
         except PluginError as exc:
+            _LOAD_HAD_FAILURE[0] = True
             if not quiet:
                 warnings.warn(f"プラグインをスキップしました: {exc}")
     return loaded
 
 
 def _autoload_plugins(base_dir):
-    """base_dir/plugins/ があれば自動読み込みする（1ディレクトリ1回）"""
+    """base_dir/plugins/ があれば自動読み込みする（1ディレクトリ1回）
+
+    失敗したファイルがあったディレクトリは「読込済み」に登録しない
+    （プラグインを修正した後の再読込を可能にする。監査 issue #16）。
+    成功済みファイルは _LOADED_PLUGIN_FILES で個別スキップされるため、
+    再訪しても二重登録にはならない。
+    """
     if os.environ.get("SCRIPTVEDIT_NO_PLUGINS"):
         return []
     pdir = os.path.abspath(os.path.join(base_dir, "plugins"))
     key = pdir.replace("\\", "/")
     if key in _AUTOLOADED_PLUGIN_DIRS or not os.path.isdir(pdir):
         return []
-    _AUTOLOADED_PLUGIN_DIRS.add(key)
-    return load_plugins(pdir)
+    _LOAD_HAD_FAILURE[0] = False
+    loaded = load_plugins(pdir)
+    if not _LOAD_HAD_FAILURE[0]:
+        _AUTOLOADED_PLUGIN_DIRS.add(key)
+    return loaded
 
 
 def plugin_manifest(as_text=False):
