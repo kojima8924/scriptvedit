@@ -642,9 +642,96 @@ class Project:
                     max_dur = max(max_dur, end)
         return max_dur if max_dur > 0 else 5
 
+    def _layer_structure_signature(self):
+        """レイヤーごとのタイムライン構造署名を返す（Plan/Render差の検出用）。
+
+        レイヤー .py は Plan pass で複数回・Render pass でさらに1回実行される。
+        外部カウンタ・乱数・現在時刻などで実行ごとに構造が変わると、Plan で
+        確定した総尺と Render の実構造がずれ、末尾が黙って切り詰められる
+        （監査 issue #14 P0）。開始時刻は構造から決定されるため含めず、
+        「何が・どの順で・どの尺で並ぶか」を層別に写し取る。
+        """
+        sig = {}
+        for (start_idx, end_idx, _), spec in zip(self._layers, self._layer_specs):
+            items = []
+            for item in self.objects[start_idx:end_idx]:
+                items.append((
+                    type(item).__name__,
+                    str(getattr(item, "source", getattr(item, "name", ""))),
+                    getattr(item, "duration", None),
+                    getattr(item, "_advance", True),
+                    getattr(item, "_until_anchor", None),
+                    getattr(item, "_anchor_name", None),
+                ))
+            sig[spec["filename"]] = items
+        return sig
+
+    def _verify_plan_structure(self, used_cache_files):
+        """Render passの構造がPlanと一致するか検証する（不一致は明示エラー）。
+
+        キャッシュ再生されたレイヤーは構造が変わって当然なので比較しない。
+        """
+        plan = getattr(self, "_plan_structure", None)
+        if plan is None:
+            return
+        current = self._layer_structure_signature()
+        for filename, plan_items in plan.items():
+            if filename in used_cache_files or filename not in current:
+                continue
+            cur_items = current[filename]
+            if cur_items == plan_items:
+                continue
+            details = []
+            if len(cur_items) != len(plan_items):
+                details.append(
+                    f"  アイテム数: Plan={len(plan_items)} → Render={len(cur_items)}")
+            for i, (pi, ci) in enumerate(zip(plan_items, cur_items)):
+                if pi != ci:
+                    details.append(f"  [{i}] Plan={pi}")
+                    details.append(f"  [{i}] Render={ci}")
+                    break
+            raise RuntimeError(
+                f"レイヤー '{filename}' の構造が Plan と Render で一致しません。\n"
+                + "\n".join(details) + "\n"
+                f"レイヤー .py はアンカー解決のため複数回実行されます。"
+                f"外部カウンタ・乱数・現在時刻・環境の変化など、実行のたびに"
+                f"結果が変わる記述を避け、決定的（何度実行しても同じ構造）に"
+                f"してください。乱数が必要な場合は固定シードを使ってください。")
+
+    def _detect_start_after_cycles(self):
+        """`>>` (_start_after) の依存に循環がないか検査する。
+
+        循環があると固定点反復は収束せず、反復回数依存の開始時刻で
+        受理されてしまう(監査 issue #14)。各ノードから先行チェーンを
+        辿り、経路内で再訪したら関係Objectを列挙してエラーにする。
+        """
+        done = set()
+        for item in self.objects:
+            node, path, path_ids = item, [], set()
+            while node is not None and id(node) not in done:
+                if id(node) in path_ids:
+                    start = next(i for i, n in enumerate(path) if n is node)
+                    names = " >> ".join(
+                        str(getattr(n, "source", type(n).__name__))
+                        for n in reversed(path[start:]))
+                    raise RuntimeError(
+                        f">> の依存が循環しています: {names} >> …\n"
+                        f"連結の向きを見直してください（a >> b は"
+                        f"「b を a の直後に開始」の意味です）。")
+                path.append(node)
+                path_ids.add(id(node))
+                node = getattr(node, "_start_after", None)
+            done.update(path_ids)
+
     def _resolve_anchors(self, check_unresolved=True):
         """反復走査でアンカーとuntilを解決"""
-        max_iter = len(self._layers) + 2
+        self._detect_start_after_cycles()
+        # 反復上限は依存の連鎖長に比例する。`>>` の逆順連結や until の
+        # 多段参照は「1反復で1段」しか伝播しないため、レイヤー数基準では
+        # 長い連鎖で収束前に打ち切られ、誤った開始時刻のまま受理されていた
+        # (監査 issue #14)。アイテム総数まで引き上げ、非収束は末尾で検出する
+        max_iter = len(self.objects) + len(self._layers) + 2
+        changed = False
         for iteration in range(max_iter):
             changed = False
             for start_idx, end_idx, _ in self._layers:
@@ -726,6 +813,13 @@ class Project:
                                 changed = True
             if not changed:
                 break
+        if changed:
+            # 上限まで反復しても値が動き続けた＝依存が収束していない。
+            # 誤った時刻のまま受理せず明示エラーにする（循環は事前検出済みの
+            # ため、ここに来るのは until とアンカーの相互依存等の異常系）
+            raise RuntimeError(
+                "タイムライン解決が収束しませんでした。"
+                "until・アンカー・>> の相互依存に矛盾がないか確認してください。")
         if check_unresolved:
             for item in self.objects:
                 until_name = getattr(item, '_until_anchor', None)
@@ -796,12 +890,16 @@ class Project:
         self.objects = []
         self._layers = []
         self._mode = "render"
+        used_cache_files = set()
         for spec in self._layer_specs:
             if self._should_use_cache(spec):
+                used_cache_files.add(spec["filename"])
                 self._load_cached_layer(spec)
             else:
                 self._exec_layer(spec["filename"], spec["priority"])
         self._resolve_anchors()
+        # Plan/Render の構造一致検証（非決定的レイヤーの黙った尺ずれ防止）
+        self._verify_plan_structure(used_cache_files)
 
         # strict: p.audit() の warning が1件でもあればレンダ前に停止する
         # （品質lintの厳格モード。dry_run にも適用してCI等で早期検出できるように）
@@ -933,12 +1031,16 @@ class Project:
         self.objects = []
         self._layers = []
         self._mode = "render"
+        used_cache_files = set()
         for spec in self._layer_specs:
             if self._should_use_cache(spec):
+                used_cache_files.add(spec["filename"])
                 self._load_cached_layer(spec)
             else:
                 self._exec_layer(spec["filename"], spec["priority"])
         self._resolve_anchors()
+        # Plan/Render の構造一致検証（非決定的レイヤーの黙った尺ずれ防止）
+        self._verify_plan_structure(used_cache_files)
         # render() と同じく数式PNG/Webクリップを先に実体化する
         # （formula の PNG が無いと ffmpeg が "No such file or directory" で落ちる）
         self._ensure_formula_objects()
@@ -1139,6 +1241,8 @@ class Project:
                 f"定義済みアンカー: {defined}\n"
                 f"参照元:\n" + "\n".join(details)
             )
+        # Plan確定時の構造署名を保存（Render passでの構造一致検証に使う）
+        self._plan_structure = self._layer_structure_signature()
 
     def _validate_cache_specs(self):
         """cache='use' のファイル存在チェック"""
@@ -1152,12 +1256,42 @@ class Project:
                         f"先に cache='make' でキャッシュを生成してください。"
                     )
 
+    def _current_layer_sources_meta(self, filename):
+        """レイヤーの「現在の」依存集合（正規化パス → 内容指紋）を構築する。
+
+        キャッシュ書き込み時のメタと同じ規則で作り、鮮度判定はこの現在集合と
+        メタの**完全一致**で行う。旧メタに載っている依存だけを再検査する方式だと、
+        環境変数等でレイヤーが参照する素材を a→b へ切り替えたとき、a が無変化な
+        だけで fresh と誤判定し旧映像を使い続ける（監査 issue #16 P0）。
+        指紋を取得できない依存は None（呼び出し側で stale 扱い＝fail-closed）。
+        """
+        meta = {}
+        for src in self._layer_sources.get(filename, []):
+            key = str(src).replace("\\", "/")
+            try:
+                meta[key] = _file_fingerprint(src)
+            except (OSError, TypeError):
+                meta[key] = None
+        # 登録済みプラグインのソース（書き込み側と同じ粗い粒度・安全側）
+        for plug in _EFFECT_PLUGINS.values():
+            src_file = getattr(plug, "source_file", None)
+            if not src_file:
+                continue
+            key = str(src_file).replace("\\", "/")
+            try:
+                meta[key] = _file_fingerprint(src_file)
+            except (OSError, TypeError):
+                meta[key] = None
+        return meta
+
     def _layer_cache_is_fresh(self, spec):
         """anchors.jsonに記録された依存（素材FFP・解決済みparam）と現状を比較して鮮度判定
 
         メタの欠損・破損・未知形式は fail-closed（=陳腐扱い）。fail-open にすると
         書きかけ・欠損メタの成果物が「常に新鮮」と誤判定され、依存変更を
         取りこぼす（issue #13 P2-7）。後方互換の旧形式救済はしない（方針どおり）。
+        比較は「現在の依存集合とメタの完全一致」（キー集合の増減・差し替えも検出。
+        監査 issue #16 P0）。
         """
         _, json_path = _layer_cache_paths(spec["filename"], self)
         if not os.path.exists(json_path):
@@ -1171,13 +1305,11 @@ class Project:
             return False  # 未知形式・sources無し
         # パース済みメタを保持し、_load_cached_layerでの再読込をスキップする
         self._layer_meta_cache[json_path] = meta
-        for path, ffp in (meta["sources"] or {}).items():
-            try:
-                cur = _file_fingerprint(path)
-            except OSError:
-                return False  # 素材が消えた
-            if cur != ffp:
-                return False  # 素材の内容が変わった（旧形式のlist値もここで不一致→再生成）
+        current = self._current_layer_sources_meta(spec["filename"])
+        if any(ffp is None for ffp in current.values()):
+            return False  # 現在の依存に指紋不能なものがある（fail-closed）
+        if current != (meta["sources"] or {}):
+            return False  # 依存の追加・削除・差し替え・内容変化のいずれか
         # 解決済み param の比較（plan passが常にライブ実行するため、
         # 現在値は self._layer_params に揃っている）
         if meta.get("params", None) != self._layer_params.get(
@@ -2070,25 +2202,14 @@ class Project:
         # anchors.json書き出し（素材FFPも記録してキャッシュ鮮度検証に使う）
         objects, anchors = self._get_layer_data(spec_index)
         dur = self.duration or self._calc_total_duration()
-        sources_meta = {}
-        for src in self._layer_sources.get(spec["filename"], []):
-            try:
-                # キーは指定されたままのパス（相対のまま保つ＝メタも移植可能に）
-                sources_meta[str(src).replace("\\", "/")] = _file_fingerprint(src)
-            except OSError:
-                pass
-        # 登録済みプラグインのソースも依存に含める（レイヤーはプラグイン Effect を
-        # 参照しうる。レイヤー単位の使用追跡はしない粗い粒度だが、プラグイン変更で
-        # レイヤーキャッシュを確実に無効化する安全側の設計。issue #13 P2-7）
-        for plug in _EFFECT_PLUGINS.values():
-            src_file = getattr(plug, "source_file", None)
-            if not src_file:
-                continue
-            try:
-                sources_meta[str(src_file).replace("\\", "/")] = \
-                    _file_fingerprint(src_file)
-            except OSError:
-                pass
+        # 鮮度判定と同じヘルパーで現在の依存集合を記録する（集合の完全一致比較の
+        # ため、書き込みと判定で構築規則を共有する。監査 issue #16 P0）。
+        # 指紋不能な依存(None)は記録しない → 判定側で常に stale になり fail-closed
+        sources_meta = {
+            key: ffp for key, ffp in
+            self._current_layer_sources_meta(spec["filename"]).items()
+            if ffp is not None
+        }
         cache_meta = {
             "duration": dur,
             "anchors": anchors,

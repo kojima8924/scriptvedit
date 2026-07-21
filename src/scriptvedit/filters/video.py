@@ -890,12 +890,16 @@ def _build_video_pre_filters(obj, label_prefix="pre"):
         elif e.name == "repeat":
             # obj * n（DSL糖衣）: 区間全体を n 回連続再生。
             # segment は構築時に確定済みの区間実尺（dry_run でも決定的）。
-            # loop はフレームをメモリ保持するため size が必要 → segment×fps
+            # loop の size はフレーム数。素材の実フレーム数は fps や
+            # speed 適用で Project fps と食い違うため、先に fps フィルタで
+            # Project fps へ正規化してから size=segment×fps で全区間を掴む
+            # （正規化しないと 10fps 素材の2周目以降が空になる。監査 issue #15）
             n = e.params["count"]
             segment = e.params["segment"]
             proj = Project._current
             fps = proj.fps if proj else 30
             frames = _builtins.max(1, int(_math.ceil(segment * fps)))
+            filters.append(f"fps={fps}")
             filters.append(f"loop=loop={n - 1}:size={frames}:start=0")
             # loop 後の PTS はフレーム番号基準で振り直す（連続再生に整列）
             filters.append(f"setpts=N/({fps}*TB)")

@@ -125,6 +125,31 @@ def _ffmpeg_available_encoders():
 
 # --- フィルタ生成ヘルパー ---
 
+# 外部WebMのコーデック判定のプロセス内メモ（(path, size, mtime_ns) → codec_name）
+_WEBM_CODEC_MEMO = {}
+
+
+def _probe_video_codec(source):
+    """ffprobeで先頭映像ストリームのcodec_nameを返す（取得不能ならNone）"""
+    try:
+        st = os.stat(source)
+        key = (source, st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+    if key in _WEBM_CODEC_MEMO:
+        return _WEBM_CODEC_MEMO[key]
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", source],
+            capture_output=True, text=True, timeout=10)
+        codec = result.stdout.strip() or None
+    except (OSError, subprocess.TimeoutExpired):
+        codec = None
+    _WEBM_CODEC_MEMO[key] = codec
+    return codec
+
+
 def _decoder_input_args(source, media_type, fps):
     """メディア種別に応じたffmpeg入力デコーダ引数を構築（全経路共通）
 
@@ -134,9 +159,20 @@ def _decoder_input_args(source, media_type, fps):
     if media_type == "image":
         return ["-loop", "1", "-r", str(fps), "-i", source]
     if media_type != "audio" and source.lower().endswith(".webm"):
-        # WebM(VP9 alpha)はlibvpx-vp9デコーダが必要
-        # (ffmpeg 8.0のネイティブVP9デコーダはalpha非対応)
-        return ["-c:v", "libvpx-vp9", "-i", source]
+        # scriptvedit 自身の生成物（__cache__配下）は VP9+alpha 固定なので
+        # libvpx-vp9 を強制する（ネイティブVP9デコーダはalpha非対応）。
+        # 外部の WebM は VP8/AV1 もあり得るため、拡張子だけで強制すると
+        # "Bitstream not supported" で落ちる（監査 issue #15）。
+        # codec_name を probe して libvpx 系が必要な場合のみ指定する
+        from scriptvedit.cache import _is_cache_artifact_path
+        if _is_cache_artifact_path(source):
+            return ["-c:v", "libvpx-vp9", "-i", source]
+        codec = _probe_video_codec(source)
+        if codec == "vp9":
+            return ["-c:v", "libvpx-vp9", "-i", source]  # alpha保持のため
+        if codec == "vp8":
+            return ["-c:v", "libvpx", "-i", source]      # 同上（VP8のalphaもlibvpx）
+        return ["-i", source]  # AV1等はネイティブデコーダに任せる
     return ["-i", source]
 
 
