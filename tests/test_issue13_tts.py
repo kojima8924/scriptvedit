@@ -45,7 +45,7 @@ def test_host_port_changes_key(monkeypatch):
     _fake_version(monkeypatch, "0.14.0")
     a = _key("127.0.0.1", 50021)
     b = _key("127.0.0.1", 50022)
-    c = _key("192.168.3.7", 50021)
+    c = _key("192.0.2.7", 50021)  # ドキュメント用予約帯(TEST-NET-1)の例示アドレス
     assert a != b, "port 違いで同じ鍵になった"
     assert a != c, "host 違いで同じ鍵になった"
     assert b != c
