@@ -37,3 +37,6 @@ assets/_imported/
 src/*.egg-info/
 build/
 dist/
+
+# ローカル専用メモ(未着手アイデア)
+IDEA_video_awareness.md
